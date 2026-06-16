@@ -322,7 +322,43 @@ rg '^--- PASS: TestPolicyDataSyncConfigMapE2E' /tmp/policy-data-sync-e2e.log
 ! rg 'SKIP|skipping|Skipping' /tmp/policy-data-sync-e2e.log
 ```
 
-Existing gates remain:
+## Production Beta Quality Gate
+
+The CI workflow and local reviewers use the same gate script:
+
+```sh
+cd /Users/sky/workspaces
+bash backend/scripts/ci-security-gate.sh all
+```
+
+Use focused subcommands while iterating:
+
+```sh
+bash backend/scripts/ci-security-gate.sh quick
+bash backend/scripts/ci-security-gate.sh docker
+bash backend/scripts/ci-security-gate.sh security
+SONAR_HOST_URL=http://localhost:9000 SONAR_TOKEN=<token> \
+  bash backend/scripts/ci-security-gate.sh sonar
+```
+
+The Docker-backed gate uses isolated ports by default:
+
+- Postgres: `localhost:15432`
+- Redis: `localhost:16379`
+- MinIO API/console: `localhost:19000` / `localhost:19001`
+
+The gate writes `backend/coverage.out` for Sonar and fails when integration
+coverage is below `CI_GATE_COVERAGE_THRESHOLD`, which defaults to `80.0`.
+Focused E2E must emit the required `PASS` lines and cannot pass by skipping.
+Full non-live E2E runs after the focused gate; live cluster tests remain guarded
+by their explicit opt-in environment variables.
+
+In GitHub Actions, SonarScanner is required for pushes, workflow dispatches, and
+non-fork pull requests. Fork pull requests skip Sonar when secrets are
+unavailable; branch protection should require the non-fork/default-branch gate
+before merge.
+
+Existing manual gates remain:
 
 ```sh
 cd /Users/sky/workspaces/backend

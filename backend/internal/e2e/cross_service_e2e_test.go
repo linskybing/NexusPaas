@@ -890,7 +890,7 @@ func (h *e2eHarness) seedIdentityContracts() identityIDs {
 		"status":      "online",
 	})
 	h.createRecord(identityRolesResource, ids.roleID, map[string]any{
-		"name":        "member",
+		"name":        "member-" + h.runID,
 		"admin_panel": false,
 	})
 	h.createRecord(identitySessionsResource, ids.session, map[string]any{
