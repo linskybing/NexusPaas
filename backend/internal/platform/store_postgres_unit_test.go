@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,6 +65,120 @@ func TestPostgresStoreCreateConflict(t *testing.T) {
 	_, err := store.Create(context.Background(), "svc:records", map[string]any{"id": "dup"})
 	if !IsCreateConflict(err) {
 		t.Fatalf("Create error = %v, want create conflict", err)
+	}
+}
+
+func TestPostgresStoreRoutesIdentityResourcesToOwnedTables(t *testing.T) {
+	now := time.Date(2026, 6, 16, 8, 0, 0, 0, time.UTC)
+	db := &fakePostgresDB{
+		queryRows: []*fakePostgresRow{{
+			values: []any{
+				"US1",
+				[]byte(`{"id":"US1","username":"alice","status":"online","custom":"kept"}`),
+				1,
+				now,
+				now,
+			},
+		}},
+	}
+	store := &PostgresStore{db: db}
+
+	created, err := store.Create(context.Background(), identityUsersResource, map[string]any{
+		"id":       "US1",
+		"username": "alice",
+		"status":   "online",
+		"custom":   "kept",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ID != "US1" || created.Data["custom"] != "kept" {
+		t.Fatalf("created identity record = %#v", created)
+	}
+	if got := strings.Join(db.queries, "\n"); !strings.Contains(got, "INSERT INTO users") || strings.Contains(got, "platform_records") {
+		t.Fatalf("identity query = %s, want users table without platform_records", got)
+	}
+}
+
+func TestPostgresStoreSanitizesIdentityAPITokenPayload(t *testing.T) {
+	now := time.Date(2026, 6, 16, 8, 30, 0, 0, time.UTC)
+	db := &fakePostgresDB{
+		queryRows: []*fakePostgresRow{{
+			values: []any{
+				"AT1",
+				[]byte(`{"id":"AT1","user_id":"US1","token_hash":"hash","token_prefix":"nexus"}`),
+				1,
+				now,
+				now,
+			},
+		}},
+	}
+	store := &PostgresStore{db: db}
+
+	if _, err := store.Create(context.Background(), identityAPITokensResource, map[string]any{
+		"id":           "AT1",
+		"user_id":      "US1",
+		"name":         "cli",
+		"token":        "nexuspaas_raw_secret",
+		"token_hash":   "hash",
+		"token_prefix": "nexus",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(db.queryArgs) != 1 || len(db.queryArgs[0]) < 2 {
+		t.Fatalf("query args = %#v, want payload arg", db.queryArgs)
+	}
+	payload, ok := db.queryArgs[0][1].([]byte)
+	if !ok {
+		t.Fatalf("payload arg = %T, want []byte", db.queryArgs[0][1])
+	}
+	if strings.Contains(string(payload), "nexuspaas_raw_secret") || strings.Contains(string(payload), `"token"`) {
+		t.Fatalf("api token payload persisted raw token: %s", payload)
+	}
+}
+
+func TestPostgresStoreKeepsNonIdentityResourcesOnPlatformRecords(t *testing.T) {
+	now := time.Date(2026, 6, 16, 9, 0, 0, 0, time.UTC)
+	db := &fakePostgresDB{
+		queryRows: []*fakePostgresRow{{
+			values: []any{"w1", []byte(`{"id":"w1","name":"widget"}`), 1, now, now},
+		}},
+	}
+	store := &PostgresStore{db: db}
+
+	if _, err := store.Create(context.Background(), "widget-service:widgets", map[string]any{"id": "w1", "name": "widget"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(db.queries, "\n"); !strings.Contains(got, "platform_records") || strings.Contains(got, "INSERT INTO users") {
+		t.Fatalf("non-identity query = %s, want platform_records path", got)
+	}
+}
+
+func TestPostgresStoreIdentityNextIDScansOwnedTable(t *testing.T) {
+	tx := &fakePostgresTx{
+		fakePostgresDB: fakePostgresDB{
+			queryResults: []*fakePostgresRows{{
+				rows: [][]any{{"US2600002"}, {"USnot-a-number"}},
+			}},
+			queryRows: []*fakePostgresRow{
+				{err: pgx.ErrNoRows},
+				{values: []any{false}},
+			},
+			execTags: []pgconn.CommandTag{
+				pgconn.NewCommandTag("SELECT 1"),
+				pgconn.NewCommandTag("INSERT 0 1"),
+			},
+		},
+	}
+	store := &PostgresStore{db: &fakePostgresDB{tx: tx}}
+
+	got := store.NextID(identityUsersResource, "US", 2600001, 0)
+	if got != "US2600003" {
+		t.Fatalf("NextID = %q, want US2600003", got)
+	}
+	queries := strings.Join(tx.queries, "\n")
+	if !strings.Contains(queries, "FROM users") || strings.Contains(queries, "platform_records") {
+		t.Fatalf("identity NextID queries = %s, want users table without platform_records", queries)
 	}
 }
 
@@ -143,9 +258,12 @@ type fakePostgresDB struct {
 	queryRows    []*fakePostgresRow
 	queryResults []*fakePostgresRows
 	tx           *fakePostgresTx
+	queries      []string
+	queryArgs    [][]any
 }
 
-func (f *fakePostgresDB) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+func (f *fakePostgresDB) Exec(_ context.Context, query string, args ...any) (pgconn.CommandTag, error) {
+	f.recordQuery(query, args...)
 	if len(f.execErrs) > 0 {
 		err := f.execErrs[0]
 		f.execErrs = f.execErrs[1:]
@@ -161,7 +279,8 @@ func (f *fakePostgresDB) Exec(context.Context, string, ...any) (pgconn.CommandTa
 	return tag, nil
 }
 
-func (f *fakePostgresDB) Query(context.Context, string, ...any) (postgresRows, error) {
+func (f *fakePostgresDB) Query(_ context.Context, query string, args ...any) (postgresRows, error) {
+	f.recordQuery(query, args...)
 	if len(f.queryResults) == 0 {
 		return nil, errors.New("unexpected Query")
 	}
@@ -170,7 +289,8 @@ func (f *fakePostgresDB) Query(context.Context, string, ...any) (postgresRows, e
 	return rows, nil
 }
 
-func (f *fakePostgresDB) QueryRow(context.Context, string, ...any) postgresRow {
+func (f *fakePostgresDB) QueryRow(_ context.Context, query string, args ...any) postgresRow {
+	f.recordQuery(query, args...)
 	if len(f.queryRows) == 0 {
 		return &fakePostgresRow{err: errors.New("unexpected QueryRow")}
 	}
@@ -184,6 +304,11 @@ func (f *fakePostgresDB) Begin(context.Context) (postgresStoreTx, error) {
 		return nil, errors.New("unexpected Begin")
 	}
 	return f.tx, nil
+}
+
+func (f *fakePostgresDB) recordQuery(query string, args ...any) {
+	f.queries = append(f.queries, query)
+	f.queryArgs = append(f.queryArgs, args)
 }
 
 type fakePostgresTx struct {

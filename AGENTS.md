@@ -18,4 +18,13 @@ Keep this file as the entry point only. Detailed rules live in:
 * `docs/agents/coding-guidelines.md`
 * `docs/agents/project-structure.md`
 
+## Git & Pull Request Workflow
+
+* Every large feature or major goal gets its own **feature branch** and **pull request** — never commit big changes straight to `main`.
+* Branch names must be **short and descriptive** (e.g. `identity-data-boundary`, not a long sentence).
+* Every PR description must explain **what** was done (the features/changes), **why** it was done (the motivation/problem), and the **implementation idea** (the approach taken).
+* When merging a PR, **squash all commits into a single commit** to keep history clean.
+
+See `docs/agents/workflow.md` for the full branch & PR conventions.
+
 Default rule: keep changes simple, surgical, testable, microservice-ready, SonarScanner-clean, and aligned with the backend microservice architecture documented in `backend/docs/`.
