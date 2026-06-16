@@ -49,6 +49,44 @@ kubectl cluster-info
 kubectl get nodes
 ```
 
+## One-Command Docker Gate
+
+Use the repository-owned Docker gate when validating the Production Beta
+backend path from a clean checkout:
+
+```sh
+cd /Users/sky/workspaces
+backend/scripts/docker-e2e-gate.sh
+```
+
+The gate starts isolated Postgres, Redis, and MinIO containers, applies and
+validates migrations, provisions the media bucket, runs integration coverage,
+runs the focused cross-service E2E gate, runs the full non-live E2E package,
+starts `SERVICE_NAME=all` on `127.0.0.1:18080`, and verifies the platform
+runtime plus one smoke endpoint per registered service. It writes logs under
+`backend/.e2e-gate/` and writes `backend/coverage.out` for SonarScanner. It
+generates local-only Postgres, MinIO, API, and service-key credentials from the
+run ID unless explicit `E2E_*` or `TEST_OBJECT_STORE_*` overrides are provided.
+
+Defaults intentionally avoid Sonar's `localhost:9000`:
+
+```sh
+E2E_POSTGRES_PORT=15433
+E2E_REDIS_PORT=16379
+E2E_MINIO_PORT=19000
+E2E_MINIO_CONSOLE_PORT=19001
+E2E_RUNTIME_PORT=18080
+E2E_MIN_COVERAGE=80.0
+```
+
+Useful overrides:
+
+```sh
+E2E_RUN_FULL=false backend/scripts/docker-e2e-gate.sh
+E2E_KEEP_CONTAINERS=true backend/scripts/docker-e2e-gate.sh
+E2E_RUN_ID=e2e-local backend/scripts/docker-e2e-gate.sh
+```
+
 ## Start Local Backing Services
 
 ```sh

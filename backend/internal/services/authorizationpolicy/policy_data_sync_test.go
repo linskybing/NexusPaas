@@ -2,6 +2,7 @@ package authorizationpolicy
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"testing"
 	"time"
@@ -187,6 +188,99 @@ func TestPolicyPlanWindowsCanDenyRuntime(t *testing.T) {
 		now:     now,
 	})
 	assertPolicyDataValue(t, data, "timeAllowed", "false")
+}
+
+func TestPolicyDataLookupHelpers(t *testing.T) {
+	ctx := context.Background()
+	app := platform.NewApp(platform.Config{ServiceName: "all"})
+	createPolicyRecords(t, app, policyDataPlansResource, []map[string]any{{"id": "PL1", "gpu_limit": json.Number("2.5")}})
+	createPolicyRecords(t, app, policyDataImageAllowListsResource, []map[string]any{
+		{"id": "P1:T1", "project_id": "P1", "image_reference": "repo/project:v1", "enabled": true},
+		{"id": "wild", "project_id": "*", "repository": "repo/wild", "delivery_mode": "mirrored", "enabled": true},
+		{"id": "other", "project_id": "P2", "image_reference": "repo/other:v1", "enabled": true},
+	})
+
+	plan := policyPlanForProject(ctx, app, map[string]any{"plan_id": "PL1"})
+	if policyPlanID(plan) != "PL1" {
+		t.Fatalf("policyPlanForProject = %#v, want PL1", plan)
+	}
+	rules := policyImageRulesForProject(ctx, app, "P1")
+	if len(rules) != 2 {
+		t.Fatalf("policyImageRulesForProject = %#v, want project and wildcard rules", rules)
+	}
+	if namespaces, err := policyProjectNamespaces(ctx, nil, "P1"); err != nil || namespaces != nil {
+		t.Fatalf("nil namespace lookup = %#v/%v, want nil", namespaces, err)
+	}
+	if usage := policyGPUUsageForNamespaces(ctx, nil, []string{"proj-p1"}, time.Now()); usage != 0 {
+		t.Fatalf("nil GPU usage = %g, want 0", usage)
+	}
+}
+
+func TestPolicyImageListHelperBranches(t *testing.T) {
+	images := policyImageLists([]map[string]any{
+		{"enabled": true, "repository": "repo/a"},
+		{"enabled": true, "repository": "repo/a", "tag": "latest"},
+		{"enabled": true, "image": "repo/b:v2", "mode": "synced"},
+		{"enabled": true, "fullName": "repo/c:v3", "mode": "published-built"},
+		{"enabled": true, "image_reference": "repo/d:v4", "mode": "unsupported"},
+		{"enabled": false, "image_reference": "repo/disabled:v1"},
+	})
+	assertPolicyDataValue(t, images, "allowedProxyImages", ",repo/a:*,repo/a:latest,")
+	assertPolicyDataValue(t, images, "syncedMirroredImages", ",repo/b:v2,")
+	assertPolicyDataValue(t, images, "publishedBuiltImages", ",repo/c:v3,")
+	assertPolicyDataValue(t, images, "allowedMirroredImages", ",")
+}
+
+func TestPolicyPlanTimeAndWindowBranches(t *testing.T) {
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	if policyPlanActive(map[string]any{}, now) {
+		t.Fatal("empty plan should not be active")
+	}
+	if policyPlanActive(map[string]any{"id": "future", "valid_from": now.Add(time.Hour).Format(time.RFC3339)}, now) {
+		t.Fatal("future plan should not be active")
+	}
+	if policyPlanActive(map[string]any{"id": "expired", "valid_until": now.Add(-time.Hour)}, now) {
+		t.Fatal("expired plan should not be active")
+	}
+	if !policyPlanActive(map[string]any{"id": "active", "weekWindows": []any{map[string]any{"start": 0, "end": 604800}}}, now) {
+		t.Fatal("active all-week plan should be active")
+	}
+	if policyWeekWindows(map[string]any{"week_windows": 42}) != nil {
+		t.Fatal("non-window value should not decode week windows")
+	}
+	if policyPlanPayloadHasRuntimeFields(map[string]any{"id": "PL2"}) {
+		t.Fatal("plan payload without runtime fields should not project")
+	}
+	if policyNonNegativeInt(map[string]any{"limit": -2}, "limit") != 0 {
+		t.Fatal("negative policy int should clamp to zero")
+	}
+}
+
+func TestPolicyNumberParsingBranches(t *testing.T) {
+	numberCases := []map[string]any{
+		{"n": float32(1.5)},
+		{"n": int(2)},
+		{"n": int64(3)},
+		{"n": json.Number("4.5")},
+		{"n": "6.25"},
+	}
+	for _, tc := range numberCases {
+		if policyNumberValue(tc, "n") == 0 {
+			t.Fatalf("policyNumberValue(%#v) returned zero", tc)
+		}
+	}
+	if policyNumberValue(map[string]any{"n": "bad"}, "n") != 0 {
+		t.Fatal("invalid policy number should return zero")
+	}
+	intCases := []any{int(1), int32(2), float64(3), json.Number("4"), "5"}
+	for _, value := range intCases {
+		if policyInt64Value(value, -1) < 1 {
+			t.Fatalf("policyInt64Value(%#v) did not parse", value)
+		}
+	}
+	if policyInt64Value("bad", -1) != -1 {
+		t.Fatal("invalid policy int should return fallback")
+	}
 }
 
 func policyDataUsagePod(namespace, name, projectID, gpu string) *corev1.Pod {

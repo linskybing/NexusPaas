@@ -27,7 +27,8 @@ ALTER TABLE captchas
 
 ALTER TABLE login_failures
     ADD COLUMN IF NOT EXISTS payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-    ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+    ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1,
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
 
 CREATE TABLE IF NOT EXISTS identity_roles (
     id         TEXT        PRIMARY KEY,
@@ -99,6 +100,7 @@ SET payload = payload || jsonb_strip_nulls(jsonb_build_object(
         'ip', ip,
         'failures', failures,
         'locked_until', locked_until,
+        'created_at', created_at,
         'updated_at', updated_at
     ));
 
@@ -206,13 +208,14 @@ FROM platform_records
 WHERE resource = 'identity-service:captchas'
 ON CONFLICT DO NOTHING;
 
-INSERT INTO login_failures (id, username, ip, failures, locked_until, updated_at, payload, version)
+INSERT INTO login_failures (id, username, ip, failures, locked_until, created_at, updated_at, payload, version)
 SELECT
     id,
     COALESCE(NULLIF(payload->>'username', ''), id),
     COALESCE(NULLIF(payload->>'ip', ''), ''),
     CASE WHEN COALESCE(payload->>'failures', '') ~ '^-?[0-9]+$' THEN (payload->>'failures')::integer ELSE 0 END,
     NULLIF(payload->>'locked_until', '')::timestamptz,
+    created_at,
     updated_at,
     payload || jsonb_build_object('id', id),
     version

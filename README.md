@@ -75,6 +75,15 @@ cd backend
 go test -tags integration ./...
 ```
 
+For the Production Beta verification path, run the repository-owned Docker
+gate. It starts isolated Postgres, Redis, and MinIO containers on non-default
+ports, avoids Sonar's `localhost:9000`, runs migrations, integration coverage,
+focused/full E2E, and runtime smoke checks:
+
+```bash
+backend/scripts/docker-e2e-gate.sh
+```
+
 Kubernetes (k3s) manifests are under [`backend/deploy/k3s`](backend/deploy/k3s).
 
 ## Contributing
@@ -83,4 +92,3 @@ This repository follows a structured plan → review → implement workflow; see
 [AGENTS.md](AGENTS.md) and [`docs/agents/`](docs/agents) for the conventions. Before opening
 a PR, make sure `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l .` are all
 clean from `backend/`.
-

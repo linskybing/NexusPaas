@@ -156,6 +156,19 @@ func TestPostgresStoreNextIDMonotonicNoReuse(t *testing.T) {
 }
 
 func TestPostgresStoreIdentityResourcesUseOwnedTables(t *testing.T) {
+	ctx, pool, store := newIdentityBoundaryTestStore(t)
+
+	createIdentityBoundaryRows(t, ctx, store)
+	assertIdentityBoundaryUpdateAndToken(t, ctx, store)
+	assertNoLegacyIdentityBoundaryRows(t, ctx, pool)
+
+	if got, ok := store.Get(ctx, identityUsersResource, "US_BOUNDARY"); !ok || got.Data["username"] != "boundary-user" {
+		t.Fatalf("get user = %#v ok=%v, want owned-table user", got, ok)
+	}
+}
+
+func newIdentityBoundaryTestStore(t *testing.T) (context.Context, *pgxpool.Pool, *PostgresStore) {
+	t.Helper()
 	url := requireTestDatabaseURL(t)
 	ctx := context.Background()
 	if err := ApplyMigrations(ctx, url); err != nil {
@@ -165,10 +178,13 @@ func TestPostgresStoreIdentityResourcesUseOwnedTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 	resetIdentityBoundaryRows(t, ctx, pool)
-	store := NewPostgresStore(pool)
+	return ctx, pool, NewPostgresStore(pool)
+}
 
+func createIdentityBoundaryRows(t *testing.T, ctx context.Context, store *PostgresStore) {
+	t.Helper()
 	if _, err := store.Create(ctx, identityUsersResource, map[string]any{
 		"id":            "US_BOUNDARY",
 		"username":      "boundary-user",
@@ -224,7 +240,10 @@ func TestPostgresStoreIdentityResourcesUseOwnedTables(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create login failure: %v", err)
 	}
+}
 
+func assertIdentityBoundaryUpdateAndToken(t *testing.T, ctx context.Context, store *PostgresStore) {
+	t.Helper()
 	updated, ok := store.Update(ctx, identityUsersResource, "US_BOUNDARY", map[string]any{"custom": "kept"})
 	if !ok || updated.Data["custom"] != "kept" {
 		t.Fatalf("update user = %#v ok=%v, want custom payload retained", updated, ok)
@@ -236,6 +255,10 @@ func TestPostgresStoreIdentityResourcesUseOwnedTables(t *testing.T) {
 	if token.Data["token"] != nil || token.Data["token_hash"] == "" {
 		t.Fatalf("api token payload = %#v, want hash only", token.Data)
 	}
+}
+
+func assertNoLegacyIdentityBoundaryRows(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
 	for _, resource := range []string{
 		identityUsersResource,
 		identityRolesResource,
@@ -253,9 +276,6 @@ func TestPostgresStoreIdentityResourcesUseOwnedTables(t *testing.T) {
 		if count != 0 {
 			t.Fatalf("platform_records rows for %s/%s = %d, want 0", resource, id, count)
 		}
-	}
-	if got, ok := store.Get(ctx, identityUsersResource, "US_BOUNDARY"); !ok || got.Data["username"] != "boundary-user" {
-		t.Fatalf("get user = %#v ok=%v, want owned-table user", got, ok)
 	}
 }
 

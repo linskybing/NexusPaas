@@ -433,7 +433,7 @@ func identityAPITokenInsertColumns(data map[string]any, _ string, now time.Time)
 		{"name", identityTextDefault(data, "", "name")},
 		{"token_hash", identityTextDefault(data, "", "token_hash", "tokenHash")},
 		{"token_prefix", identityTextDefault(data, "", "token_prefix", "tokenPrefix")},
-		{"expires_at", identityNullableTimeDefault(data, now.Add(identityDefaultAPITokenTTL), "expires_at", "expiresAt")},
+		{"expires_at", identityTimeDefault(data, now.Add(identityDefaultAPITokenTTL), "expires_at", "expiresAt")},
 		{"last_used_at", identityNullableTime(data, "last_used_at", "lastUsedAt")},
 		{"revoked", identityBoolDefault(data, false, "revoked")},
 		{"revoked_at", identityNullableTime(data, "revoked_at", "revokedAt")},
@@ -557,13 +557,6 @@ func identityBoolUpdate(keys ...string) func(map[string]any) (any, bool) {
 }
 
 func identityTimeDefault(data map[string]any, fallback time.Time, keys ...string) time.Time {
-	if value, ok := identityTime(data, keys...); ok {
-		return value
-	}
-	return fallback
-}
-
-func identityNullableTimeDefault(data map[string]any, fallback time.Time, keys ...string) any {
 	if value, ok := identityTime(data, keys...); ok {
 		return value
 	}

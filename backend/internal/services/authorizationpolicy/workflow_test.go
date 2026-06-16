@@ -109,6 +109,98 @@ func TestProxyServicePolicyAndAssignmentHandlers(t *testing.T) {
 	assertPolicyStatus(t, code, data, http.StatusOK)
 }
 
+func TestProxyPolicyUpdateDeleteAndRuleReplacementHandlers(t *testing.T) {
+	app := newPolicyTestApp(t)
+
+	code, data, _ := listPolicies(app, policyRequest(http.MethodGet, "/api/v1/admin/proxy-rbac/policies", "", "ADMIN"), platform.RouteSpec{})
+	assertPolicyStatus(t, code, data, http.StatusOK)
+	if policies := data.([]map[string]any); len(policies) < 2 {
+		t.Fatalf("policies = %#v, want seeded policies", policies)
+	}
+
+	policyID := createPolicyForTest(t, app)
+	updateReq := policyRequest(http.MethodPut, "/api/v1/admin/proxy-rbac/policies/"+policyID, `{"name":"science-proxy-v2","description":"science team v2","rules":[{"service_id":"SVC_HARBOR","actions":["create"]}]}`, "ADMIN")
+	updateReq.SetPathValue("id", policyID)
+	code, data, _ = updatePolicy(app, updateReq, platform.RouteSpec{})
+	assertPolicyStatus(t, code, data, http.StatusOK)
+	updated := data.(map[string]any)
+	if updated["name"] != "science-proxy-v2" || updated["description"] != "science team v2" {
+		t.Fatalf("updated policy = %#v, want renamed science proxy", updated)
+	}
+	rules := updated["rules"].([]map[string]any)
+	if len(rules) != 1 || rules[0]["service_id"] != "SVC_HARBOR" {
+		t.Fatalf("updated policy rules = %#v, want Harbor replacement", rules)
+	}
+
+	duplicateReq := policyRequest(http.MethodPatch, "/api/v1/admin/proxy-rbac/policies/"+policyID, `{"name":"read-only-proxy-access"}`, "ADMIN")
+	duplicateReq.SetPathValue("id", policyID)
+	code, data, _ = updatePolicy(app, duplicateReq, platform.RouteSpec{})
+	assertPolicyStatus(t, code, data, http.StatusBadRequest)
+
+	invalidRulesReq := policyRequest(http.MethodPatch, "/api/v1/admin/proxy-rbac/policies/"+policyID, "", "ADMIN")
+	status, _, ok := updatePolicyRulesIfPresent(app, invalidRulesReq, policyID, map[string]any{"rules": "invalid"}, map[string]bool{"rules": true})
+	if ok || status != http.StatusBadRequest {
+		t.Fatalf("invalid rules status=%d ok=%v, want bad request", status, ok)
+	}
+	status, data, ok = updatePolicyRulesIfPresent(app, invalidRulesReq, policyID, map[string]any{}, map[string]bool{})
+	if !ok || status != 0 || data != nil {
+		t.Fatalf("absent rules status=%d ok=%v data=%#v, want passthrough", status, ok, data)
+	}
+	status, data, ok = updatePolicyRulesIfPresent(app, invalidRulesReq, policyID, map[string]any{
+		"rules": []any{map[string]any{"service_id": "SVC_GRAFANA", "actions": []any{"view"}}},
+	}, map[string]bool{"rules": true})
+	if !ok || status != 0 || data != nil {
+		t.Fatalf("valid rules status=%d ok=%v data=%#v, want replacement", status, ok, data)
+	}
+
+	deleteReq := policyRequest(http.MethodDelete, "/api/v1/admin/proxy-rbac/policies/"+policyID, "", "ADMIN")
+	deleteReq.SetPathValue("id", policyID)
+	code, data, _ = deletePolicy(app, deleteReq, platform.RouteSpec{})
+	assertPolicyStatus(t, code, data, http.StatusOK)
+	code, data, _ = getPolicy(app, deleteReq, platform.RouteSpec{})
+	assertPolicyStatus(t, code, data, http.StatusNotFound)
+}
+
+func TestProxyPolicyBatchAndLegacyAssignmentHandlers(t *testing.T) {
+	app := newPolicyTestApp(t)
+	policyID := createPolicyForTest(t, app)
+
+	emptyBatch := policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/policies/"+policyID+"/assignments/batch", `{"assignments":[]}`, "ADMIN")
+	emptyBatch.SetPathValue("id", policyID)
+	code, data, _ := batchAssignPolicy(app, emptyBatch, platform.RouteSpec{})
+	assertPolicyStatus(t, code, data, http.StatusBadRequest)
+
+	batchReq := policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/policies/"+policyID+"/assignments/batch", `{"assignments":[{"target_type":"user","target_id":"U1"},{"target_type":"role","target_id":"RL2600001"}]}`, "ADMIN")
+	batchReq.SetPathValue("id", policyID)
+	code, data, _ = batchAssignPolicy(app, batchReq, platform.RouteSpec{})
+	assertPolicyStatus(t, code, data, http.StatusOK)
+	if result := data.(map[string]any); result["succeeded"] != 2 || result["failed"] != 0 {
+		t.Fatalf("batch assignment result = %#v, want two successes", result)
+	}
+
+	legacyBody := `{"policy_id":"` + policyID + `","target_type":"user","target_id":"U2"}`
+	legacyReq := policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/assignments", legacyBody, "ADMIN")
+	code, data, _ = assignPolicyLegacy(app, legacyReq, platform.RouteSpec{})
+	assertPolicyStatus(t, code, data, http.StatusCreated)
+	code, data, _ = assignPolicyLegacy(app, policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/assignments", legacyBody, "ADMIN"), platform.RouteSpec{})
+	assertPolicyStatus(t, code, data, http.StatusOK)
+
+	targetReq := policyRequest(http.MethodGet, "/api/v1/admin/proxy-rbac/targets/team/U2/assignments", "", "ADMIN")
+	targetReq.SetPathValue("type", "team")
+	targetReq.SetPathValue("id", "U2")
+	code, data, _ = listTargetAssignments(app, targetReq, platform.RouteSpec{})
+	assertPolicyStatus(t, code, data, http.StatusBadRequest)
+
+	assignment := composeAssignment(app, batchReq, map[string]any{"policy_id": policyID})
+	if assignment["policy"] == nil {
+		t.Fatalf("composed assignment = %#v, want embedded policy", assignment)
+	}
+	policy := composePolicy(app, batchReq, map[string]any{"id": policyID})
+	if _, ok := policy["rules"].([]map[string]any); !ok {
+		t.Fatalf("composed policy = %#v, want rules", policy)
+	}
+}
+
 func TestProxyRoleHandlers(t *testing.T) {
 	app := newPolicyTestApp(t)
 
@@ -168,6 +260,53 @@ func TestProxyRoleHandlers(t *testing.T) {
 	deleteReq.SetPathValue("id", roleID)
 	code, data, _ = deleteRole(app, deleteReq, platform.RouteSpec{})
 	assertPolicyStatus(t, code, data, http.StatusOK)
+}
+
+func TestProxyRoleLegacyAndHelperHandlers(t *testing.T) {
+	app := newPolicyTestApp(t)
+	roleID := createRoleForTest(t, app)
+
+	code, data, _ := listPlatformRolesLegacy(app, policyRequest(http.MethodGet, "/api/v1/admin/proxy-rbac/platform-roles", "", "ADMIN"), platform.RouteSpec{})
+	assertPolicyStatus(t, code, data, http.StatusOK)
+	if roles := data.([]map[string]any); len(roles) < 2 {
+		t.Fatalf("legacy roles = %#v, want seeded roles", roles)
+	}
+
+	getReq := policyRequest(http.MethodGet, "/api/v1/admin/proxy-rbac/roles/"+roleID, "", "ADMIN")
+	getReq.SetPathValue("id", roleID)
+	code, data, _ = getRole(app, getReq, platform.RouteSpec{})
+	assertPolicyStatus(t, code, data, http.StatusOK)
+
+	missingReq := policyRequest(http.MethodGet, "/api/v1/admin/proxy-rbac/roles/missing", "", "ADMIN")
+	missingReq.SetPathValue("id", "missing")
+	code, data, _ = getRole(app, missingReq, platform.RouteSpec{})
+	assertPolicyStatus(t, code, data, http.StatusNotFound)
+
+	legacyBody := `{"role_id":"` + roleID + `","user_id":"U2"}`
+	legacyReq := policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/role-users", legacyBody, "ADMIN")
+	code, data, _ = assignRoleUserLegacy(app, legacyReq, platform.RouteSpec{})
+	assertPolicyStatus(t, code, data, http.StatusCreated)
+	code, data, _ = assignRoleUserLegacy(app, policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/role-users", legacyBody, "ADMIN"), platform.RouteSpec{})
+	assertPolicyStatus(t, code, data, http.StatusOK)
+
+	batchReq := policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/roles/"+roleID+"/users/batch", `{"user_ids":["","U1"]}`, "ADMIN")
+	batchReq.SetPathValue("id", roleID)
+	code, data, _ = batchAssignRoleUsers(app, batchReq, platform.RouteSpec{})
+	assertPolicyStatus(t, code, data, http.StatusOK)
+	if result := data.(map[string]any); result["succeeded"] != 1 || result["failed"] != 0 {
+		t.Fatalf("batch role users = %#v, want one normalized success", result)
+	}
+	result := map[string]any{"succeeded": 0, "failed": 0, "errors": []string{}}
+	batchFailure(result, msgUserIDRequired)
+	if result["failed"] != 1 || len(result["errors"].([]string)) != 1 {
+		t.Fatalf("batch failure result = %#v, want one recorded error", result)
+	}
+
+	member := composeRoleUser(app, batchReq, map[string]any{"role_id": roleID, "user_id": "U1"})
+	if member["role"] == nil {
+		t.Fatalf("composed role member = %#v, want embedded role", member)
+	}
+	publishProxyPolicyChanged(app, batchReq, "role_helper", nil)
 }
 
 func TestAuthorizationPolicyGuardFailures(t *testing.T) {

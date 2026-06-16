@@ -2,6 +2,7 @@ package platform
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -137,6 +138,57 @@ func TestPostgresStoreSanitizesIdentityAPITokenPayload(t *testing.T) {
 	}
 }
 
+func TestPostgresStoreIdentityCRUDWithQueryLayer(t *testing.T) {
+	now := time.Date(2026, 6, 16, 10, 0, 0, 0, time.UTC)
+	later := now.Add(2 * time.Minute)
+	db := &fakePostgresDB{
+		queryRows: []*fakePostgresRow{
+			{values: []any{"RO1", []byte(`{"id":"RO1","name":"operator"}`), 1, now, now}},
+			{values: []any{"RO1", []byte(`{"id":"RO1","name":"operator","scope":"all"}`), 2, now, later}},
+		},
+		queryResults: []*fakePostgresRows{{
+			rows: [][]any{
+				{"RO1", []byte(`{"name":"operator"}`), 1, now, now},
+				{"RO2", []byte(`{"id":"RO2","name":"viewer"}`), 1, now, now},
+			},
+		}},
+		execTags: []pgconn.CommandTag{pgconn.NewCommandTag("DELETE 1")},
+	}
+	store := &PostgresStore{db: db}
+	ctx := context.Background()
+
+	got, ok := store.Get(ctx, identityRolesResource, "RO1")
+	if !ok || got.ID != "RO1" || got.Data["name"] != "operator" {
+		t.Fatalf("identity get = %#v ok=%v", got, ok)
+	}
+	listed := store.List(ctx, identityRolesResource)
+	if len(listed) != 2 || listed[0].Data["id"] != "RO1" || listed[1].ID != "RO2" {
+		t.Fatalf("identity list = %#v, want two role records with ids", listed)
+	}
+	updated, ok := store.Update(ctx, identityRolesResource, "RO1", map[string]any{"name": "operator", "scope": "all"})
+	if !ok || updated.Version != 2 || updated.Data["scope"] != "all" {
+		t.Fatalf("identity update = %#v ok=%v", updated, ok)
+	}
+	if !store.Delete(ctx, identityRolesResource, "RO1") {
+		t.Fatal("identity delete returned false")
+	}
+
+	queries := strings.Join(db.queries, "\n")
+	for _, want := range []string{
+		"FROM identity_roles WHERE id = $1",
+		"FROM identity_roles ORDER BY created_at, id",
+		"UPDATE identity_roles SET",
+		"DELETE FROM identity_roles WHERE id = $1",
+	} {
+		if !strings.Contains(queries, want) {
+			t.Fatalf("queries = %s, missing %q", queries, want)
+		}
+	}
+	if strings.Contains(queries, "platform_records") {
+		t.Fatalf("identity CRUD queries used platform_records: %s", queries)
+	}
+}
+
 func TestPostgresStoreKeepsNonIdentityResourcesOnPlatformRecords(t *testing.T) {
 	now := time.Date(2026, 6, 16, 9, 0, 0, 0, time.UTC)
 	db := &fakePostgresDB{
@@ -179,6 +231,179 @@ func TestPostgresStoreIdentityNextIDScansOwnedTable(t *testing.T) {
 	queries := strings.Join(tx.queries, "\n")
 	if !strings.Contains(queries, "FROM users") || strings.Contains(queries, "platform_records") {
 		t.Fatalf("identity NextID queries = %s, want users table without platform_records", queries)
+	}
+}
+
+func TestIdentityColumnMappersCoverMappedResources(t *testing.T) {
+	now := time.Date(2026, 6, 16, 11, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name       string
+		resource   string
+		id         string
+		insertData map[string]any
+		updateData map[string]any
+		insertCols []string
+		updateCols []string
+	}{
+		{
+			name:     "users",
+			resource: identityUsersResource,
+			id:       "US1",
+			insertData: map[string]any{
+				"name": "alice", "email": "alice@example.com", "fullName": "Alice",
+				"passwordHash": "hash", "role": "admin", "roleId": "RO1",
+				"systemRole": json.Number("1"), "type": "ldap", "status": "online",
+			},
+			updateData: map[string]any{
+				"username": "alice2", "email": "", "full_name": "Alice B",
+				"password_hash": "hash2", "role": "user", "role_id": "RO2",
+				"system_role": "2", "type": "origin", "status": "offline",
+			},
+			insertCols: []string{"username", "email", "full_name", "password_hash", "role", "role_id", "system_role", "type", "status"},
+			updateCols: []string{"username", "email", "full_name", "password_hash", "role", "role_id", "system_role", "type", "status"},
+		},
+		{
+			name:       "roles",
+			resource:   identityRolesResource,
+			id:         "RO1",
+			insertData: map[string]any{"name": "operator"},
+			updateData: map[string]any{"name": "viewer"},
+			insertCols: []string{"name"},
+			updateCols: []string{"name"},
+		},
+		{
+			name:       "sessions",
+			resource:   identitySessionsResource,
+			id:         "session-1",
+			insertData: map[string]any{"userId": "US1", "expiresAt": "2026-06-16T12:00:00Z"},
+			updateData: map[string]any{"user_id": "US2", "token": "session-2", "expires_at": now},
+			insertCols: []string{"user_id", "token", "expires_at"},
+			updateCols: []string{"user_id", "token", "expires_at"},
+		},
+		{
+			name:       "refresh_tokens",
+			resource:   identityRefreshTokens,
+			id:         "refresh-1",
+			insertData: map[string]any{"user_id": "US1", "token": "refresh-1", "expires_at": "2026-06-17T12:00:00Z"},
+			updateData: map[string]any{"userId": "US2", "token": "refresh-2", "expiresAt": "2026-06-18T12:00:00Z"},
+			insertCols: []string{"user_id", "token", "expires_at"},
+			updateCols: []string{"user_id", "token", "expires_at"},
+		},
+		{
+			name:     "api_tokens",
+			resource: identityAPITokensResource,
+			id:       "AT1",
+			insertData: map[string]any{
+				"userId": "US1", "name": "cli", "tokenHash": "hash", "tokenPrefix": "tok",
+				"expiresAt": "2026-09-16T12:00:00Z", "lastUsedAt": "2026-06-16T12:00:00Z",
+				"revoked": "true", "revokedAt": "2026-06-16T13:00:00Z",
+			},
+			updateData: map[string]any{
+				"user_id": "US2", "name": "ops", "token_hash": "hash2", "token_prefix": "ops",
+				"expires_at": "", "last_used_at": now, "revoked": false, "revoked_at": "",
+			},
+			insertCols: []string{"user_id", "name", "token_hash", "token_prefix", "expires_at", "last_used_at", "revoked", "revoked_at"},
+			updateCols: []string{"user_id", "name", "token_hash", "token_prefix", "expires_at", "last_used_at", "revoked", "revoked_at"},
+		},
+		{
+			name:       "captchas",
+			resource:   identityCaptchasResource,
+			id:         "captcha-1",
+			insertData: map[string]any{"answerHash": "hash", "expiresAt": "2026-06-16T12:05:00Z"},
+			updateData: map[string]any{"answer_hash": "hash2", "expires_at": now},
+			insertCols: []string{"answer_hash", "expires_at"},
+			updateCols: []string{"answer_hash", "expires_at"},
+		},
+		{
+			name:       "login_failures",
+			resource:   identityLoginFailures,
+			id:         "failure-1",
+			insertData: map[string]any{"username": "alice", "ip": "127.0.0.1", "failures": float64(3), "lockedUntil": "2026-06-16T12:10:00Z"},
+			updateData: map[string]any{"username": "bob", "ip": "127.0.0.2", "failures": int64(4), "locked_until": ""},
+			insertCols: []string{"username", "ip", "failures", "locked_until"},
+			updateCols: []string{"username", "ip", "failures", "locked_until"},
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			spec, ok := identityPostgresResourceFor(tt.resource)
+			if !ok {
+				t.Fatalf("resource %s not mapped", tt.resource)
+			}
+			if got := identityColumnNames(spec.insert(tt.insertData, tt.id, now)); !reflect.DeepEqual(got, tt.insertCols) {
+				t.Fatalf("insert columns = %#v, want %#v", got, tt.insertCols)
+			}
+			if got := identityColumnNames(spec.update(tt.updateData)); !reflect.DeepEqual(got, tt.updateCols) {
+				t.Fatalf("update columns = %#v, want %#v", got, tt.updateCols)
+			}
+		})
+	}
+}
+
+func TestIdentityIntParsingBranches(t *testing.T) {
+	data := identityParsingBranchData()
+	for key, want := range map[string]int{"int": 1, "int32": 2, "int64": 3, "float": 4, "json": 5, "string": 6} {
+		got, ok := identityInt(data, key)
+		if !ok || got != want {
+			t.Fatalf("identityInt(%s) = %d ok=%v, want %d true", key, got, ok, want)
+		}
+	}
+	for _, key := range []string{"badInt", "missing"} {
+		if got, ok := identityInt(data, key); ok || got != 0 {
+			t.Fatalf("identityInt(%s) = %d ok=%v, want 0 false", key, got, ok)
+		}
+	}
+}
+
+func TestIdentityBoolParsingBranches(t *testing.T) {
+	data := identityParsingBranchData()
+	for key, want := range map[string]bool{"bool": true, "boolString": true} {
+		got, ok := identityBool(data, key)
+		if !ok || got != want {
+			t.Fatalf("identityBool(%s) = %v ok=%v, want %v true", key, got, ok, want)
+		}
+	}
+	for _, key := range []string{"badBool", "missing"} {
+		if got, ok := identityBool(data, key); ok || got {
+			t.Fatalf("identityBool(%s) = %v ok=%v, want false false", key, got, ok)
+		}
+	}
+}
+
+func TestIdentityTimeParsingBranches(t *testing.T) {
+	data := identityParsingBranchData()
+	if got, ok := identityTime(data, "time"); !ok || got.Location() != time.UTC {
+		t.Fatalf("identityTime(time) = %v ok=%v, want UTC true", got, ok)
+	}
+	if got, ok := identityTime(data, "timeString"); !ok || !got.Equal(time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)) {
+		t.Fatalf("identityTime(timeString) = %v ok=%v, want parsed UTC", got, ok)
+	}
+	for _, key := range []string{"blankTime", "badTime", "zeroTime", "missing"} {
+		if got, ok := identityTime(data, key); ok || !got.IsZero() {
+			t.Fatalf("identityTime(%s) = %v ok=%v, want zero false", key, got, ok)
+		}
+	}
+}
+
+func identityParsingBranchData() map[string]any {
+	now := time.Date(2026, 6, 16, 12, 0, 0, 0, time.FixedZone("UTC+8", 8*60*60))
+	return map[string]any{
+		"int":        int(1),
+		"int32":      int32(2),
+		"int64":      int64(3),
+		"float":      float64(4),
+		"json":       json.Number("5"),
+		"string":     "6",
+		"badInt":     "nope",
+		"bool":       true,
+		"boolString": "true",
+		"badBool":    "maybe",
+		"time":       now,
+		"timeString": "2026-06-16T12:00:00Z",
+		"blankTime":  "",
+		"badTime":    "not-time",
+		"zeroTime":   time.Time{},
 	}
 }
 
@@ -250,6 +475,14 @@ func TestNewBackingResourcesKeepsDefaultsWithoutDatabaseURL(t *testing.T) {
 	if len(backing.Options) != 0 {
 		t.Fatalf("options = %d, want none", len(backing.Options))
 	}
+}
+
+func identityColumnNames(columns []identityColumnValue) []string {
+	names := make([]string, 0, len(columns))
+	for _, column := range columns {
+		names = append(names, column.column)
+	}
+	return names
 }
 
 type fakePostgresDB struct {
