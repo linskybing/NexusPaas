@@ -5,6 +5,7 @@ package platform
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -151,5 +152,211 @@ func TestPostgresStoreNextIDMonotonicNoReuse(t *testing.T) {
 	}
 	if next != fmt.Sprintf("US%07d", 2600004) {
 		t.Fatalf("NextID = %s, want US2600004", next)
+	}
+}
+
+func TestPostgresStoreIdentityResourcesUseOwnedTables(t *testing.T) {
+	url := requireTestDatabaseURL(t)
+	ctx := context.Background()
+	if err := ApplyMigrations(ctx, url); err != nil {
+		t.Fatalf("apply migrations: %v", err)
+	}
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pool.Close()
+	resetIdentityBoundaryRows(t, ctx, pool)
+	store := NewPostgresStore(pool)
+
+	if _, err := store.Create(ctx, identityUsersResource, map[string]any{
+		"id":            "US_BOUNDARY",
+		"username":      "boundary-user",
+		"password_hash": "hash",
+		"status":        "online",
+		"capabilities":  map[string]any{"adminPanel": true},
+	}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if _, err := store.Create(ctx, identityRolesResource, map[string]any{
+		"id":         "RO_BOUNDARY",
+		"name":       "boundary-role",
+		"adminPanel": true,
+	}); err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+	if _, err := store.Create(ctx, identitySessionsResource, map[string]any{
+		"id":         "session-boundary",
+		"user_id":    "US_BOUNDARY",
+		"expires_at": "2026-06-16T12:00:00Z",
+	}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if _, err := store.Create(ctx, identityRefreshTokens, map[string]any{
+		"id":         "refresh-boundary",
+		"user_id":    "US_BOUNDARY",
+		"expires_at": "2026-06-16T13:00:00Z",
+	}); err != nil {
+		t.Fatalf("create refresh token: %v", err)
+	}
+	if _, err := store.Create(ctx, identityAPITokensResource, map[string]any{
+		"id":           "AT_BOUNDARY",
+		"user_id":      "US_BOUNDARY",
+		"name":         "boundary",
+		"token":        "raw-token-must-not-persist",
+		"token_hash":   HashSecret("raw-token-must-not-persist"),
+		"token_prefix": "raw",
+	}); err != nil {
+		t.Fatalf("create api token: %v", err)
+	}
+	if _, err := store.Create(ctx, identityCaptchasResource, map[string]any{
+		"id":          "captcha-boundary",
+		"answer_hash": "hash",
+		"expires_at":  "2026-06-16T12:00:00Z",
+	}); err != nil {
+		t.Fatalf("create captcha: %v", err)
+	}
+	if _, err := store.Create(ctx, identityLoginFailures, map[string]any{
+		"id":       "failure-boundary",
+		"username": "boundary-user",
+		"ip":       "127.0.0.1",
+		"failures": 1,
+	}); err != nil {
+		t.Fatalf("create login failure: %v", err)
+	}
+
+	updated, ok := store.Update(ctx, identityUsersResource, "US_BOUNDARY", map[string]any{"custom": "kept"})
+	if !ok || updated.Data["custom"] != "kept" {
+		t.Fatalf("update user = %#v ok=%v, want custom payload retained", updated, ok)
+	}
+	token, ok := store.Get(ctx, identityAPITokensResource, "AT_BOUNDARY")
+	if !ok {
+		t.Fatal("api token not found")
+	}
+	if token.Data["token"] != nil || token.Data["token_hash"] == "" {
+		t.Fatalf("api token payload = %#v, want hash only", token.Data)
+	}
+	for _, resource := range []string{
+		identityUsersResource,
+		identityRolesResource,
+		identitySessionsResource,
+		identityRefreshTokens,
+		identityAPITokensResource,
+		identityCaptchasResource,
+		identityLoginFailures,
+	} {
+		id := identityBoundaryIDForResource(resource)
+		var count int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM platform_records WHERE resource = $1 AND id = $2`, resource, id).Scan(&count); err != nil {
+			t.Fatalf("count platform_records for %s: %v", resource, err)
+		}
+		if count != 0 {
+			t.Fatalf("platform_records rows for %s/%s = %d, want 0", resource, id, count)
+		}
+	}
+	if got, ok := store.Get(ctx, identityUsersResource, "US_BOUNDARY"); !ok || got.Data["username"] != "boundary-user" {
+		t.Fatalf("get user = %#v ok=%v, want owned-table user", got, ok)
+	}
+}
+
+func TestIdentityMigrationBackfillsFromPlatformRecords(t *testing.T) {
+	url := requireTestDatabaseURL(t)
+	ctx := context.Background()
+	if err := ApplyMigrations(ctx, url); err != nil {
+		t.Fatalf("apply migrations: %v", err)
+	}
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, "US_BACKFILL_BOUNDARY"); err != nil {
+		t.Fatalf("reset user: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM platform_records WHERE resource = $1 AND id = $2`, identityUsersResource, "US_BACKFILL_BOUNDARY"); err != nil {
+		t.Fatalf("reset platform record: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO platform_records (resource, id, payload)
+		VALUES ($1, $2, $3::jsonb)`,
+		identityUsersResource,
+		"US_BACKFILL_BOUNDARY",
+		`{"id":"US_BACKFILL_BOUNDARY","username":"backfill-boundary","password_hash":"hash","status":"online","custom":"legacy"}`,
+	); err != nil {
+		t.Fatalf("seed platform record: %v", err)
+	}
+	if err := ApplyMigrations(ctx, url); err != nil {
+		t.Fatalf("re-apply migrations: %v", err)
+	}
+	var payload string
+	if err := pool.QueryRow(ctx, `SELECT payload::text FROM users WHERE id = $1`, "US_BACKFILL_BOUNDARY").Scan(&payload); err != nil {
+		t.Fatalf("query backfilled user: %v", err)
+	}
+	if !strings.Contains(payload, "legacy") {
+		t.Fatalf("backfilled payload = %s, want legacy field", payload)
+	}
+	var legacyCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM platform_records WHERE resource = $1 AND id = $2`, identityUsersResource, "US_BACKFILL_BOUNDARY").Scan(&legacyCount); err != nil {
+		t.Fatalf("count legacy platform record: %v", err)
+	}
+	if legacyCount != 1 {
+		t.Fatalf("legacy platform_records count = %d, want retained row", legacyCount)
+	}
+}
+
+func resetIdentityBoundaryRows(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	statements := []string{
+		`DELETE FROM user_api_tokens WHERE id = 'AT_BOUNDARY' OR user_id = 'US_BOUNDARY'`,
+		`DELETE FROM refresh_tokens WHERE id = 'refresh-boundary' OR user_id = 'US_BOUNDARY'`,
+		`DELETE FROM sessions WHERE id = 'session-boundary' OR user_id = 'US_BOUNDARY'`,
+		`DELETE FROM captchas WHERE id = 'captcha-boundary'`,
+		`DELETE FROM login_failures WHERE id = 'failure-boundary' OR username = 'boundary-user'`,
+		`DELETE FROM identity_roles WHERE id = 'RO_BOUNDARY' OR name = 'boundary-role'`,
+		`DELETE FROM users WHERE id = 'US_BOUNDARY' OR username = 'boundary-user'`,
+		`DELETE FROM platform_records WHERE (resource, id) IN (
+			('identity-service:users', 'US_BOUNDARY'),
+			('identity-service:roles', 'RO_BOUNDARY'),
+			('identity-service:sessions', 'session-boundary'),
+			('identity-service:refresh_tokens', 'refresh-boundary'),
+			('identity-service:api_tokens', 'AT_BOUNDARY'),
+			('identity-service:captchas', 'captcha-boundary'),
+			('identity-service:login_failures', 'failure-boundary')
+		)`,
+		`DELETE FROM platform_id_seq WHERE key IN (
+			'identity-service:users|US',
+			'identity-service:roles|RO',
+			'identity-service:sessions|session-',
+			'identity-service:refresh_tokens|refresh-',
+			'identity-service:api_tokens|AT',
+			'identity-service:captchas|captcha-',
+			'identity-service:login_failures|failure-'
+		)`,
+	}
+	for _, statement := range statements {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			t.Fatalf("reset identity boundary rows: %v", err)
+		}
+	}
+}
+
+func identityBoundaryIDForResource(resource string) string {
+	switch resource {
+	case identityUsersResource:
+		return "US_BOUNDARY"
+	case identityRolesResource:
+		return "RO_BOUNDARY"
+	case identitySessionsResource:
+		return "session-boundary"
+	case identityRefreshTokens:
+		return "refresh-boundary"
+	case identityAPITokensResource:
+		return "AT_BOUNDARY"
+	case identityCaptchasResource:
+		return "captcha-boundary"
+	case identityLoginFailures:
+		return "failure-boundary"
+	default:
+		return ""
 	}
 }

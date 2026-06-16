@@ -32,6 +32,9 @@ func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 }
 
 func (s *PostgresStore) Create(ctx context.Context, resource string, data map[string]any) (contracts.Record[map[string]any], error) {
+	if spec, ok := identityPostgresResourceFor(resource); ok {
+		return s.createIdentityRecord(ctx, spec, data)
+	}
 	id, _ := data["id"].(string)
 	if id == "" {
 		id = newID()
@@ -62,6 +65,9 @@ func (s *PostgresStore) Create(ctx context.Context, resource string, data map[st
 }
 
 func (s *PostgresStore) Get(ctx context.Context, resource, id string) (contracts.Record[map[string]any], bool) {
+	if spec, ok := identityPostgresResourceFor(resource); ok {
+		return s.getIdentityRecord(ctx, spec, id)
+	}
 	var rec contracts.Record[map[string]any]
 	var raw []byte
 	row := s.db.QueryRow(ctx, `
@@ -81,6 +87,9 @@ func (s *PostgresStore) Get(ctx context.Context, resource, id string) (contracts
 }
 
 func (s *PostgresStore) List(ctx context.Context, resource string) []contracts.Record[map[string]any] {
+	if spec, ok := identityPostgresResourceFor(resource); ok {
+		return s.listIdentityRecords(ctx, spec)
+	}
 	rows, err := s.db.Query(ctx, `
 		SELECT id, payload, version, created_at, updated_at
 		FROM platform_records WHERE resource = $1 ORDER BY created_at, id`, resource)
@@ -111,6 +120,9 @@ func (s *PostgresStore) List(ctx context.Context, resource string) []contracts.R
 }
 
 func (s *PostgresStore) Update(ctx context.Context, resource, id string, data map[string]any) (contracts.Record[map[string]any], bool) {
+	if spec, ok := identityPostgresResourceFor(resource); ok {
+		return s.updateIdentityRecord(ctx, spec, id, data)
+	}
 	patch, err := json.Marshal(cloneMap(data))
 	if err != nil {
 		slog.Error("postgres update marshal failed", "resource", resource, "id", id, "error", err)
@@ -139,6 +151,9 @@ func (s *PostgresStore) Update(ctx context.Context, resource, id string, data ma
 }
 
 func (s *PostgresStore) Delete(ctx context.Context, resource, id string) bool {
+	if spec, ok := identityPostgresResourceFor(resource); ok {
+		return s.deleteIdentityRecord(ctx, spec, id)
+	}
 	tag, err := s.db.Exec(ctx, `DELETE FROM platform_records WHERE resource = $1 AND id = $2`, resource, id)
 	if err != nil {
 		slog.Error("postgres delete failed", "resource", resource, "id", id, "error", err)
@@ -151,6 +166,9 @@ func (s *PostgresStore) Delete(ctx context.Context, resource, id string) bool {
 // never reused after the highest record is deleted. A transaction-scoped
 // advisory lock serialises concurrent allocators across processes.
 func (s *PostgresStore) NextID(resource, prefix string, base, width int) string {
+	if spec, ok := identityPostgresResourceFor(resource); ok {
+		return s.nextIdentityID(spec, prefix, base, width)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	key := resource + "|" + prefix
