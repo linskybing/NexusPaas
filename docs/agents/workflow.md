@@ -47,6 +47,13 @@ Agents should use the following context when relevant:
 * Architecture documentation under `backend/docs/`
 * Existing tests and deployment files
 
+## Branch & PR Conventions
+
+* **One goal per branch.** Each large feature or major goal is developed on its own feature branch off `main`.
+* **Branch naming:** short, lowercase, hyphenated, descriptive of the goal (e.g. `identity-data-boundary`). Avoid long or sentence-like names.
+* **Pull requests:** open a PR for every feature branch; do not push large changes directly to `main`.
+* **Squash merge:** merge each PR by squashing its commits into a single commit so `main` keeps a clean, linear history.
+
 ## Microservice Refactor Principle
 
 Prefer gradual extraction over big-bang rewrite.
