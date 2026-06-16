@@ -137,6 +137,183 @@ func TestPostgresStoreSanitizesIdentityAPITokenPayload(t *testing.T) {
 	}
 }
 
+func TestPostgresStoreIdentityListUpdateDeleteUseOwnedTables(t *testing.T) {
+	now := time.Date(2026, 6, 17, 8, 0, 0, 0, time.UTC)
+	later := now.Add(time.Minute)
+	db := &fakePostgresDB{
+		queryResults: []*fakePostgresRows{{
+			rows: [][]any{
+				{"AT1", []byte(`{"id":"AT1","name":"cli"}`), 1, now, now},
+				{"AT2", []byte(`{"id":"AT2","name":"automation"}`), 2, now, later},
+			},
+		}},
+		queryRows: []*fakePostgresRow{{
+			values: []any{
+				"AT1",
+				[]byte(`{"id":"AT1","name":"rotated","revoked":true}`),
+				2,
+				now,
+				later,
+			},
+		}},
+		execTags: []pgconn.CommandTag{pgconn.NewCommandTag("DELETE 1")},
+	}
+	store := &PostgresStore{db: db}
+	ctx := context.Background()
+
+	records := store.List(ctx, identityAPITokensResource)
+	if len(records) != 2 || records[1].Data["name"] != "automation" {
+		t.Fatalf("identity list records = %#v", records)
+	}
+	updated, ok := store.Update(ctx, identityAPITokensResource, "AT1", map[string]any{
+		"name":         "rotated",
+		"last_used_at": later.Format(time.RFC3339),
+		"revoked":      true,
+		"revoked_at":   later,
+		"token":        "must-not-persist",
+	})
+	if !ok || updated.Version != 2 || updated.Data["revoked"] != true {
+		t.Fatalf("identity update = %#v ok=%v", updated, ok)
+	}
+	if !store.Delete(ctx, identityAPITokensResource, "AT2") {
+		t.Fatal("identity delete returned false")
+	}
+	queries := strings.Join(db.queries, "\n")
+	for _, want := range []string{"FROM user_api_tokens", "UPDATE user_api_tokens", "DELETE FROM user_api_tokens"} {
+		if !strings.Contains(queries, want) {
+			t.Fatalf("identity queries = %s, want %s", queries, want)
+		}
+	}
+	if strings.Contains(fmt.Sprint(db.queryArgs), "must-not-persist") {
+		t.Fatalf("identity update args persisted raw token: %#v", db.queryArgs)
+	}
+}
+
+func TestIdentityColumnReadersHandleAliasesAndNulls(t *testing.T) {
+	expiresAt := time.Date(2026, 6, 17, 9, 0, 0, 0, time.UTC)
+	lockedUntil := expiresAt.Add(time.Hour)
+	columns := append(
+		identityAPITokenUpdateColumns(map[string]any{
+			"userId":      "US1",
+			"name":        "cli",
+			"tokenHash":   "hash",
+			"tokenPrefix": "np",
+			"expiresAt":   expiresAt.Format(time.RFC3339),
+			"lastUsedAt":  nil,
+			"revoked":     "true",
+			"revokedAt":   lockedUntil,
+		}),
+		identityLoginFailureUpdateColumns(map[string]any{
+			"username":    "alice",
+			"ip":          "127.0.0.1",
+			"failures":    "3",
+			"lockedUntil": lockedUntil.Format(time.RFC3339),
+		})...,
+	)
+
+	got := identityColumnMap(columns)
+	if got["user_id"] != "US1" || got["token_hash"] != "hash" || got["failures"] != 3 {
+		t.Fatalf("identity columns = %#v", got)
+	}
+	if got["expires_at"] != expiresAt || got["last_used_at"] != nil || got["revoked"] != true {
+		t.Fatalf("identity time/bool columns = %#v", got)
+	}
+	if got["locked_until"] != lockedUntil {
+		t.Fatalf("locked_until = %#v, want %v", got["locked_until"], lockedUntil)
+	}
+}
+
+func TestPostgresStoreIdentityGetAndColumnReaderVariants(t *testing.T) {
+	now := time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)
+	db := &fakePostgresDB{
+		queryRows: []*fakePostgresRow{
+			{values: []any{"US1", []byte(`{"id":"US1","username":"alice"}`), 1, now, now}},
+			{err: pgx.ErrNoRows},
+		},
+	}
+	store := &PostgresStore{db: db}
+	if got, ok := store.Get(context.Background(), identityUsersResource, "US1"); !ok || got.Data["username"] != "alice" {
+		t.Fatalf("identity get = %#v ok=%v, want alice", got, ok)
+	}
+	if _, ok := store.Get(context.Background(), identityRolesResource, "missing"); ok {
+		t.Fatal("missing identity role returned ok")
+	}
+
+	expiresAt := now.Add(time.Hour)
+	columnCases := []struct {
+		name    string
+		columns []identityColumnValue
+		want    map[string]any
+	}{
+		{"user update", identityUserUpdateColumns(map[string]any{
+			"name":         "alice",
+			"email":        "",
+			"fullName":     "Alice Example",
+			"passwordHash": "hash",
+			"role":         "admin",
+			"roleId":       "RO1",
+			"systemRole":   1,
+			"type":         "origin",
+			"status":       "online",
+		}), map[string]any{"username": "alice", "email": nil, "full_name": "Alice Example"}},
+		{"role insert", identityRoleInsertColumns(map[string]any{}, "RO1", now), map[string]any{"name": "RO1"}},
+		{"role update", identityRoleUpdateColumns(map[string]any{"name": "admins"}), map[string]any{"name": "admins"}},
+		{"session update", identitySessionUpdateColumns(map[string]any{
+			"userId":    "US1",
+			"token":     "session-token",
+			"expiresAt": expiresAt,
+		}), map[string]any{"user_id": "US1", "token": "session-token", "expires_at": expiresAt}},
+		{"refresh update", identityRefreshTokenUpdateColumns(map[string]any{
+			"user_id":    "US1",
+			"token":      "refresh-token",
+			"expires_at": expiresAt.Format(time.RFC3339),
+		}), map[string]any{"user_id": "US1", "token": "refresh-token", "expires_at": expiresAt}},
+		{"captcha update", identityCaptchaUpdateColumns(map[string]any{
+			"answerHash": "hash",
+			"expiresAt":  expiresAt,
+		}), map[string]any{"answer_hash": "hash", "expires_at": expiresAt}},
+	}
+	for _, tc := range columnCases {
+		got := identityColumnMap(tc.columns)
+		for key, want := range tc.want {
+			if got[key] != want {
+				t.Fatalf("%s column %s = %#v, want %#v in %#v", tc.name, key, got[key], want, got)
+			}
+		}
+	}
+}
+
+func TestPostgresStoreIdentityErrorBranches(t *testing.T) {
+	ctx := context.Background()
+	if _, err := (&PostgresStore{db: &fakePostgresDB{
+		queryRows: []*fakePostgresRow{{err: pgx.ErrNoRows}},
+	}}).Create(ctx, identityRolesResource, map[string]any{"id": "RO1", "name": "admins"}); !IsCreateConflict(err) {
+		t.Fatalf("identity create err = %v, want conflict", err)
+	}
+	if records := (&PostgresStore{db: &fakePostgresDB{}}).List(ctx, identityUsersResource); records != nil {
+		t.Fatalf("identity list on query error = %#v, want nil", records)
+	}
+	if updated, ok := (&PostgresStore{db: &fakePostgresDB{
+		queryRows: []*fakePostgresRow{{err: pgx.ErrNoRows}},
+	}}).Update(ctx, identityUsersResource, "missing", map[string]any{"username": "alice"}); ok || updated.ID != "" {
+		t.Fatalf("identity missing update = %#v ok=%v, want false", updated, ok)
+	}
+	if (&PostgresStore{db: &fakePostgresDB{
+		execTags: []pgconn.CommandTag{pgconn.NewCommandTag("DELETE 0")},
+	}}).Delete(ctx, identityUsersResource, "missing") {
+		t.Fatal("identity delete with zero rows returned true")
+	}
+	if (&PostgresStore{db: &fakePostgresDB{
+		execErrs: []error{errors.New("delete failed")},
+	}}).Delete(ctx, identityUsersResource, "US1") {
+		t.Fatal("identity delete with error returned true")
+	}
+	got := (&PostgresStore{db: &fakePostgresDB{}}).NextID(identityUsersResource, "US", 2600001, 7)
+	if !strings.HasPrefix(got, "US") {
+		t.Fatalf("identity fallback NextID = %q, want US prefix", got)
+	}
+}
+
 func TestPostgresStoreKeepsNonIdentityResourcesOnPlatformRecords(t *testing.T) {
 	now := time.Date(2026, 6, 16, 9, 0, 0, 0, time.UTC)
 	db := &fakePostgresDB{
@@ -224,6 +401,14 @@ func TestPostgresStoreNextIDUsesRecordsAndHighWaterMark(t *testing.T) {
 	if !tx.rolledBack {
 		t.Fatal("deferred rollback should still run after commit")
 	}
+}
+
+func identityColumnMap(columns []identityColumnValue) map[string]any {
+	values := map[string]any{}
+	for _, column := range columns {
+		values[column.column] = column.value
+	}
+	return values
 }
 
 func TestNewBackingResourcesInjectsPostgresStoreWhenDatabaseURLIsConfigured(t *testing.T) {

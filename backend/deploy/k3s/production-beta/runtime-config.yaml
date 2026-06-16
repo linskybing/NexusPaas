@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: production-beta-runtime-config
+  labels:
+    app.kubernetes.io/name: nexuspaas
+    app.kubernetes.io/component: shared-runtime-config
+data:
+  REDIS_URL: "redis://redis:6379/0"
+  EVENT_BUS_URL: "redis://redis:6379/1"
+  JWT_AUDIENCE: "platform"
+  SERVICE_URLS: >-
+    {"audit-compliance-service":"http://audit-compliance-service","authorization-policy-service":"http://authorization-policy-service","ide-service":"http://ide-service","identity-service":"http://identity-service","image-registry-service":"http://image-registry-service","integration-proxy-service":"http://integration-proxy-service","k8s-control-service":"http://k8s-control-service","media-upload-service":"http://media-upload-service","org-project-service":"http://org-project-service","platform-gateway":"http://platform-gateway","request-notification-service":"http://request-notification-service","scheduler-quota-service":"http://scheduler-quota-service","storage-service":"http://storage-service","usage-observability-service":"http://usage-observability-service","workload-service":"http://workload-service"}

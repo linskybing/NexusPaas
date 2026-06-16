@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,10 +10,7 @@ import (
 )
 
 func TestDeploymentManifestsAreProductionHardened(t *testing.T) {
-	deployments, err := filepath.Glob("../../*/k8s/deployment.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
+	deployments := serviceDeploymentManifests(t)
 	if len(deployments) != 15 {
 		t.Fatalf("deployment manifest count = %d, want 15: %#v", len(deployments), deployments)
 	}
@@ -49,6 +47,80 @@ func TestDeploymentManifestsAreProductionHardened(t *testing.T) {
 		requireNotContains(t, path, body, "go build")
 		requireNotContains(t, path, body, "COPY . .")
 		requireNotContains(t, path, body, "RUN apk add --no-cache ca-certificates")
+	}
+}
+
+func TestProductionBetaKustomizationIncludesFifteenServices(t *testing.T) {
+	path := "../../kustomization.yaml"
+	body := readTextFile(t, path)
+	requireContains(t, path, body, "deploy/k3s/production-beta/runtime-config.yaml")
+	requireContains(t, path, body, "deploy/k3s/production-beta/runtime-secret-contract.yaml")
+	requireContains(t, path, body, "deploy/k3s/production-beta/runtime-config-envfrom-patch.yaml")
+	requireContains(t, path, body, "deploy/k3s/postgres.yaml")
+	requireContains(t, path, body, "deploy/k3s/redis.yaml")
+	requireContains(t, path, body, "deploy/k3s/minio.yaml")
+	requireContains(t, path, body, "deploy/k3s/dex.yaml")
+	requireContains(t, path, body, "deploy/k3s/production-beta/backing-secret-names.yaml")
+	requireNotContains(t, path, body, "deploy/k3s/platform.yaml")
+
+	deployments := serviceDeploymentManifests(t)
+	for _, deployment := range deployments {
+		service := filepath.Base(filepath.Dir(filepath.Dir(deployment)))
+		resource := fmt.Sprintf("%s/k8s/deployment.yaml", service)
+		requireContains(t, path, body, resource)
+	}
+	if got := strings.Count(body, "/k8s/deployment.yaml"); got != 15 {
+		t.Fatalf("%s service deployment resource count = %d, want 15", path, got)
+	}
+}
+
+func TestProductionBetaRuntimeConfigAndSecretContract(t *testing.T) {
+	configPath := "../../deploy/k3s/production-beta/runtime-config.yaml"
+	config := readTextFile(t, configPath)
+	requireContains(t, configPath, config, "name: production-beta-runtime-config")
+	requireContains(t, configPath, config, `REDIS_URL: "redis://redis:6379/0"`)
+	requireContains(t, configPath, config, `EVENT_BUS_URL: "redis://redis:6379/1"`)
+	requireContains(t, configPath, config, `JWT_AUDIENCE: "platform"`)
+	serviceURLs := extractServiceURLs(t, configPath, config)
+
+	contractPath := "../../deploy/k3s/production-beta/runtime-secret-contract.yaml"
+	contract := readTextFile(t, contractPath)
+	requireContains(t, contractPath, contract, "name: production-beta-runtime-secret-contract")
+	requireContains(t, contractPath, contract, "`SERVICE_API_KEY`")
+	requireContains(t, contractPath, contract, "`AUTHORIZATION_POLICY_URL`")
+	requireContains(t, contractPath, contract, "`AUTHORIZATION_POLICY_API_KEY`")
+	requireContains(t, contractPath, contract, "`postgres-password`")
+	requireContains(t, contractPath, contract, "`dex-password`")
+	requireContains(t, contractPath, contract, "`minio-credentials`")
+	requireNotContains(t, contractPath, contract, "-dev-")
+
+	backingPatchPath := "../../deploy/k3s/production-beta/backing-secret-names.yaml"
+	backingPatch := readTextFile(t, backingPatchPath)
+	requireContains(t, backingPatchPath, backingPatch, "name: postgres-password")
+	requireContains(t, backingPatchPath, backingPatch, "name: dex-password")
+	requireContains(t, backingPatchPath, backingPatch, "name: minio-credentials")
+	requireNotContains(t, backingPatchPath, backingPatch, "-dev-")
+
+	runtimePatchPath := "../../deploy/k3s/production-beta/runtime-config-envfrom-patch.yaml"
+	runtimePatch := readTextFile(t, runtimePatchPath)
+	requireContains(t, runtimePatchPath, runtimePatch, "path: /spec/template/spec/containers/0/envFrom/1")
+	requireContains(t, runtimePatchPath, runtimePatch, "name: production-beta-runtime-config")
+	requireContains(t, runtimePatchPath, runtimePatch, "optional: true")
+
+	kustomizationPath := "../../kustomization.yaml"
+	kustomization := readTextFile(t, kustomizationPath)
+	requireContains(t, kustomizationPath, kustomization, "labelSelector: app in (")
+
+	for _, deployment := range serviceDeploymentManifests(t) {
+		service := filepath.Base(filepath.Dir(filepath.Dir(deployment)))
+		if got := serviceURLs[service]; got != "http://"+service {
+			t.Fatalf("%s SERVICE_URLS[%s] = %q, want http://%s", configPath, service, got, service)
+		}
+		requireContains(t, contractPath, contract, fmt.Sprintf("`%s-runtime-secret`", service))
+		requireContains(t, kustomizationPath, kustomization, service)
+	}
+	if len(serviceURLs) != 15 {
+		t.Fatalf("%s SERVICE_URLS count = %d, want 15", configPath, len(serviceURLs))
 	}
 }
 
@@ -168,6 +240,31 @@ func readTextFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(body)
+}
+
+func serviceDeploymentManifests(t *testing.T) []string {
+	t.Helper()
+	deployments, err := filepath.Glob("../../*/k8s/deployment.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return deployments
+}
+
+func extractServiceURLs(t *testing.T, path, body string) map[string]string {
+	t.Helper()
+	const marker = "SERVICE_URLS: >-\n"
+	start := strings.Index(body, marker)
+	if start == -1 {
+		t.Fatalf("%s does not contain SERVICE_URLS block", path)
+	}
+	line := body[start+len(marker):]
+	line = strings.TrimSpace(strings.SplitN(line, "\n", 2)[0])
+	urls := map[string]string{}
+	if err := json.Unmarshal([]byte(line), &urls); err != nil {
+		t.Fatalf("%s SERVICE_URLS is not valid JSON: %v", path, err)
+	}
+	return urls
 }
 
 func requireFileExists(t *testing.T, path string) {
