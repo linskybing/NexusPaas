@@ -1,0 +1,397 @@
+package schedulerquota
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/linskybing/nexuspaas/backend/internal/platform"
+	"github.com/linskybing/nexuspaas/backend/internal/platform/cluster"
+	"github.com/linskybing/nexuspaas/backend/internal/services/workload"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
+)
+
+func TestPreemptionRouteDoesNotCreateGenericCommandRecord(t *testing.T) {
+	ctx := context.Background()
+	app := newPreemptionTestApp(t, cluster.New(fake.NewSimpleClientset(preemptionPod("proj-p1", "victim-pod", "victim")), "proj"))
+	seedPreemptionQueue(t, app, "q-low", "batch-low", true, 1000)
+	seedPreemptionJob(t, app, map[string]any{
+		"id": "requester", "job_id": "requester", "status": "submitted", "namespace": "proj-p1",
+		"queue_name": "interactive", "priority_value": 10000, "preemptible": false,
+		"required_gpu": 1.0, "required_cpu": 1.0, "device_class_name": "gpu.nvidia.com",
+	})
+	seedPreemptionJob(t, app, map[string]any{
+		"id": "victim", "job_id": "victim", "status": "running", "namespace": "proj-p1",
+		"queue_name": "batch-low", "priority_value": 1000, "preemptible": true,
+		"required_gpu": 1.0, "required_cpu": 2.0, "device_class_name": "gpu.nvidia.com",
+		"created_at": time.Date(2026, 6, 15, 8, 0, 0, 0, time.UTC).Format(time.RFC3339),
+	})
+
+	rec := postPreemption(t, app, "preempt-happy", `{"requester_job_id":"requester"}`, http.StatusOK)
+	data := preemptionResponseData(t, rec)
+	if data["status"] != "completed" || data["accepted"] != true {
+		t.Fatalf("preemption response = %#v, want completed accepted", data)
+	}
+	if got := len(app.Store.List(ctx, serviceName+":preemptions:commands")); got != 0 {
+		t.Fatalf("generic preemption command records = %d, want 0", got)
+	}
+	victim, _ := app.Store.Get(ctx, workloadJobsResource, "victim")
+	if victim.Data["status"] != "preempted" || victim.Data["preemption_record_id"] == "" {
+		t.Fatalf("victim after preemption = %#v, want terminal preempted with record id", victim.Data)
+	}
+	if pods, err := app.Cluster.Clientset().CoreV1().Pods("proj-p1").List(ctx, metav1.ListOptions{}); err != nil || len(pods.Items) != 0 {
+		t.Fatalf("pods after preemption = %d err=%v, want deleted", len(pods.Items), err)
+	}
+	if countEvents(app, "JobPreempted") != 1 {
+		t.Fatalf("JobPreempted events = %d, want 1", countEvents(app, "JobPreempted"))
+	}
+}
+
+func TestPreemptionIdempotencyReplaysExistingDecision(t *testing.T) {
+	app := newPreemptionTestApp(t, cluster.New(fake.NewSimpleClientset(
+		preemptionPod("proj-p1", "victim-pod", "victim"),
+		preemptionPod("proj-p1", "victim2-pod", "victim2"),
+	), "proj"))
+	seedPreemptionQueue(t, app, "q-low", "batch-low", true, 1000)
+	seedPreemptionJob(t, app, map[string]any{
+		"id": "requester", "job_id": "requester", "status": "submitted", "namespace": "proj-p1",
+		"queue_name": "interactive", "priority_value": 10000, "required_gpu": 1.0, "required_cpu": 1.0,
+	})
+	seedPreemptionJob(t, app, map[string]any{
+		"id": "victim", "job_id": "victim", "status": "running", "namespace": "proj-p1",
+		"queue_name": "batch-low", "priority_value": 1000, "preemptible": true, "required_gpu": 1.0,
+	})
+
+	postPreemption(t, app, "same-key", `{"requester_job_id":"requester"}`, http.StatusOK)
+	seedPreemptionJob(t, app, map[string]any{
+		"id": "victim2", "job_id": "victim2", "status": "running", "namespace": "proj-p1",
+		"queue_name": "batch-low", "priority_value": 500, "preemptible": true, "required_gpu": 1.0,
+	})
+	beforeEvents := countEvents(app, "JobPreempted")
+
+	rec := postPreemption(t, app, "same-key", `{"requester_job_id":"requester"}`, http.StatusOK)
+	data := preemptionResponseData(t, rec)
+
+	if data["status"] != "completed" {
+		t.Fatalf("replayed data = %#v, want completed record", data)
+	}
+	victim2, _ := app.Store.Get(context.Background(), workloadJobsResource, "victim2")
+	if victim2.Data["status"] != "running" {
+		t.Fatalf("victim2 status = %#v, want unchanged running on replay", victim2.Data)
+	}
+	if after := countEvents(app, "JobPreempted"); after != beforeEvents {
+		t.Fatalf("JobPreempted events after replay = %d, want %d", after, beforeEvents)
+	}
+}
+
+func TestPreemptionMissingWorkloadContractFailsClosed(t *testing.T) {
+	app := platform.NewApp(platform.Config{
+		ServiceName:    serviceName,
+		HTTPAddr:       ":0",
+		ServiceAPIKey:  "svc-key",
+		AdapterTimeout: time.Second,
+	})
+	registerPreemptionSchedulerRoute(app)
+	Register(app)
+
+	rec := postPreemption(t, app, "missing-workload", `{"requester_job_id":"requester"}`, http.StatusServiceUnavailable)
+	data := preemptionResponseData(t, rec)
+	if data["status"] != "preflight_failed" {
+		t.Fatalf("preemption data = %#v, want preflight_failed", data)
+	}
+	if got := len(app.Store.List(context.Background(), serviceName+":preemptions:commands")); got != 0 {
+		t.Fatalf("generic command records = %d, want 0", got)
+	}
+}
+
+func TestPreemptionUsesWorkloadContractInIsolatedRuntime(t *testing.T) {
+	ctx := context.Background()
+	workloadApp := newWorkloadContractOwnerTestApp(t)
+	seedPreemptionJob(t, workloadApp, map[string]any{
+		"id": "requester", "job_id": "requester", "status": "submitted", "namespace": "proj-p1",
+		"queue_name": "interactive", "priority_value": 10000, "required_gpu": 1.0, "required_cpu": 1.0,
+	})
+	seedPreemptionJob(t, workloadApp, map[string]any{
+		"id": "victim", "job_id": "victim", "status": "running", "namespace": "proj-p1",
+		"queue_name": "batch-low", "priority_value": 1000, "preemptible": true, "required_gpu": 1.0,
+	})
+	server := httptest.NewServer(workloadApp)
+	defer server.Close()
+
+	schedulerApp := platform.NewApp(platform.Config{
+		ServiceName:             serviceName,
+		HTTPAddr:                ":0",
+		ServiceAPIKey:           "svc-key",
+		ServiceURLs:             map[string]string{workloadServiceName: server.URL},
+		ServiceFallbackDisabled: true,
+		AdapterTimeout:          time.Second,
+	}, platform.WithCluster(cluster.New(fake.NewSimpleClientset(preemptionPod("proj-p1", "victim-pod", "victim")), "proj")))
+	registerPreemptionSchedulerRoute(schedulerApp)
+	Register(schedulerApp)
+	seedPreemptionQueue(t, schedulerApp, "q-low", "batch-low", true, 1000)
+
+	postPreemption(t, schedulerApp, "isolated", `{"requester_job_id":"requester"}`, http.StatusOK)
+
+	victim, _ := workloadApp.Store.Get(ctx, workloadJobsResource, "victim")
+	if victim.Data["status"] != "preempted" {
+		t.Fatalf("remote workload victim = %#v, want preempted through workload contract", victim.Data)
+	}
+	if got := len(schedulerApp.Store.List(ctx, workloadJobsResource)); got != 0 {
+		t.Fatalf("isolated scheduler local workload jobs = %d, want 0", got)
+	}
+}
+
+func TestPreemptionPartialCleanupFailureRecordsPartialFailure(t *testing.T) {
+	clientset := fake.NewSimpleClientset(
+		preemptionPod("proj-p1", "victim-a", "victim"),
+		preemptionPod("proj-p1", "victim-b", "victim"),
+	)
+	deletes := 0
+	clientset.PrependReactor("delete", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		deletes++
+		if deletes == 2 {
+			return true, nil, errors.New("delete pod failed after partial cleanup")
+		}
+		return false, nil, nil
+	})
+	app := newPreemptionTestApp(t, cluster.New(clientset, "proj"))
+	seedPreemptionQueue(t, app, "q-low", "batch-low", true, 1000)
+	seedPreemptionJob(t, app, map[string]any{
+		"id": "requester", "job_id": "requester", "status": "submitted", "namespace": "proj-p1",
+		"queue_name": "interactive", "priority_value": 10000, "required_gpu": 1.0, "required_cpu": 1.0,
+	})
+	seedPreemptionJob(t, app, map[string]any{
+		"id": "victim", "job_id": "victim", "status": "running", "namespace": "proj-p1",
+		"queue_name": "batch-low", "priority_value": 1000, "preemptible": true, "required_gpu": 1.0,
+	})
+
+	rec := postPreemption(t, app, "partial", `{"requester_job_id":"requester"}`, http.StatusServiceUnavailable)
+	data := preemptionResponseData(t, rec)
+	if data["status"] != "partial_failure" {
+		t.Fatalf("partial cleanup response = %#v, want partial_failure", data)
+	}
+	victim, _ := app.Store.Get(context.Background(), workloadJobsResource, "victim")
+	if victim.Data["status"] != "running" {
+		t.Fatalf("victim after partial failure = %#v, want unchanged running", victim.Data)
+	}
+	if countEvents(app, "JobPreempted") != 0 {
+		t.Fatalf("JobPreempted events = %d, want none on partial cleanup failure", countEvents(app, "JobPreempted"))
+	}
+	postPreemption(t, app, "partial", `{"requester_job_id":"requester"}`, http.StatusOK)
+	victim, _ = app.Store.Get(context.Background(), workloadJobsResource, "victim")
+	if victim.Data["status"] != "running" {
+		t.Fatalf("victim after partial replay = %#v, want still running", victim.Data)
+	}
+}
+
+func TestPreemptionPreflightFailureDoesNotCleanup(t *testing.T) {
+	app := newPreemptionTestApp(t, cluster.New(fake.NewSimpleClientset(preemptionPod("proj-p1", "victim-pod", "victim")), "proj"))
+	seedPreemptionQueue(t, app, "q-low", "batch-low", true, 1000)
+	seedPreemptionJob(t, app, map[string]any{
+		"id": "requester", "job_id": "requester", "status": "submitted", "namespace": "proj-p1",
+		"queue_name": "interactive", "priority_value": 10000, "required_gpu": 1.0, "required_cpu": 1.0,
+	})
+	seedPreemptionJob(t, app, map[string]any{
+		"id": "victim", "job_id": "victim", "status": "running",
+		"queue_name": "batch-low", "priority_value": 1000, "preemptible": true, "required_gpu": 1.0,
+	})
+
+	rec := postPreemption(t, app, "preflight", `{"requester_job_id":"requester"}`, http.StatusConflict)
+	data := preemptionResponseData(t, rec)
+	if data["status"] != "preflight_failed" {
+		t.Fatalf("preflight response = %#v, want preflight_failed", data)
+	}
+	pods, _ := app.Cluster.Clientset().CoreV1().Pods("proj-p1").List(context.Background(), metav1.ListOptions{})
+	if len(pods.Items) != 1 {
+		t.Fatalf("pods after preflight failure = %d, want untouched", len(pods.Items))
+	}
+}
+
+func TestPreemptionZeroCleanupResourcesDoesNotMarkPreempted(t *testing.T) {
+	app := newPreemptionTestApp(t, cluster.New(fake.NewSimpleClientset(), "proj"))
+	seedPreemptionQueue(t, app, "q-low", "batch-low", true, 1000)
+	seedPreemptionJob(t, app, map[string]any{
+		"id": "requester", "job_id": "requester", "status": "submitted", "namespace": "proj-p1",
+		"queue_name": "interactive", "priority_value": 10000, "required_gpu": 1.0, "required_cpu": 1.0,
+	})
+	seedPreemptionJob(t, app, map[string]any{
+		"id": "victim", "job_id": "victim", "status": "running", "namespace": "proj-p1",
+		"queue_name": "batch-low", "priority_value": 1000, "preemptible": true, "required_gpu": 1.0,
+	})
+
+	rec := postPreemption(t, app, "zero-cleanup", `{"requester_job_id":"requester"}`, http.StatusConflict)
+	data := preemptionResponseData(t, rec)
+	if data["status"] != "preflight_failed" {
+		t.Fatalf("zero cleanup response = %#v, want preflight_failed", data)
+	}
+	victim, _ := app.Store.Get(context.Background(), workloadJobsResource, "victim")
+	if victim.Data["status"] != "running" {
+		t.Fatalf("victim after zero cleanup = %#v, want unchanged running", victim.Data)
+	}
+	if countEvents(app, "JobPreempted") != 0 {
+		t.Fatalf("JobPreempted events = %d, want none", countEvents(app, "JobPreempted"))
+	}
+}
+
+func TestPreemptionIdempotencyFingerprintMismatchDoesNotSelectVictims(t *testing.T) {
+	app := newPreemptionTestApp(t, cluster.New(fake.NewSimpleClientset(preemptionPod("proj-p1", "victim-pod", "victim")), "proj"))
+	seedPreemptionQueue(t, app, "q-low", "batch-low", true, 1000)
+	for _, id := range []string{"requester-a", "requester-b"} {
+		seedPreemptionJob(t, app, map[string]any{
+			"id": id, "job_id": id, "status": "submitted", "namespace": "proj-p1",
+			"queue_name": "interactive", "priority_value": 10000, "required_gpu": 1.0, "required_cpu": 1.0,
+		})
+	}
+	seedPreemptionJob(t, app, map[string]any{
+		"id": "victim", "job_id": "victim", "status": "running", "namespace": "proj-p1",
+		"queue_name": "batch-low", "priority_value": 1000, "preemptible": true, "required_gpu": 1.0,
+	})
+	postPreemption(t, app, "mismatch", `{"requester_job_id":"requester-a"}`, http.StatusOK)
+
+	rec := postPreemption(t, app, "mismatch", `{"requester_job_id":"requester-b"}`, http.StatusConflict)
+	data := preemptionResponseData(t, rec)
+	if !strings.Contains(data["message"].(string), "different preemption request") {
+		t.Fatalf("fingerprint mismatch = %#v, want conflict reason", data)
+	}
+}
+
+func TestPreemptionRejectsUnauthorizedPriorityOverride(t *testing.T) {
+	app := newPreemptionTestApp(t, cluster.New(fake.NewSimpleClientset(), "proj"))
+
+	rec := postPreemption(t, app, "override", `{"priority_value":10000,"required_gpu":1}`, http.StatusForbidden)
+	data := preemptionResponseData(t, rec)
+	if !strings.Contains(data["message"].(string), "administrator") {
+		t.Fatalf("override denial = %#v, want admin reason", data)
+	}
+}
+
+func TestPreemptionSelectionFiltersGPUModelAndMaxPreemptions(t *testing.T) {
+	app := newPreemptionTestApp(t, cluster.New(fake.NewSimpleClientset(), "proj"))
+	req := preemptionRequest{
+		RequesterJobID: "requester",
+		PriorityValue:  10000,
+		RequiredGPU:    2,
+		GPUModel:       "a100",
+		MaxPreemptions: 1,
+	}
+	candidates := []workloadJobSnapshot{
+		{ID: "v-b", JobID: "v-b", Status: "running", PriorityValue: 100, Preemptible: true, RequiredGPU: 1, GPUModel: "h100", CreatedAt: "2026-06-15T08:00:00Z"},
+		{ID: "v-new", JobID: "v-new", Status: "running", PriorityValue: 100, Preemptible: true, RequiredGPU: 1, GPUModel: "a100", CreatedAt: "2026-06-15T09:00:00Z"},
+		{ID: "v-old", JobID: "v-old", Status: "running", PriorityValue: 100, Preemptible: true, RequiredGPU: 1, GPUModel: "a100", CreatedAt: "2026-06-15T07:00:00Z"},
+	}
+	victims, _, _ := selectPreemptionVictims(app, req, candidates)
+	if len(victims) != 0 {
+		t.Fatalf("victims with max=1 = %#v, want none because demand cannot be satisfied", victims)
+	}
+	req.MaxPreemptions = 2
+	victims, freedGPU, _ := selectPreemptionVictims(app, req, candidates)
+	if len(victims) != 2 || victims[0].JobID != "v-old" || victims[1].JobID != "v-new" || freedGPU != 2 {
+		t.Fatalf("victims = %#v freedGPU=%v, want old/new a100 only", victims, freedGPU)
+	}
+}
+
+func newPreemptionTestApp(t *testing.T, cl *cluster.Client) *platform.App {
+	t.Helper()
+	app := platform.NewApp(platform.Config{ServiceName: "all", HTTPAddr: ":0", ServiceAPIKey: "svc-key"}, platform.WithCluster(cl))
+	registerPreemptionSchedulerRoute(app)
+	app.RegisterService(platform.ServiceSpec{Name: workloadServiceName, Routes: []platform.RouteSpec{
+		{Method: http.MethodGet, Pattern: workloadPreemptionContextPath, Resource: "preemption_context", Action: "internal_read", AuthRequired: false},
+		{Method: http.MethodPost, Pattern: workloadPreemptJobPathTemplate, Resource: "jobs", Action: "preempt", AuthRequired: false},
+	}})
+	Register(app)
+	workload.Register(app)
+	return app
+}
+
+func newWorkloadContractOwnerTestApp(t *testing.T) *platform.App {
+	t.Helper()
+	app := platform.NewApp(platform.Config{ServiceName: workloadServiceName, HTTPAddr: ":0", ServiceAPIKey: "svc-key"})
+	app.RegisterService(platform.ServiceSpec{Name: workloadServiceName, Routes: []platform.RouteSpec{
+		{Method: http.MethodGet, Pattern: workloadPreemptionContextPath, Resource: "preemption_context", Action: "internal_read", AuthRequired: false},
+		{Method: http.MethodPost, Pattern: workloadPreemptJobPathTemplate, Resource: "jobs", Action: "preempt", AuthRequired: false},
+	}})
+	workload.Register(app)
+	return app
+}
+
+func registerPreemptionSchedulerRoute(app *platform.App) {
+	app.RegisterService(platform.ServiceSpec{Name: serviceName, Routes: []platform.RouteSpec{{
+		Method:       http.MethodPost,
+		Pattern:      "/api/v1/internal/scheduler/preemptions",
+		Resource:     "preemptions",
+		Action:       "command",
+		AuthRequired: false,
+	}}})
+}
+
+func seedPreemptionQueue(t *testing.T, app *platform.App, id, name string, preemptible bool, priority int) {
+	t.Helper()
+	createSchedulerRecord(t, app, queuesResource, map[string]any{
+		"id": id, "name": name, "is_preemptible": preemptible, "priority_value": priority,
+	})
+}
+
+func seedPreemptionJob(t *testing.T, app *platform.App, data map[string]any) {
+	t.Helper()
+	createSchedulerRecord(t, app, workloadJobsResource, data)
+}
+
+func postPreemption(t *testing.T, app http.Handler, key, body string, want int) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/internal/scheduler/preemptions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", key)
+	app.ServeHTTP(rec, req)
+	if rec.Code != want {
+		t.Fatalf("POST preemptions returned %d, want %d: %s", rec.Code, want, rec.Body.String())
+	}
+	return rec
+}
+
+func preemptionResponseData(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	var envelope struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(envelope.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func preemptionPod(namespace, name, jobID string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      name,
+			Labels: map[string]string{
+				cluster.LabelJobID:        jobID,
+				"platform-go/preemptible": "true",
+			},
+		},
+	}
+}
+
+func countEvents(app *platform.App, name string) int {
+	count := 0
+	for _, event := range app.Events.Outbox() {
+		if event.Name == name {
+			count++
+		}
+	}
+	return count
+}

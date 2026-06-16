@@ -1,0 +1,7 @@
+-- Additive service-owned schema for org-project-service.
+CREATE TABLE IF NOT EXISTS org_project_records (id UUID PRIMARY KEY, resource TEXT NOT NULL, payload JSONB NOT NULL, version INTEGER NOT NULL DEFAULT 1, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS org_project_groups (id TEXT PRIMARY KEY, group_name TEXT NOT NULL UNIQUE, description TEXT NOT NULL DEFAULT '', storage_class TEXT, registry_profile TEXT, allow_run_as_root BOOLEAN NOT NULL DEFAULT false, allowed_host_paths JSONB NOT NULL DEFAULT '[]'::jsonb, payload JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS org_project_user_groups (user_id TEXT NOT NULL, group_id TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'user', payload JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (user_id, group_id));
+CREATE INDEX IF NOT EXISTS idx_org_project_user_groups_group ON org_project_user_groups (group_id);
+CREATE TABLE IF NOT EXISTS org_project_outbox (event_id UUID PRIMARY KEY, event_name TEXT NOT NULL, trace_id TEXT NOT NULL, schema_version INTEGER NOT NULL, payload JSONB NOT NULL, occurred_at TIMESTAMPTZ NOT NULL);
+CREATE TABLE IF NOT EXISTS org_project_inbox (consumer TEXT NOT NULL, event_id UUID NOT NULL, processed_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (consumer, event_id));

@@ -1,0 +1,680 @@
+package imageregistry
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/linskybing/nexuspaas/backend/internal/contracts"
+	"github.com/linskybing/nexuspaas/backend/internal/platform"
+	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
+)
+
+type imageRecord struct {
+	ID   string
+	Data map[string]any
+}
+
+func publishEvent(app *platform.App, r *http.Request, name string, data map[string]any) {
+	if err := app.Events.Publish(r.Context(), contracts.Event{
+		EventID:       platform.NewUUID(),
+		Name:          name,
+		Source:        serviceName,
+		OccurredAt:    time.Now().UTC(),
+		TraceID:       firstNonEmpty(r.Header.Get("X-Trace-ID"), r.Header.Get("X-Request-ID"), platform.NewUUID()),
+		SchemaVersion: 1,
+		Data:          data,
+	}); err != nil {
+		slogError(name, err)
+	}
+}
+
+func slogError(event string, err error) {
+	if err != nil {
+		slog.Error("image registry event publish failed", "event", event, "error", err)
+	}
+}
+
+func callHarbor(app *platform.App, r *http.Request, route platform.RouteSpec, fallbackOperation string) (contracts.AdapterResult, *platform.Degraded) {
+	operation := firstNonEmpty(route.OperationID, fallbackOperation)
+	adapter := app.Adapters["harbor"]
+	if adapter == nil {
+		result := contracts.AdapterResult{Adapter: "harbor", Operation: operation, Degraded: true, Code: "adapter_not_configured", Message: "external adapter is not registered", Retryable: false}
+		return result, adapterDegraded(result)
+	}
+	result, err := adapter.Call(r.Context(), operation, route.Method == http.MethodGet)
+	if err != nil {
+		result = contracts.AdapterResult{Adapter: "harbor", Operation: operation, Degraded: true, Code: "adapter_unavailable", Message: err.Error(), Retryable: true}
+	}
+	if result.Degraded {
+		app.Metrics.Inc("harbor_degraded")
+		return result, adapterDegraded(result)
+	}
+	return result, nil
+}
+
+func adapterDegraded(result contracts.AdapterResult) *platform.Degraded {
+	return &platform.Degraded{Adapter: result.Adapter, Code: result.Code, Message: result.Message, Retryable: result.Retryable}
+}
+
+func imageRows(app *platform.App, r *http.Request, resource string) []map[string]any {
+	syncImageReadModels(app, r)
+	records := app.Store.List(r.Context(), resource)
+	rows := make([]map[string]any, 0, len(records))
+	for _, record := range records {
+		row := shared.CloneMap(record.Data)
+		if row["id"] == nil {
+			row["id"] = record.ID
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+func imageAccessRows(app *platform.App, r *http.Request, localResource, sourceResource string) []map[string]any {
+	local := imageRows(app, r, localResource)
+	if !sourceCoHosted(app, sourceResource) {
+		return local
+	}
+	source := imageRowsWithoutSync(app, r, sourceResource)
+	if len(local) == 0 {
+		return source
+	}
+	return mergeRows(localResource, source, local)
+}
+
+func imageRowsWithoutSync(app *platform.App, r *http.Request, resource string) []map[string]any {
+	records := app.Store.List(r.Context(), resource)
+	rows := make([]map[string]any, 0, len(records))
+	for _, record := range records {
+		row := shared.CloneMap(record.Data)
+		if row["id"] == nil {
+			row["id"] = record.ID
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+func imageCatalogRows(app *platform.App, r *http.Request) []map[string]any {
+	return imageRows(app, r, imageCatalogResource)
+}
+
+func requireUser(r *http.Request) (string, int, any, bool) {
+	userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
+	if userID == "" {
+		return "", http.StatusUnauthorized, shared.ErrorData("unauthorized"), false
+	}
+	return userID, 0, nil, true
+}
+
+func requireProjectRead(app *platform.App, r *http.Request, projectID, userID string) (map[string]any, int, any, bool) {
+	project, found := findProject(app, r, projectID)
+	if !found {
+		return nil, http.StatusNotFound, shared.ErrorData("Project not found"), false
+	}
+	if !canReadProject(projectRole(app, r, project, userID)) {
+		return nil, http.StatusForbidden, shared.ErrorData(msgProjectMemberAccess), false
+	}
+	return project, 0, nil, true
+}
+
+func requireProjectManager(app *platform.App, r *http.Request, projectID, userID string) (map[string]any, int, any, bool) {
+	project, found := findProject(app, r, projectID)
+	if !found {
+		return nil, http.StatusNotFound, shared.ErrorData("Project not found"), false
+	}
+	if !canManageProject(projectRole(app, r, project, userID)) {
+		return nil, http.StatusForbidden, shared.ErrorData(msgProjectManagerAccess), false
+	}
+	return project, 0, nil, true
+}
+
+func findProject(app *platform.App, r *http.Request, projectID string) (map[string]any, bool) {
+	for _, project := range imageAccessRows(app, r, imageProjectsResource, orgProjectsResource) {
+		if idFrom(project, "id", "p_id", "PID", "project_id", "projectId") == projectID {
+			return normalizeProject(project), true
+		}
+	}
+	return nil, false
+}
+
+func normalizeProject(project map[string]any) map[string]any {
+	out := shared.CloneMap(project)
+	id := idFrom(out, "id", "p_id", "PID", "project_id", "projectId")
+	ownerID := idFrom(out, "owner_id", "ownerId", "GID", "g_id", "gid")
+	if id != "" {
+		out["id"] = id
+		out["project_id"] = id
+	}
+	if ownerID != "" {
+		out["owner_id"] = ownerID
+	}
+	return out
+}
+
+func projectRole(app *platform.App, r *http.Request, project map[string]any, userID string) string {
+	if hasAdminPanel(app, r, userID) {
+		return "admin"
+	}
+	if idFrom(project, "personal_user_id", "personalUserID") == userID {
+		return "admin"
+	}
+	if ownerID := idFrom(project, "owner_id", "ownerId", "GID", "g_id"); ownerID != "" {
+		if membership, found := findGroupMembership(app, r, ownerID, userID); found {
+			return normalizeRole(shared.TextValue(membership, "role"))
+		}
+	}
+	if member, found := findProjectMember(app, r, idFrom(project, "project_id", "id"), userID); found {
+		return normalizeRole(shared.TextValue(member, "role"))
+	}
+	return ""
+}
+
+func findProjectMember(app *platform.App, r *http.Request, projectID, userID string) (map[string]any, bool) {
+	for _, member := range imageAccessRows(app, r, imageProjectMembersResource, orgProjectMembersResource) {
+		if idFrom(member, "project_id", "projectId") == projectID && idFrom(member, "user_id", "userId") == userID {
+			return member, true
+		}
+	}
+	return nil, false
+}
+
+func findGroupMembership(app *platform.App, r *http.Request, groupID, userID string) (map[string]any, bool) {
+	for _, member := range imageAccessRows(app, r, imageUserGroupsResource, orgUserGroupsResource) {
+		if idFrom(member, "group_id", "groupId", "gid", "g_id") == groupID && idFrom(member, "user_id", "userId", "uid", "u_id") == userID {
+			return member, true
+		}
+	}
+	return nil, false
+}
+
+func hasAdminPanel(app *platform.App, r *http.Request, userID string) bool {
+	if strings.EqualFold(r.Header.Get("X-User-Role"), "admin") {
+		return true
+	}
+	roles := imageAccessRows(app, r, imageIdentityRolesResource, identityRolesResource)
+	for _, user := range imageAccessRows(app, r, imageIdentityUsersResource, identityUsersResource) {
+		if idFrom(user, "id", "user_id", "userId") != userID {
+			continue
+		}
+		if recordGrantsAdmin(user) {
+			return true
+		}
+		roleID := idFrom(user, "role_id", "roleId", "role", "Role")
+		for _, role := range roles {
+			if (idFrom(role, "id", "name") == roleID) && recordGrantsAdmin(role) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func recordGrantsAdmin(data map[string]any) bool {
+	if shared.BoolValue(data, "admin_panel", "adminPanel", "AdminPanel") {
+		return true
+	}
+	return shared.BoolValue(shared.MapValue(data, "capabilities", "Capabilities"), "admin_panel", "adminPanel", "AdminPanel")
+}
+
+func canReadProject(role string) bool {
+	return role == "admin" || role == "manager" || role == "user"
+}
+
+func canManageProject(role string) bool {
+	return role == "admin" || role == "manager"
+}
+
+func ruleEnabled(rule map[string]any) bool {
+	if enabled, ok := rule["enabled"].(bool); ok {
+		return enabled
+	}
+	return true
+}
+
+func allowRuleFromCatalog(app *platform.App, r *http.Request, tagID, projectID, userID string) map[string]any {
+	tag := catalogByID(app, r, tagID)
+	repo := firstNonEmpty(shared.TextValue(tag, "repository", "repository_name", "image_name"), "unknown")
+	tagName := firstNonEmpty(shared.TextValue(tag, "tag", "tag_name"), defaultTag)
+	now := time.Now().UTC()
+	return map[string]any{
+		"id":              ruleID(projectID, tagID),
+		"project_id":      projectID,
+		"tag_id":          tagID,
+		"repository":      repo,
+		"tag":             tagName,
+		"image_reference": imageRefFromParts(shared.TextValue(tag, "registry"), repo, tagName),
+		"enabled":         true,
+		"created_by":      userID,
+		"created_at":      now,
+		"updated_at":      now,
+	}
+}
+
+func enrichRuleWithCatalog(app *platform.App, r *http.Request, rule map[string]any) map[string]any {
+	out := shared.CloneMap(rule)
+	if tag := catalogByID(app, r, shared.TextValue(rule, "tag_id", "tagId")); len(tag) > 0 {
+		out["catalog"] = tag
+	}
+	return out
+}
+
+func catalogByID(app *platform.App, r *http.Request, id string) map[string]any {
+	for _, tag := range imageCatalogRows(app, r) {
+		if idFrom(tag, "id", "tag_id", "tagId") == id {
+			return tag
+		}
+	}
+	return map[string]any{}
+}
+
+func imageRequestRecord(app *platform.App, r *http.Request, projectID, userID string, payload map[string]any) (map[string]any, error) {
+	imageRef := imageReference(payload)
+	if imageRef == "" {
+		return nil, fmt.Errorf("image reference is required")
+	}
+	id := firstNonEmpty(shared.TextValue(payload, "id", "request_id", "requestId"), app.Store.NextID(imageRequestsResource, "IR", 1, 6))
+	now := time.Now().UTC()
+	return map[string]any{
+		"id":              id,
+		"project_id":      projectID,
+		"image_reference": imageRef,
+		"registry":        registryFromReference(imageRef),
+		"repository":      repositoryFromReference(imageRef),
+		"tag":             tagFromReference(imageRef),
+		"status":          "pending",
+		"requested_by":    userID,
+		"created_at":      now,
+		"updated_at":      now,
+	}, nil
+}
+
+func setImageRequestStatus(app *platform.App, r *http.Request, id, statusValue, actor string) (int, any, *platform.Degraded) {
+	statusValue = strings.ToLower(strings.TrimSpace(statusValue))
+	if id == "" || statusValue == "" {
+		return http.StatusBadRequest, shared.ErrorData("id and status are required"), nil
+	}
+	if statusValue != "approved" && statusValue != "rejected" && statusValue != "pending" {
+		return http.StatusBadRequest, shared.ErrorData("invalid image request status"), nil
+	}
+	record, found := app.Store.Get(r.Context(), imageRequestsResource, id)
+	if !found {
+		return http.StatusNotFound, shared.ErrorData("image request not found"), nil
+	}
+	update := map[string]any{"status": statusValue, "reviewed_by": actor, "updated_at": time.Now().UTC()}
+	updated, ok := app.Store.Update(r.Context(), imageRequestsResource, id, update)
+	if !ok {
+		return http.StatusInternalServerError, shared.ErrorData("image request update failed"), nil
+	}
+	if statusValue == "approved" {
+		upsertApprovedRule(app, r, updated.Data, actor)
+		publishEvent(app, r, "ImageApproved", updated.Data)
+	} else if statusValue == "rejected" {
+		publishEvent(app, r, "ImageRejected", updated.Data)
+	}
+	_ = record
+	return http.StatusOK, updated.Data, nil
+}
+
+func upsertApprovedRule(app *platform.App, r *http.Request, request map[string]any, actor string) {
+	projectID := shared.TextValue(request, "project_id", "projectId")
+	tagID := firstNonEmpty(shared.TextValue(request, "tag_id", "tagId"), shared.TextValue(request, "image_reference"))
+	rule := map[string]any{
+		"id":              ruleID(projectID, tagID),
+		"project_id":      projectID,
+		"tag_id":          tagID,
+		"repository":      shared.TextValue(request, "repository"),
+		"tag":             shared.TextValue(request, "tag"),
+		"image_reference": shared.TextValue(request, "image_reference", "imageReference"),
+		"enabled":         true,
+		"created_by":      actor,
+		"updated_at":      time.Now().UTC(),
+	}
+	upsertRecord(app, r, projectImagesResource, shared.TextValue(rule, "id"), rule)
+}
+
+func findProjectImageRule(app *platform.App, r *http.Request, projectID, id string) (imageRecord, bool) {
+	for _, record := range app.Store.List(r.Context(), projectImagesResource) {
+		data := record.Data
+		if idFrom(data, "project_id", "projectId") != projectID {
+			continue
+		}
+		if record.ID == id || hasImageRuleIdentifier(data, id) {
+			return imageRecord{ID: record.ID, Data: data}, true
+		}
+	}
+	return imageRecord{}, false
+}
+
+func hasImageRuleIdentifier(data map[string]any, id string) bool {
+	for _, key := range []string{"id", "tag_id", "tagId", "image_reference"} {
+		if idFrom(data, key) == id {
+			return true
+		}
+	}
+	return false
+}
+
+func findBuild(app *platform.App, r *http.Request, id string) (imageRecord, bool) {
+	for _, record := range app.Store.List(r.Context(), imageBuildsResource) {
+		if record.ID == id || idFrom(record.Data, "id", "job_name", "jobName", "build_id", "buildId") == id {
+			return imageRecord{ID: record.ID, Data: record.Data}, true
+		}
+	}
+	return imageRecord{}, false
+}
+
+func uniqueHarborProjects(app *platform.App, r *http.Request) []string {
+	seen := map[string]bool{}
+	for _, tag := range imageCatalogRows(app, r) {
+		name := strings.Split(idFrom(tag, "repository", "repository_name", "image_name"), "/")[0]
+		if name != "" {
+			seen[name] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func filterRows(rows []map[string]any, key, value string) []map[string]any {
+	out := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		if idFrom(row, key) == value {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func filterByQuery(rows []map[string]any, r *http.Request, keys ...string) []map[string]any {
+	out := rows
+	for _, key := range keys {
+		value := strings.TrimSpace(r.URL.Query().Get(key))
+		if value != "" {
+			out = filterRows(out, key, value)
+		}
+	}
+	return out
+}
+
+func sortRows(rows []map[string]any, keys ...string) {
+	sort.Slice(rows, func(i, j int) bool {
+		for _, key := range keys {
+			left := idFrom(rows[i], key)
+			right := idFrom(rows[j], key)
+			if left != right {
+				return left < right
+			}
+		}
+		return false
+	})
+}
+
+func upsertRecord(app *platform.App, r *http.Request, resource, id string, data map[string]any) contracts.Record[map[string]any] {
+	data["id"] = id
+	if updated, ok := app.Store.Update(r.Context(), resource, id, data); ok {
+		return updated
+	}
+	record, err := app.Store.Create(r.Context(), resource, data)
+	if err != nil && platform.IsCreateConflict(err) {
+		record, _ = app.Store.Update(r.Context(), resource, id, data)
+	}
+	return record
+}
+
+func imageReference(payload map[string]any) string {
+	if ref := shared.TextValue(payload, "image_reference", "imageReference", "image"); ref != "" {
+		return canonicalImageRef(ref)
+	}
+	return imageRefFromParts(shared.TextValue(payload, "registry"), shared.TextValue(payload, "repository", "image_name", "imageName"), shared.TextValue(payload, "tag"))
+}
+
+func imageRefFromParts(registry, repo, tag string) string {
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return ""
+	}
+	registry = firstNonEmpty(registry, defaultRegistry)
+	tag = firstNonEmpty(tag, defaultTag)
+	return registry + "/" + strings.Trim(repo, "/") + ":" + tag
+}
+
+func canonicalImageRef(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ""
+	}
+	lastSlash := strings.LastIndex(ref, "/")
+	lastColon := strings.LastIndex(ref, ":")
+	if lastColon <= lastSlash {
+		ref += ":" + defaultTag
+	}
+	if !strings.Contains(strings.Split(ref, "/")[0], ".") && !strings.Contains(strings.Split(ref, "/")[0], ":") {
+		ref = defaultRegistry + "/" + ref
+	}
+	return ref
+}
+
+func registryFromReference(ref string) string {
+	parts := strings.SplitN(ref, "/", 2)
+	if len(parts) == 2 {
+		return parts[0]
+	}
+	return defaultRegistry
+}
+
+func repositoryFromReference(ref string) string {
+	rest := strings.TrimPrefix(ref, registryFromReference(ref)+"/")
+	if i := strings.LastIndex(rest, ":"); i > -1 {
+		return rest[:i]
+	}
+	return rest
+}
+
+func tagFromReference(ref string) string {
+	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+		return ref[i+1:]
+	}
+	return defaultTag
+}
+
+func normalizeRole(role string) string {
+	role = strings.ToLower(strings.TrimSpace(role))
+	if role == "member" {
+		return "user"
+	}
+	return role
+}
+
+func projectPathID(r *http.Request) string {
+	return strings.TrimSpace(r.PathValue("id"))
+}
+
+func ruleID(projectID, tagID string) string {
+	return projectID + ":" + tagID
+}
+
+func batchResult() map[string]any {
+	return map[string]any{"succeeded": 0, "failed": 0, "errors": []string{}}
+}
+
+func batchError(id string, data any) string {
+	if row, ok := data.(map[string]any); ok {
+		return id + ": " + shared.TextValue(row, "message")
+	}
+	return id + ": failed"
+}
+
+func firstStringSlice(payload map[string]any, keys ...string) []string {
+	for _, key := range keys {
+		if values := shared.StringSlice(payload[key]); len(values) > 0 {
+			return values
+		}
+	}
+	return nil
+}
+
+func idFrom(data map[string]any, keys ...string) string {
+	return shared.TextValue(data, keys...)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func newBody(payload map[string]any) io.ReadCloser {
+	body, _ := json.Marshal(payload)
+	return io.NopCloser(bytes.NewReader(body))
+}
+
+func sourceCoHosted(app *platform.App, sourceResource string) bool {
+	owner, _, ok := strings.Cut(sourceResource, ":")
+	return ok && app.Config.AllowsService(owner)
+}
+
+func syncImageReadModels(app *platform.App, r *http.Request) {
+	if app == nil || app.Store == nil || app.Events == nil {
+		return
+	}
+	app.RunProjection(r.Context(), imageProjectionConsumer, func(event contracts.Event) error {
+		return applyImageProjectionEvent(app, r, event)
+	})
+}
+
+func applyImageProjectionEvent(app *platform.App, r *http.Request, event contracts.Event) error {
+	resource, data, deleted, ok := imageProjection(event)
+	if !ok {
+		return nil
+	}
+	if deleted {
+		deleteImageProjection(app, r, resource, data)
+		return nil
+	}
+	return upsertImageProjection(app, r, resource, data)
+}
+
+func deleteImageProjection(app *platform.App, r *http.Request, resource string, data map[string]any) {
+	if id := imageReadModelID(resource, data); id != "" {
+		app.Store.Delete(r.Context(), resource, id)
+	}
+}
+
+func upsertImageProjection(app *platform.App, r *http.Request, resource string, data map[string]any) error {
+	id := imageReadModelID(resource, data)
+	if id == "" {
+		return nil
+	}
+	data["id"] = id
+	if _, ok := app.Store.Update(r.Context(), resource, id, data); ok {
+		return nil
+	}
+	if _, err := app.Store.Create(r.Context(), resource, data); err != nil {
+		return recoverImageProjectionCreateConflict(app, r, resource, id, data, err)
+	}
+	return nil
+}
+
+func recoverImageProjectionCreateConflict(app *platform.App, r *http.Request, resource, id string, data map[string]any, err error) error {
+	if platform.IsCreateConflict(err) {
+		if _, ok := app.Store.Update(r.Context(), resource, id, data); ok {
+			return nil
+		}
+	}
+	return fmt.Errorf("image projection upsert failed for %s/%s: %w", resource, id, err)
+}
+
+func imageProjection(event contracts.Event) (string, map[string]any, bool, bool) {
+	data := imageEventData(event)
+	switch strings.ToLower(event.Name) {
+	case "usercreated", "userupdated", "userdisabled":
+		return imageIdentityUsersResource, data, false, true
+	case "userdeleted":
+		return imageIdentityUsersResource, data, true, true
+	case "rolecreated", "roleupdated":
+		return imageIdentityRolesResource, data, false, true
+	case "roledeleted":
+		return imageIdentityRolesResource, data, true, true
+	case "projectcreated", "projectupdated":
+		return imageProjectsResource, data, false, true
+	case "projectdeleted":
+		return imageProjectsResource, data, true, true
+	case "project_membercreated", "project_memberupdated":
+		return imageProjectMembersResource, data, false, true
+	case "project_memberdeleted":
+		return imageProjectMembersResource, data, true, true
+	case "groupmembershipchanged":
+		action := strings.ToLower(idFrom(data, "action"))
+		return imageUserGroupsResource, data, action == "delete" || action == "deleted", true
+	default:
+		return "", nil, false, false
+	}
+}
+
+func imageEventData(event contracts.Event) map[string]any {
+	for _, key := range []string{"new", "record", "project", "member", "user", "role"} {
+		if data, ok := event.Data[key].(map[string]any); ok {
+			return shared.CloneMap(data)
+		}
+	}
+	return shared.CloneMap(event.Data)
+}
+
+func imageReadModelID(resource string, data map[string]any) string {
+	id := idFrom(data, "id", "ID")
+	projectID := idFrom(data, "project_id", "projectId", "p_id", "PID")
+	userID := idFrom(data, "user_id", "userId", "uid", "u_id")
+	groupID := idFrom(data, "group_id", "groupId", "gid", "g_id")
+	name := idFrom(data, "name", "Name")
+	roleID := idFrom(data, "role_id", "roleId", "RoleID")
+	switch resource {
+	case imageProjectsResource:
+		return firstNonEmpty(id, projectID)
+	case imageProjectMembersResource:
+		if projectID != "" && userID != "" {
+			return projectID + ":" + userID
+		}
+	case imageUserGroupsResource:
+		if userID != "" && groupID != "" {
+			return userID + ":" + groupID
+		}
+	case imageIdentityUsersResource:
+		return firstNonEmpty(id, userID, name)
+	case imageIdentityRolesResource:
+		return firstNonEmpty(id, roleID, name)
+	}
+	return firstNonEmpty(id, projectID, userID, groupID, roleID, name)
+}
+
+func mergeRows(resource string, source, local []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(source)+len(local))
+	seen := map[string]bool{}
+	for _, row := range local {
+		if id := imageReadModelID(resource, row); id != "" {
+			seen[id] = true
+		}
+		out = append(out, row)
+	}
+	for _, row := range source {
+		id := imageReadModelID(resource, row)
+		if id == "" || !seen[id] {
+			out = append(out, row)
+		}
+	}
+	return out
+}

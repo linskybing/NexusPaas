@@ -1,0 +1,65 @@
+# Dev MinIO backing the media-upload object store (findings 4, 7). Image blobs
+# live here instead of inline in Postgres JSONB; the platform ensures the bucket
+# exists on startup. Before applying, create the local-only credentials secret:
+#   kubectl -n nexuspaas create secret generic minio-dev-credentials \
+#     --from-literal=access-key=<dev access key> --from-literal=secret-key=<dev secret key>
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  labels: {app: minio}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: minio}}
+  template:
+    metadata:
+      labels: {app: minio}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: minio
+          image: minio/minio:RELEASE.2025-04-08T15-41-24Z
+          args: ["server", "/data", "--console-address", ":9001"]
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef: {name: minio-dev-credentials, key: access-key}
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: minio-dev-credentials, key: secret-key}
+          ports:
+            - {containerPort: 9000, name: s3}
+            - {containerPort: 9001, name: console}
+          readinessProbe:
+            httpGet: {path: /minio/health/ready, port: 9000}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 50m, memory: 128Mi, ephemeral-storage: 256Mi}
+            limits: {cpu: 500m, memory: 512Mi, ephemeral-storage: 1Gi}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: minio-data}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+spec:
+  selector: {app: minio}
+  ports:
+    - {port: 9000, targetPort: 9000, name: s3}
+    - {port: 9001, targetPort: 9001, name: console}

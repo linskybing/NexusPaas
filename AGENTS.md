@@ -1,0 +1,21 @@
+# AGENTS.md
+
+All implementation work must follow the three-agent workflow.
+
+1. **Plan Agent** writes a verifiable implementation plan under `docs/plan/`.
+2. **Reviewer Agent** reviews the plan and requests revisions until approved.
+3. **Code Agent** implements only the approved plan, then submits the result back to Reviewer Agent.
+
+No code change is complete until Reviewer Agent verifies requirement fit, approved-plan alignment, SOLID, 12-Factor App compliance, tests/build results, SonarScanner Quality Gate status, risks, and diff scope.
+
+This repository follows a **microservices-first** structure. Each service should own its code, API, data model, config, tests, and deployment files. See `docs/agents/project-structure.md`.
+
+Keep this file as the entry point only. Detailed rules live in:
+
+* `docs/agents/workflow.md`
+* `docs/agents/planning.md`
+* `docs/agents/review-checklist.md`
+* `docs/agents/coding-guidelines.md`
+* `docs/agents/project-structure.md`
+
+Default rule: keep changes simple, surgical, testable, microservice-ready, SonarScanner-clean, and aligned with the backend microservice architecture documented in `backend/docs/`.

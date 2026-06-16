@@ -1,0 +1,40 @@
+# Dex OIDC provider — local/dev configuration (findings 6, 30).
+# Issues real OIDC tokens that every service verifies via JWKS. Not for
+# production as-is (local password DB), but now uses Postgres-backed storage so
+# tokens/auth-codes/refresh/device-flow state survive restarts.
+issuer: http://localhost:5556/dex
+
+storage:
+  type: postgres
+  config:
+    host: postgres
+    port: 5432
+    database: nexuspaas
+    user: nexuspaas
+    password: $POSTGRES_PASSWORD
+    ssl:
+      mode: disable
+
+web:
+  http: 0.0.0.0:5556
+
+# Allow the resource-owner password grant so integration tests and CLI logins can
+# obtain a token without a browser redirect.
+oauth2:
+  passwordConnector: local
+  skipApprovalScreen: true
+
+enablePasswordDB: true
+
+staticClients:
+  - id: platform
+    name: NexusPaas
+    public: true
+    redirectURIs:
+      - http://localhost:8080/api/v1/oidc/callback
+
+staticPasswords:
+  - email: admin@example.com
+    hash: "$DEX_STATIC_PASSWORD_HASH"
+    username: admin
+    userID: "08a8684b-db88-4b73-90a9-3cd1661f5466"

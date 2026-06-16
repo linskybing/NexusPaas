@@ -1,0 +1,6 @@
+interface:
+  display_name: "Microservice Architecture"
+  short_description: "Microservice architecture review guide"
+  default_prompt:
+    "Use $microservice-architecture to review service boundaries, contracts, data ownership,
+    resilience, security, observability, and rollout readiness."

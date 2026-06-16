@@ -1,0 +1,348 @@
+# Cross-Service E2E Testing
+
+This runbook covers the `e2e` build-tagged tests in `internal/e2e`. The suite
+starts isolated service instances in-process, gives each instance a local HTTP
+listener, wires the full set of started peer URLs into each service's
+`SERVICE_URLS`, and verifies cross-service data movement through real HTTP,
+Postgres, Redis event streams, and MinIO.
+
+## Scope
+
+- Contract checks for service route isolation, the documented route ownership
+  matrix, and bidirectional event catalog consistency with
+  `docs/event-contracts.md`.
+- Runtime-isolation checks for service-owned maintenance tasks and custom
+  handler registration in isolated `SERVICE_NAME` instances.
+- Critical journeys for identity internal read/auth, workload to scheduler
+  admission, scheduler quota events, media upload object bytes, and
+  request-notification audit events.
+- A non-blob service isolation regression proves stale or broken
+  `OBJECT_STORE_*` values do not make isolated services depend on MinIO.
+- The workload to scheduler admission journey asserts real HTTP service-key
+  authentication, scheduler response/event payload correctness, workload job
+  persistence, and scheduler event metadata without requiring production
+  internal-client behavior changes.
+- The scheduler owner-read journey wires `scheduler-quota-service` to
+  `org-project-service` and `workload-service` through `SERVICE_URLS`, proves
+  workload usage is read over owner HTTP contracts, and proves a wrong outbound
+  service key fails closed even when the shared local database contains records.
+- The storage mount-plan journey runs a real isolated storage HTTP service and
+  an isolated workload app with a fake Kubernetes client, proves workload
+  dispatch consumes storage-owned PVC source/target data through
+  `SERVICE_URLS["storage-service"]`, and proves a wrong service key fails closed
+  without storage materialization.
+- Optional later-slice E2E tests, such as GPU telemetry and scheduler
+  preemption, live in the same package but are not part of the required
+  cross-service gate below.
+- Dex/OIDC is not required for this suite.
+
+## Local Kubernetes Context
+
+Feature acceptance runs on a Mac with Docker Desktop Kubernetes or a
+kubeadm-capable context available. The runtime-isolation E2E does not create,
+update, or delete Kubernetes objects, but keep the local cluster context healthy
+before running the gate:
+
+```sh
+kubectl config current-context
+kubectl cluster-info
+kubectl get nodes
+```
+
+## Start Local Backing Services
+
+```sh
+DEX_STATIC_PASSWORD_HASH='unused-for-e2e' \
+  docker compose -f /Users/sky/workspaces/backend/deploy/local/docker-compose.yml up -d postgres redis minio
+```
+
+Use a dedicated local Redis DB/container and the dedicated MinIO bucket below
+when possible. The harness removes only Redis keys, Redis stream entries, Redis
+inbox members, Postgres records, and MinIO objects that contain the E2E run ID;
+it does not clear shared Redis streams or reset broad Postgres service
+sequences.
+
+The dummy Dex variable is only needed because Compose interpolates every service
+definition before selecting the requested services. Dex is not started by this
+command and is not part of the E2E gate.
+
+If `localhost:9000` is already in use, start a temporary MinIO on alternate
+ports and point `TEST_OBJECT_STORE_URL` at it:
+
+```sh
+docker start nexuspaas-minio-e2e || docker run -d --name nexuspaas-minio-e2e \
+  -p 19000:9000 -p 19001:9001 \
+  -e MINIO_ROOT_USER=nexuspaas \
+  -e MINIO_ROOT_PASSWORD=nexuspaas-secret \
+  minio/minio:RELEASE.2025-04-08T15-41-24Z \
+  server /data --console-address :9001
+
+export TEST_OBJECT_STORE_URL='http://localhost:19000'
+```
+
+## Environment
+
+```sh
+export TEST_DATABASE_URL='postgres://nexuspaas:nexuspaas@localhost:5432/nexuspaas?sslmode=disable'
+export TEST_REDIS_URL='redis://localhost:6379/0'
+export TEST_EVENT_BUS_URL="$TEST_REDIS_URL"
+export TEST_OBJECT_STORE_URL='http://localhost:9000' # or http://localhost:19000 when using the fallback container
+export TEST_OBJECT_STORE_ACCESS_KEY='nexuspaas'
+export TEST_OBJECT_STORE_SECRET_KEY='nexuspaas-secret'
+export TEST_OBJECT_STORE_BUCKET='media-e2e'
+```
+
+Provision the media bucket explicitly before serving processes start. The E2E
+harness also runs this idempotent provisioning path, but this command mirrors
+the deployment admin process:
+
+```sh
+cd /Users/sky/workspaces/backend
+SERVICE_NAME=media-upload-service \
+PRODUCTION=false \
+REQUIRE_AUTH=false \
+DEV_HEADER_AUTH=true \
+OBJECT_STORE_URL="$TEST_OBJECT_STORE_URL" \
+OBJECT_STORE_ACCESS_KEY="$TEST_OBJECT_STORE_ACCESS_KEY" \
+OBJECT_STORE_SECRET_KEY="$TEST_OBJECT_STORE_SECRET_KEY" \
+OBJECT_STORE_BUCKET="$TEST_OBJECT_STORE_BUCKET" \
+ADMIN_TASK=ensure-object-store-bucket \
+go run ./cmd/microservice
+```
+
+Only `media-upload-service` and co-hosted `SERVICE_NAME=all` receive
+object-store config. Isolated non-blob services must stay ready when their real
+Postgres, Redis, and event-bus dependencies are healthy, even if stale
+`OBJECT_STORE_*` values exist in shared developer shells.
+
+Optional test-only overrides:
+
+```sh
+export E2E_API_KEY='e2e-admin-key'
+export E2E_SERVICE_API_KEY='e2e-service-key'
+export E2E_RUN_ID='e2e-local'
+```
+
+## Run
+
+The required cross-service gate is the focused command below. It must show
+explicit `PASS` lines for the required tests and must not pass by skipping due to
+missing backing-service configuration:
+
+```sh
+cd /Users/sky/workspaces/backend
+set -o pipefail
+go test -tags e2e ./internal/e2e \
+  -run 'TestServiceRouteIsolationContract|TestServiceIsolationValidationE2E|TestIsolatedRuntimeRegistrationE2E|TestProviderConsumerContractMatrix|TestCriticalCrossServiceJourneys|TestSchedulerAdmissionOwnerReadContractsE2E|TestNonBlobIsolatedServiceIgnoresObjectStoreConfigE2E|TestStorageMountPlanContractE2E' \
+  -count=1 -v | tee /tmp/cross-service-e2e.log
+rg '^--- PASS: Test(ServiceRouteIsolationContract|ServiceIsolationValidationE2E|IsolatedRuntimeRegistrationE2E|ProviderConsumerContractMatrix|CriticalCrossServiceJourneys|SchedulerAdmissionOwnerReadContractsE2E|NonBlobIsolatedServiceIgnoresObjectStoreConfigE2E|StorageMountPlanContractE2E)' /tmp/cross-service-e2e.log
+! rg 'SKIP|skipping|Skipping' /tmp/cross-service-e2e.log
+```
+
+Run the full E2E package after the focused gate when optional slice tests are
+enabled or expected to skip:
+
+```sh
+cd /Users/sky/workspaces/backend
+go test -tags e2e ./internal/e2e -count=1 -v
+```
+
+Run the focused runtime-isolation E2E while working on service ownership:
+
+```sh
+cd /Users/sky/workspaces/backend
+go test -tags e2e ./internal/e2e -run 'TestIsolatedRuntimeRegistrationE2E' -count=1 -v
+```
+
+Run the focused scheduler admission owner-read E2E while working on
+`scheduler-quota-service` admission dependencies:
+
+```sh
+cd /Users/sky/workspaces/backend
+go test -tags e2e ./internal/e2e -run '^TestSchedulerAdmissionOwnerReadContractsE2E$' -count=1 -v
+```
+
+Run the focused storage mount-plan contract E2E while working on
+workload-to-storage dispatch dependencies. This test requires local Postgres,
+Redis, and MinIO envs, uses a fake Kubernetes client, and must not skip:
+
+```sh
+cd /Users/sky/workspaces/backend
+set -o pipefail
+go test -tags e2e ./internal/e2e -run '^TestStorageMountPlanContractE2E$' -count=1 -v \
+  | tee /tmp/storage-mount-plan-e2e.log
+rg '^--- PASS: TestStorageMountPlanContractE2E' /tmp/storage-mount-plan-e2e.log
+! rg 'SKIP|skipping|Skipping' /tmp/storage-mount-plan-e2e.log
+```
+
+Run the focused GPU telemetry E2E while working on usage-observability workers:
+
+```sh
+cd /Users/sky/workspaces/backend
+go test -tags e2e ./internal/e2e -run 'TestGPUUsageTelemetryCollectorE2E' -count=1 -v
+```
+
+Run the focused Longhorn RWX health worker E2E while working on storage worker
+parity. This fake-client E2E is required and must not skip:
+
+```sh
+cd /Users/sky/workspaces/backend
+go test -tags e2e ./internal/e2e -run '^TestLonghornRWXHealthWorkerE2E$' -count=1 -v
+```
+
+Run the focused scheduler priority-class sync worker E2E while working on
+scheduler-quota worker parity. This fake-client E2E is required and must not
+skip; it proves create, managed update, managed recreate, unmanaged conflict
+reporting, summary persistence, and event publication through the maintenance
+runtime:
+
+```sh
+cd /Users/sky/workspaces/backend
+go test -tags e2e ./internal/e2e -run '^TestPriorityClassSyncWorkerE2E$' -count=1 -v
+```
+
+Run the live Kubernetes priority-class sync E2E only when the current local
+Docker Desktop/kubeadm cluster may be mutated. The test creates unique
+cluster-scoped `nexuspaas-e2e-priority-*` objects, labels them with an E2E run marker,
+deletes only those uniquely named/labeled objects, and reports leftover names if
+cleanup fails:
+
+```sh
+cd /Users/sky/workspaces/backend
+set -o pipefail
+TEST_LIVE_K8S_PRIORITY_CLASS_SYNC=1 \
+  go test -tags e2e ./internal/e2e -run '^TestPriorityClassSyncWorkerLiveK8sE2E$' -count=1 -v \
+  | tee /tmp/priority-class-sync-e2e.log
+rg '^--- PASS: TestPriorityClassSyncWorkerLiveK8sE2E' /tmp/priority-class-sync-e2e.log
+! rg 'SKIP|skipping|Skipping' /tmp/priority-class-sync-e2e.log
+```
+
+Run the focused Docker image cleanup CronJob provisioner E2E while working on
+k8s-control worker parity. This fake-client E2E is required and must not skip;
+it proves create, managed drift update, unmanaged conflict no-mutation, and
+explicit `automountServiceAccountToken=false` without mutating a live cluster or
+running Docker prune:
+
+```sh
+cd /Users/sky/workspaces/backend
+go test -tags e2e ./internal/e2e -run '^TestDockerImageCleanupCronJobProvisionerE2E$' -count=1 -v
+```
+
+Run the live Kubernetes Docker cleanup CronJob E2E only when the current local
+Docker Desktop/kubeadm cluster may be mutated. The test creates a temporary
+namespace, creates only the `docker-image-cleanup` CronJob, verifies the pod
+template, and deletes only that E2E namespace/CronJob. The CronJob is privileged
+and mounts `/var/run/docker.sock`, but this test does not manually create a Job
+or execute `docker system prune`:
+
+```sh
+cd /Users/sky/workspaces/backend
+set -o pipefail
+TEST_LIVE_K8S_DOCKER_CLEANUP=1 \
+  go test -tags e2e ./internal/e2e -run '^TestDockerImageCleanupCronJobLiveK8sE2E$' -count=1 -v \
+  | tee /tmp/docker-cleanup-e2e.log
+rg '^--- PASS: TestDockerImageCleanupCronJobLiveK8sE2E' /tmp/docker-cleanup-e2e.log
+! rg 'SKIP|skipping|Skipping' /tmp/docker-cleanup-e2e.log
+```
+
+Run the live Kubernetes Longhorn RWX smoke while working on storage worker
+readiness. This opt-in smoke performs no mutations and keeps auto repair
+disabled; if the current cluster lacks the Longhorn CRD or RBAC, the expected
+result is a persisted degraded/error summary rather than a healthy empty
+success:
+
+```sh
+cd /Users/sky/workspaces/backend
+set -o pipefail
+TEST_LIVE_K8S_LONGHORN_RWX_SMOKE=1 \
+  go test -tags e2e ./internal/e2e -run '^TestLonghornRWXHealthWorkerLiveK8sSmokeE2E$' -count=1 -v \
+  | tee /tmp/longhorn-rwx-smoke-e2e.log
+rg '^--- PASS: TestLonghornRWXHealthWorkerLiveK8sSmokeE2E' /tmp/longhorn-rwx-smoke-e2e.log
+! rg 'SKIP|skipping|Skipping' /tmp/longhorn-rwx-smoke-e2e.log
+```
+
+Run the optional real-Longhorn gate only when the current cluster is expected to
+have Longhorn installed and accessible:
+
+```sh
+cd /Users/sky/workspaces/backend
+TEST_LIVE_LONGHORN_RWX=1 \
+  go test -tags e2e ./internal/e2e -run '^TestLonghornRWXHealthWorkerLiveLonghornE2E$' -count=1 -v
+```
+
+Run the live OpenLDAP identity strategy and mirror-sync E2E while working on
+identity LDAP parity. This command is opt-in because it needs a dedicated local
+LDAP container; for acceptance, the log must show the test passed and did not
+skip:
+
+```sh
+docker rm -f nexuspaas-openldap-e2e 2>/dev/null || true
+docker run -d --name nexuspaas-openldap-e2e \
+  -p 1389:1389 -p 1636:1636 \
+  -e LDAP_ROOT=dc=example,dc=org \
+  -e LDAP_ADMIN_USERNAME=admin \
+  -e LDAP_ADMIN_PASSWORD=adminpassword \
+  -e LDAP_USERS=ldapalice \
+  -e LDAP_PASSWORDS=ldappass \
+  bitnamilegacy/openldap:2.6.10
+
+export LDAP_ENABLED='true'
+export LDAP_HOST='localhost'
+export LDAP_PORT='1389'
+export LDAP_USE_TLS='false'
+export LDAP_BIND_DN='cn=admin,dc=example,dc=org'
+export LDAP_BIND_PASSWORD='adminpassword'
+export LDAP_USER_SEARCH_BASE='ou=users,dc=example,dc=org'
+export LDAP_USER_FILTER='(uid=%s)'
+export LDAP_MIRROR_SYNC_INTERVAL='5m'
+export TEST_LDAP_USER='ldapalice'
+export TEST_LDAP_PASSWORD='ldappass'
+
+cd /Users/sky/workspaces/backend
+set -o pipefail
+TEST_LIVE_LDAP_IDENTITY=1 \
+  go test -tags e2e ./internal/e2e -run '^TestIdentityLDAPStrategyMirrorSyncE2E$' -count=1 -v \
+  | tee /tmp/identity-ldap-e2e.log
+rg '^--- PASS: TestIdentityLDAPStrategyMirrorSyncE2E' /tmp/identity-ldap-e2e.log
+! rg 'SKIP|skipping|Skipping' /tmp/identity-ldap-e2e.log
+```
+
+Run the live Kubernetes policy-data ConfigMap E2E while working on the
+authorization-policy sync worker. This command is opt-in because it creates and
+deletes a temporary namespace in the current Kubernetes context; for acceptance,
+the log must show the test passed and did not skip:
+
+```sh
+cd /Users/sky/workspaces/backend
+set -o pipefail
+TEST_LIVE_K8S_POLICY_DATA_SYNC=1 \
+  go test -tags e2e ./internal/e2e -run '^TestPolicyDataSyncConfigMapE2E$' -count=1 -v \
+  | tee /tmp/policy-data-sync-e2e.log
+rg '^--- PASS: TestPolicyDataSyncConfigMapE2E' /tmp/policy-data-sync-e2e.log
+! rg 'SKIP|skipping|Skipping' /tmp/policy-data-sync-e2e.log
+```
+
+Existing gates remain:
+
+```sh
+cd /Users/sky/workspaces/backend
+go test ./...
+go vet ./...
+go test -tags integration ./...
+go test ./... -coverprofile=coverage.out
+
+cd /Users/sky/workspaces
+sonar-scanner -Dsonar.qualitygate.wait=true
+```
+
+## Notes
+
+- `TEST_EVENT_BUS_URL` defaults to `TEST_REDIS_URL` when unset.
+- `TEST_OBJECT_STORE_BUCKET` defaults to `media-e2e` when unset.
+- The harness wires every started peer URL into each service's `SERVICE_URLS`.
+  Individual journeys assert only the owner contracts they exercise, and failure
+  paths may start extra service instances with a deliberately narrowed or bad
+  peer map.
+- Internal identity read/auth contracts require `X-Service-Key`; scheduler
+  admission uses the current route auth contract with `X-API-Key` bound to a
+  service principal.

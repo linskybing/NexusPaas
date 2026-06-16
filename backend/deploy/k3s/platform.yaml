@@ -1,0 +1,144 @@
+# Platform monolith (SERVICE_NAME=all) backed by Postgres + Redis + Dex. Keep it
+# single-replica until media and request-notification state are also external.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-config
+  labels: {app: platform}
+data:
+  SERVICE_NAME: "all"
+  HTTP_ADDR: ":8080"
+  REQUIRE_AUTH: "true"
+  # Dev cluster uses an in-cluster http Dex issuer, so PRODUCTION stays false to
+  # allow the http JWKS URL; flip to true with an https issuer for real clusters.
+  PRODUCTION: "false"
+  LOG_LEVEL: "info"
+  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  OTEL_SERVICE_NAME: "platform"
+  OTEL_RESOURCE_ATTRIBUTES: "service.namespace=nexuspaas,deployment.environment=development"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform
+  labels: {app: platform}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: platform}}
+  template:
+    metadata:
+      labels: {app: platform}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: migrate
+          image: nexuspaas-backend:v0.1.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: ADMIN_TASK, value: apply-migrations}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: postgres-dev-password, key: password}
+            - {name: DATABASE_URL, value: "postgres://nexuspaas:$(POSTGRES_PASSWORD)@postgres:5432/nexuspaas?sslmode=disable"}
+          envFrom:
+            - configMapRef: {name: platform-runtime-config}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 256Mi}
+            limits: {cpu: 500m, memory: 512Mi, ephemeral-storage: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+        - name: ensure-object-store-bucket
+          image: nexuspaas-backend:v0.1.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: ADMIN_TASK, value: ensure-object-store-bucket}
+            - {name: OBJECT_STORE_SCHEME, value: "http"}
+            - {name: OBJECT_STORE_URL, value: "$(OBJECT_STORE_SCHEME)://minio:9000"}
+            - {name: OBJECT_STORE_BUCKET, value: "media"}
+            - name: OBJECT_STORE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: {name: minio-dev-credentials, key: access-key}
+            - name: OBJECT_STORE_SECRET_KEY
+              valueFrom:
+                secretKeyRef: {name: minio-dev-credentials, key: secret-key}
+          envFrom:
+            - configMapRef: {name: platform-config}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 256Mi}
+            limits: {cpu: 500m, memory: 512Mi, ephemeral-storage: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+      containers:
+        - name: app
+          image: nexuspaas-backend:v0.1.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: postgres-dev-password, key: password}
+            - {name: DATABASE_URL, value: "postgres://nexuspaas:$(POSTGRES_PASSWORD)@postgres:5432/nexuspaas?sslmode=disable"}
+            - {name: DEX_SCHEME, value: "http"}
+            - {name: DEX_URL, value: "$(DEX_SCHEME)://dex:5556/dex"}
+            - {name: JWT_JWKS_URL, value: "$(DEX_SCHEME)://dex:5556/dex/keys"}
+            - {name: JWT_ISSUER, value: "$(DEX_SCHEME)://dex:5556/dex"}
+            - {name: OBJECT_STORE_SCHEME, value: "http"}
+            - {name: OBJECT_STORE_URL, value: "$(OBJECT_STORE_SCHEME)://minio:9000"}
+            - {name: OBJECT_STORE_BUCKET, value: "media"}
+            - name: OBJECT_STORE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: {name: minio-dev-credentials, key: access-key}
+            - name: OBJECT_STORE_SECRET_KEY
+              valueFrom:
+                secretKeyRef: {name: minio-dev-credentials, key: secret-key}
+          envFrom:
+            - configMapRef: {name: platform-config}
+            - configMapRef: {name: platform-runtime-config}
+          ports: [{containerPort: 8080}]
+          livenessProbe: {httpGet: {path: /healthz, port: 8080}}
+          readinessProbe: {httpGet: {path: /readyz, port: 8080}}
+          startupProbe: {httpGet: {path: /healthz, port: 8080}, failureThreshold: 30, periodSeconds: 2}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 256Mi}
+            limits: {cpu: "1", memory: 512Mi, ephemeral-storage: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: platform
+spec:
+  selector: {app: platform}
+  ports: [{port: 80, targetPort: 8080}]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: platform
+spec:
+  minAvailable: 1
+  selector: {matchLabels: {app: platform}}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: platform
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: platform}
+  minReplicas: 1
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource: {name: cpu, target: {type: Utilization, averageUtilization: 70}}

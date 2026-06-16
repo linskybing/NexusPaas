@@ -1,0 +1,16 @@
+# Dev k3s stack: backing services + the platform monolith on shared external
+# state. Before applying, create local-only secrets in namespace `nexuspaas`:
+#   kubectl -n nexuspaas create secret generic postgres-dev-password --from-literal=password=<dev password>
+#   kubectl -n nexuspaas create secret generic dex-dev-password --from-literal=bcrypt-hash=<bcrypt hash>
+# Build with:         kubectl kustomize backend/deploy/k3s
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: nexuspaas
+resources:
+  - namespace.yaml
+  - runtime-config.yaml
+  - postgres.yaml
+  - redis.yaml
+  - minio.yaml
+  - dex.yaml
+  - platform.yaml

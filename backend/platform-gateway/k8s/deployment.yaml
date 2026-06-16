@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-gateway-config
+  labels: {app: platform-gateway}
+data:
+  SERVICE_NAME: "platform-gateway"
+  HTTP_ADDR: ":8080"
+  REQUIRE_AUTH: "true"
+  PRODUCTION: "true"
+  LOG_LEVEL: "info"
+  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  OTEL_SERVICE_NAME: "platform-gateway"
+  OTEL_TRACES_SAMPLER: "parentbased_traceratio"
+  OTEL_TRACES_SAMPLER_ARG: "0.1"
+  OTEL_RESOURCE_ATTRIBUTES: "service.namespace=nexuspaas,deployment.environment=production"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-gateway
+  labels: {app: platform-gateway}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: platform-gateway}}
+  template:
+    metadata:
+      labels: {app: platform-gateway}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: app
+          image: nexuspaas-backend:v0.1.0
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: platform-gateway-config
+            # Required keys in platform-gateway-runtime-secret:
+            # API_KEYS + API_KEY_PRINCIPALS or JWT_JWKS_URL + JWT_ISSUER + JWT_AUDIENCE, DATABASE_URL, REDIS_URL, EVENT_BUS_URL, AUTHORIZATION_POLICY_URL + AUTHORIZATION_POLICY_API_KEY.
+            - secretRef:
+                name: platform-gateway-runtime-secret
+          ports: [{containerPort: 8080}]
+          livenessProbe: {httpGet: {path: /healthz, port: 8080}}
+          readinessProbe: {httpGet: {path: /readyz, port: 8080}}
+          startupProbe: {httpGet: {path: /healthz, port: 8080}, failureThreshold: 30, periodSeconds: 2}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 256Mi}
+            limits: {cpu: 500m, memory: 512Mi, ephemeral-storage: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: platform-gateway
+spec:
+  selector: {app: platform-gateway}
+  ports: [{port: 80, targetPort: 8080}]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: platform-gateway
+spec:
+  minAvailable: 1
+  selector: {matchLabels: {app: platform-gateway}}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: platform-gateway
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: platform-gateway}
+  minReplicas: 1
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource: {name: cpu, target: {type: Utilization, averageUtilization: 70}}

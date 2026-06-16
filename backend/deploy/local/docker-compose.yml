@@ -1,0 +1,85 @@
+# Local backing services for integration tests and `SERVICE_NAME=all` dev runs.
+#
+#   docker compose -f backend/deploy/local/docker-compose.yml up -d
+#
+# Then export the URLs the runtime / integration tests read:
+#   export TEST_DATABASE_URL=postgres://nexuspaas:nexuspaas@localhost:5432/nexuspaas?sslmode=disable
+#   export TEST_REDIS_URL=redis://localhost:6379/0
+#   export TEST_OBJECT_STORE_URL=http://localhost:9000
+#   export TEST_OBJECT_STORE_ACCESS_KEY=nexuspaas TEST_OBJECT_STORE_SECRET_KEY=nexuspaas-secret
+#   export DEX_URL=http://localhost:5556/dex
+#   export DEX_STATIC_PASSWORD_HASH=<bcrypt hash for your dev Dex password>
+#   export DEX_TEST_USERNAME=<Dex dev user email>
+#   export DEX_TEST_PASSWORD=<Dex dev password>
+#
+# Dex is added in Phase 5; Postgres + Redis cover Phases 1-4.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: nexuspaas
+      POSTGRES_PASSWORD: nexuspaas
+      POSTGRES_DB: nexuspaas
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexuspaas"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - redisdata:/data
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-08T15-41-24Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${TEST_OBJECT_STORE_ACCESS_KEY:-nexuspaas}
+      MINIO_ROOT_PASSWORD: ${TEST_OBJECT_STORE_SECRET_KEY:-nexuspaas-secret}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - miniodata:/data
+
+  dex:
+    image: ghcr.io/dexidp/dex:v2.41.1
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    environment:
+      DEX_STATIC_PASSWORD_HASH: ${DEX_STATIC_PASSWORD_HASH:?set DEX_STATIC_PASSWORD_HASH}
+      POSTGRES_PASSWORD: nexuspaas
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "5556:5556"
+    volumes:
+      - ./dex.yaml:/etc/dex/config.yaml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5556/dex/.well-known/openid-configuration"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:

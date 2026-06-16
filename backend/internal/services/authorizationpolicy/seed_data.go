@@ -1,0 +1,151 @@
+package authorizationpolicy
+
+var defaultServices = []map[string]any{
+	{
+		"id":           "SVC_MINIO",
+		"name":         "MinIO Console",
+		"description":  "Object storage management console",
+		"category":     "services",
+		"route_path":   "/admin/minio",
+		"api_patterns": []string{"/api/v1/minio-console/*"},
+		"actions":      []string{"view", "create", "update", "delete"},
+		"sort_order":   10,
+	},
+	{
+		"id":           "SVC_HARBOR",
+		"name":         "Harbor Registry",
+		"description":  "Container image registry",
+		"category":     "services",
+		"route_path":   "/admin/registry",
+		"api_patterns": []string{"/api/v1/harbor/*"},
+		"actions":      []string{"view", "create", "update", "delete"},
+		"sort_order":   20,
+	},
+	{
+		"id":           "SVC_GRAFANA",
+		"name":         "Grafana",
+		"description":  "Monitoring and observability dashboards",
+		"category":     "monitoring",
+		"route_path":   "/admin/monitoring",
+		"api_patterns": []string{"/api/v1/grafana/*"},
+		"actions":      []string{"view", "create", "update", "delete"},
+		"sort_order":   30,
+	},
+	{
+		"id":           "SVC_PGADMIN",
+		"name":         "PgAdmin",
+		"description":  "PostgreSQL database management",
+		"category":     "services",
+		"route_path":   "/admin/pgadmin",
+		"api_patterns": []string{"/api/v1/pgadmin/*"},
+		"actions":      []string{"view", "create", "update", "delete"},
+		"sort_order":   40,
+	},
+	{
+		"id":           "SVC_IDE",
+		"name":         "IDE Proxy",
+		"description":  "IDE workspace access (Jupyter, VS Code)",
+		"category":     "compute",
+		"route_path":   "/workspaces",
+		"api_patterns": []string{"/api/v1/ide/proxy/*"},
+		"actions":      []string{"view", "create", "update", "delete"},
+		"sort_order":   50,
+	},
+	{
+		"id":           "SVC_USER_STORAGE",
+		"name":         "Personal Storage",
+		"description":  "User personal file browser storage",
+		"category":     "storage",
+		"route_path":   "/storage",
+		"api_patterns": []string{"/api/v1/k8s/user-storage/proxy/*"},
+		"actions":      []string{"view", "create", "update", "delete"},
+		"sort_order":   60,
+	},
+	{
+		"id":           "SVC_GROUP_STORAGE",
+		"name":         "Group Storage",
+		"description":  "Group shared file browser storage",
+		"category":     "storage",
+		"route_path":   "/storage",
+		"api_patterns": []string{"/api/v1/storage/*/storage/*/proxy/*"},
+		"actions":      []string{"view", "create", "update", "delete"},
+		"sort_order":   70,
+	},
+	{
+		"id":           "SVC_LONGHORN",
+		"name":         "Longhorn UI",
+		"description":  "Kubernetes block storage management",
+		"category":     "infrastructure",
+		"route_path":   "/admin/infrastructure/storage",
+		"api_patterns": []string{"/api/v1/longhorn/*"},
+		"actions":      []string{"view", "create", "update", "delete"},
+		"sort_order":   80,
+	},
+}
+
+var defaultPolicies = []map[string]any{
+	{
+		"id":          "PO2600001",
+		"name":        "full-proxy-access",
+		"description": "Full access to all proxy services (MinIO, Harbor, Grafana, PgAdmin, IDE, Storage, Longhorn)",
+		"is_system":   true,
+		"rules": []map[string]any{
+			{"id": "PR2600001", "service_id": "SVC_MINIO", "actions": []string{"view", "create", "update", "delete"}},
+			{"id": "PR2600002", "service_id": "SVC_HARBOR", "actions": []string{"view", "create", "update", "delete"}},
+			{"id": "PR2600003", "service_id": "SVC_GRAFANA", "actions": []string{"view", "create", "update", "delete"}},
+			{"id": "PR2600004", "service_id": "SVC_PGADMIN", "actions": []string{"view", "create", "update", "delete"}},
+			{"id": "PR2600009", "service_id": "SVC_IDE", "actions": []string{"view", "create", "update", "delete"}},
+			{"id": "PR2600010", "service_id": "SVC_USER_STORAGE", "actions": []string{"view", "create", "update", "delete"}},
+			{"id": "PR2600011", "service_id": "SVC_GROUP_STORAGE", "actions": []string{"view", "create", "update", "delete"}},
+			{"id": "PR2600015", "service_id": "SVC_LONGHORN", "actions": []string{"view", "create", "update", "delete"}},
+		},
+	},
+	{
+		"id":          "PO2600002",
+		"name":        "read-only-proxy-access",
+		"description": "View-only access to all proxy services",
+		"is_system":   true,
+		"rules": []map[string]any{
+			{"id": "PR2600005", "service_id": "SVC_MINIO", "actions": []string{"view"}},
+			{"id": "PR2600006", "service_id": "SVC_HARBOR", "actions": []string{"view"}},
+			{"id": "PR2600007", "service_id": "SVC_GRAFANA", "actions": []string{"view"}},
+			{"id": "PR2600008", "service_id": "SVC_PGADMIN", "actions": []string{"view"}},
+			{"id": "PR2600012", "service_id": "SVC_IDE", "actions": []string{"view", "create", "update", "delete"}},
+			{"id": "PR2600013", "service_id": "SVC_USER_STORAGE", "actions": []string{"view", "create", "update", "delete"}},
+			{"id": "PR2600014", "service_id": "SVC_GROUP_STORAGE", "actions": []string{"view", "create", "update", "delete"}},
+			{"id": "PR2600016", "service_id": "SVC_LONGHORN", "actions": []string{"view"}},
+		},
+	},
+}
+
+var defaultPlatformRoles = []map[string]any{
+	{
+		"id":           "RL2600001",
+		"name":         "proxy-operator",
+		"display_name": "Proxy Operator",
+		"description":  "Full access to all proxy services",
+		"is_system":    true,
+	},
+	{
+		"id":           "RL2600002",
+		"name":         "proxy-viewer",
+		"display_name": "Proxy Viewer",
+		"description":  "Read-only access to all proxy services",
+		"is_system":    true,
+	},
+}
+
+var defaultAssignments = []map[string]any{
+	{
+		"id":          "PA2600001",
+		"policy_id":   "PO2600001",
+		"target_type": "role",
+		"target_id":   "RL2600001",
+	},
+	{
+		"id":          "PA2600002",
+		"policy_id":   "PO2600002",
+		"target_type": "role",
+		"target_id":   "RL2600002",
+	},
+}
