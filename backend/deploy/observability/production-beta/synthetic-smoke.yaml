@@ -1,0 +1,175 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nexuspaas-synthetic-smoke
+  labels:
+    app.kubernetes.io/name: nexuspaas
+    app.kubernetes.io/component: synthetic-smoke
+data:
+  smoke.sh: |
+    #!/bin/sh
+    set -eu
+
+    : "${SMOKE_API_KEY:?SMOKE_API_KEY is required}"
+    : "${SMOKE_SERVICE_KEY:?SMOKE_SERVICE_KEY is required}"
+
+    TIMEOUT_SECONDS="${SMOKE_TIMEOUT_SECONDS:-10}"
+    failures=0
+
+    request() {
+      url="$1"
+      curl -sS -o /dev/null -w '%{http_code} %{time_total}' \
+        --max-time "${TIMEOUT_SECONDS}" \
+        -H "X-Request-ID: synthetic-smoke-$(date +%s)" \
+        -H "X-API-Key: ${SMOKE_API_KEY}" \
+        -H "X-Service-Key: ${SMOKE_SERVICE_KEY}" \
+        -H "X-User-ID: synthetic-smoke" \
+        -H "X-Username: synthetic-smoke" \
+        -H "X-User-Role: admin" \
+        "${url}" || printf '000 0'
+    }
+
+    require_200() {
+      service="$1"
+      path="$2"
+      result="$(request "http://${service}${path}")"
+      code="${result%% *}"
+      latency="${result#* }"
+      printf 'synthetic service=%s path=%s status=%s latency_seconds=%s\n' "${service}" "${path}" "${code}" "${latency}"
+      if [ "${code}" != "200" ]; then
+        failures=$((failures + 1))
+      fi
+    }
+
+    require_no_5xx() {
+      service="$1"
+      path="$2"
+      result="$(request "http://${service}${path}")"
+      code="${result%% *}"
+      latency="${result#* }"
+      printf 'synthetic service=%s path=%s status=%s latency_seconds=%s\n' "${service}" "${path}" "${code}" "${latency}"
+      case "${code}" in
+        000|5*) failures=$((failures + 1)) ;;
+      esac
+    }
+
+    for service in \
+      audit-compliance-service \
+      authorization-policy-service \
+      ide-service \
+      identity-service \
+      image-registry-service \
+      integration-proxy-service \
+      k8s-control-service \
+      media-upload-service \
+      org-project-service \
+      platform-gateway \
+      request-notification-service \
+      scheduler-quota-service \
+      storage-service \
+      usage-observability-service \
+      workload-service
+    do
+      require_200 "${service}" /healthz
+      require_200 "${service}" /readyz
+      require_200 "${service}" /metrics
+    done
+
+    require_200 platform-gateway /openapi.json
+    require_200 platform-gateway /service-registry
+
+    require_no_5xx audit-compliance-service /api/v1/audit/logs
+    require_no_5xx authorization-policy-service /api/v1/permissions/policies
+    require_no_5xx ide-service /api/v1/ide
+    require_no_5xx identity-service /api/v1/users
+    require_no_5xx image-registry-service /api/v1/image-catalog
+    require_no_5xx integration-proxy-service /api/v1/admin/vpn
+    require_no_5xx k8s-control-service /api/v1/resources
+    require_no_5xx media-upload-service /api/v1/uploads/images/nonexistent-smoke.png
+    require_no_5xx org-project-service /api/v1/projects
+    require_no_5xx platform-gateway /api/v1/gateway/health
+    require_no_5xx request-notification-service /api/v1/forms
+    require_no_5xx scheduler-quota-service /api/v1/plans
+    require_no_5xx storage-service /api/v1/storage/options
+    require_no_5xx usage-observability-service /api/v1/admin/usage
+    require_no_5xx workload-service /api/v1/jobs
+
+    if [ "${failures}" -ne 0 ]; then
+      printf 'synthetic smoke failed checks=%s\n' "${failures}" >&2
+      exit 1
+    fi
+    printf 'synthetic smoke passed\n'
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nexuspaas-synthetic-smoke
+  labels:
+    app.kubernetes.io/name: nexuspaas
+    app.kubernetes.io/component: synthetic-smoke
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 180
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: nexuspaas
+            app.kubernetes.io/component: synthetic-smoke
+        spec:
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: smoke
+              image: curlimages/curl:8.11.1
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/sh", "/etc/nexuspaas-smoke/smoke.sh"]
+              env:
+                - name: SMOKE_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: nexuspaas-synthetic-smoke-secret
+                      key: api-key
+                - name: SMOKE_SERVICE_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: nexuspaas-synthetic-smoke-secret
+                      key: service-key
+                - name: SMOKE_TIMEOUT_SECONDS
+                  value: "10"
+              volumeMounts:
+                - name: smoke-script
+                  mountPath: /etc/nexuspaas-smoke
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 32Mi
+                  ephemeral-storage: 64Mi
+                limits:
+                  cpu: 100m
+                  memory: 128Mi
+                  ephemeral-storage: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+          volumes:
+            - name: smoke-script
+              configMap:
+                name: nexuspaas-synthetic-smoke
+                defaultMode: 0555

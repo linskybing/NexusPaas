@@ -176,6 +176,91 @@ func TestProductionOperationalReadinessDocsCoverAllServices(t *testing.T) {
 	}
 }
 
+func TestProductionBetaObservabilityManifestsAreProvisioned(t *testing.T) {
+	base := "../../deploy/observability/production-beta"
+	kustomizationPath := base + "/kustomization.yaml"
+	kustomization := readTextFile(t, kustomizationPath)
+	requireContains(t, kustomizationPath, kustomization, "grafana-dashboard.yaml")
+	requireContains(t, kustomizationPath, kustomization, "prometheus-rules.yaml")
+	requireContains(t, kustomizationPath, kustomization, "synthetic-smoke.yaml")
+	requireNotContains(t, kustomizationPath, kustomization, "../../kustomization.yaml")
+
+	dashboardPath := base + "/grafana-dashboard.yaml"
+	dashboard := readTextFile(t, dashboardPath)
+	requireContains(t, dashboardPath, dashboard, "kind: ConfigMap")
+	requireContains(t, dashboardPath, dashboard, `grafana_dashboard: "1"`)
+	requireContains(t, dashboardPath, dashboard, "Core API availability")
+	requireContains(t, dashboardPath, dashboard, "Deployment availability")
+	requireContains(t, dashboardPath, dashboard, "Synthetic smoke failures")
+	requireContains(t, dashboardPath, dashboard, "nexuspaas_http_requests_total")
+	requireContains(t, dashboardPath, dashboard, "nexuspaas_http_request_duration_seconds_sum")
+	requireContains(t, dashboardPath, dashboard, "kube_deployment_status_replicas_available")
+
+	rulesPath := base + "/prometheus-rules.yaml"
+	rules := readTextFile(t, rulesPath)
+	requireContains(t, rulesPath, rules, "kind: PodMonitor")
+	requireContains(t, rulesPath, rules, "kind: PrometheusRule")
+	requireContains(t, rulesPath, rules, "path: /metrics")
+	requireContains(t, rulesPath, rules, "portNumber: 8080")
+	requireContains(t, rulesPath, rules, "authorization:")
+	requireContains(t, rulesPath, rules, "type: Bearer")
+	requireContains(t, rulesPath, rules, "credentials:")
+	requireContains(t, rulesPath, rules, "name: nexuspaas-prometheus-scrape-secret")
+	requireContains(t, rulesPath, rules, "key: bearer-token")
+	requireNotContains(t, rulesPath, rules, "bearerTokenSecret")
+	requireContains(t, rulesPath, rules, "NexusPaasCoreAvailabilityBurn")
+	requireContains(t, rulesPath, rules, "NexusPaasSyntheticSmokeFailed")
+
+	syntheticPath := base + "/synthetic-smoke.yaml"
+	synthetic := readTextFile(t, syntheticPath)
+	requireContains(t, syntheticPath, synthetic, "kind: CronJob")
+	requireContains(t, syntheticPath, synthetic, "schedule: \"*/5 * * * *\"")
+	requireContains(t, syntheticPath, synthetic, "automountServiceAccountToken: false")
+	requireContains(t, syntheticPath, synthetic, "runAsNonRoot: true")
+	requireContains(t, syntheticPath, synthetic, "runAsUser: 10001")
+	requireContains(t, syntheticPath, synthetic, "allowPrivilegeEscalation: false")
+	requireContains(t, syntheticPath, synthetic, "readOnlyRootFilesystem: true")
+	requireContains(t, syntheticPath, synthetic, `drop: ["ALL"]`)
+	requireContains(t, syntheticPath, synthetic, "name: nexuspaas-synthetic-smoke-secret")
+	requireContains(t, syntheticPath, synthetic, "key: api-key")
+	requireContains(t, syntheticPath, synthetic, "key: service-key")
+	requireContains(t, syntheticPath, synthetic, "require_200 \"${service}\" /healthz")
+	requireContains(t, syntheticPath, synthetic, "require_200 \"${service}\" /readyz")
+	requireContains(t, syntheticPath, synthetic, "require_200 \"${service}\" /metrics")
+	requireContains(t, syntheticPath, synthetic, "require_200 platform-gateway /openapi.json")
+	requireContains(t, syntheticPath, synthetic, "require_200 platform-gateway /service-registry")
+
+	readmePath := base + "/README.md"
+	readme := readTextFile(t, readmePath)
+	requireContains(t, readmePath, readme, "nexuspaas-prometheus-scrape-secret")
+	requireContains(t, readmePath, readme, "nexuspaas-synthetic-smoke-secret")
+	requireContains(t, readmePath, readme, "bearer-token")
+	requireContains(t, readmePath, readme, "api-key")
+	requireContains(t, readmePath, readme, "service-key")
+	requireContains(t, readmePath, readme, "kubectl apply -k backend/deploy/observability/production-beta")
+	requireContains(t, readmePath, readme, "expected 4xx")
+
+	for _, deployment := range serviceDeploymentManifests(t) {
+		service := filepath.Base(filepath.Dir(filepath.Dir(deployment)))
+		requireContains(t, dashboardPath, dashboard, service)
+		requireContains(t, rulesPath, rules, service)
+		requireContains(t, syntheticPath, synthetic, service)
+	}
+
+	readinessPath := "../../docs/operational-readiness.md"
+	readiness := readTextFile(t, readinessPath)
+	requireContains(t, readinessPath, readiness, "backend/deploy/observability/production-beta")
+	requireContains(t, readinessPath, readiness, "nexuspaas-prometheus-scrape-secret")
+	requireContains(t, readinessPath, readiness, "nexuspaas-synthetic-smoke-secret")
+
+	strategyPath := "../../../docs/architecture/observability-strategy.md"
+	strategy := readTextFile(t, strategyPath)
+	requireContains(t, strategyPath, strategy, "backend/deploy/observability/production-beta")
+	requireContains(t, strategyPath, strategy, "PodMonitor")
+	requireContains(t, strategyPath, strategy, "PrometheusRule")
+	requireContains(t, strategyPath, strategy, "CronJob")
+}
+
 func TestProductionBetaReleaseCandidateGateIsDocumented(t *testing.T) {
 	scriptPath := "../../scripts/ci-security-gate.sh"
 	script := readTextFile(t, scriptPath)

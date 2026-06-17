@@ -1,0 +1,119 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: nexuspaas-backend-services
+  labels:
+    app.kubernetes.io/name: nexuspaas
+    app.kubernetes.io/component: observability
+    release: prometheus
+spec:
+  namespaceSelector:
+    matchNames:
+      - nexuspaas
+  selector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values:
+          - audit-compliance-service
+          - authorization-policy-service
+          - ide-service
+          - identity-service
+          - image-registry-service
+          - integration-proxy-service
+          - k8s-control-service
+          - media-upload-service
+          - org-project-service
+          - platform-gateway
+          - request-notification-service
+          - scheduler-quota-service
+          - storage-service
+          - usage-observability-service
+          - workload-service
+  podMetricsEndpoints:
+    - path: /metrics
+      portNumber: 8080
+      interval: 30s
+      scrapeTimeout: 10s
+      scheme: http
+      authorization:
+        type: Bearer
+        credentials:
+          name: nexuspaas-prometheus-scrape-secret
+          key: bearer-token
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_label_app]
+          targetLabel: service
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: nexuspaas-production-beta-alerts
+  labels:
+    app.kubernetes.io/name: nexuspaas
+    app.kubernetes.io/component: observability
+    release: prometheus
+spec:
+  groups:
+    - name: nexuspaas.production-beta.availability
+      rules:
+        - alert: NexusPaasServiceUnscraped
+          expr: max by (service) (up{namespace="nexuspaas",service=~"audit-compliance-service|authorization-policy-service|ide-service|identity-service|image-registry-service|integration-proxy-service|k8s-control-service|media-upload-service|org-project-service|platform-gateway|request-notification-service|scheduler-quota-service|storage-service|usage-observability-service|workload-service"}) < 1
+          for: 5m
+          labels:
+            severity: page
+          annotations:
+            summary: NexusPaas service metrics are not being scraped
+            runbook_url: backend/docs/operational-readiness.md
+        - alert: NexusPaasDeploymentUnavailable
+          expr: kube_deployment_status_replicas_available{namespace="nexuspaas",deployment=~"audit-compliance-service|authorization-policy-service|ide-service|identity-service|image-registry-service|integration-proxy-service|k8s-control-service|media-upload-service|org-project-service|platform-gateway|request-notification-service|scheduler-quota-service|storage-service|usage-observability-service|workload-service"} < 1
+          for: 5m
+          labels:
+            severity: page
+          annotations:
+            summary: NexusPaas deployment has no available replicas
+            runbook_url: backend/docs/operational-readiness.md
+        - alert: NexusPaasCoreAvailabilityBurn
+          expr: (100 * sum(rate(nexuspaas_http_requests_total{service=~"platform-gateway|identity-service|authorization-policy-service|org-project-service|workload-service|scheduler-quota-service|k8s-control-service",status!~"5.."}[5m])) / clamp_min(sum(rate(nexuspaas_http_requests_total{service=~"platform-gateway|identity-service|authorization-policy-service|org-project-service|workload-service|scheduler-quota-service|k8s-control-service"}[5m])), 1) < 99.5) and sum(rate(nexuspaas_http_requests_total{service=~"platform-gateway|identity-service|authorization-policy-service|org-project-service|workload-service|scheduler-quota-service|k8s-control-service"}[5m])) > 0
+          for: 10m
+          labels:
+            severity: page
+          annotations:
+            summary: NexusPaas core API availability is below the Beta target
+            runbook_url: backend/docs/operational-readiness.md
+    - name: nexuspaas.production-beta.latency
+      rules:
+        - alert: NexusPaasHighMeanReadLatency
+          expr: sum by (service) (rate(nexuspaas_http_request_duration_seconds_sum{service=~"audit-compliance-service|authorization-policy-service|ide-service|identity-service|image-registry-service|integration-proxy-service|k8s-control-service|media-upload-service|org-project-service|platform-gateway|request-notification-service|scheduler-quota-service|storage-service|usage-observability-service|workload-service",method="GET"}[5m])) / clamp_min(sum by (service) (rate(nexuspaas_http_requests_total{service=~"audit-compliance-service|authorization-policy-service|ide-service|identity-service|image-registry-service|integration-proxy-service|k8s-control-service|media-upload-service|org-project-service|platform-gateway|request-notification-service|scheduler-quota-service|storage-service|usage-observability-service|workload-service",method="GET"}[5m])), 1) > 0.5
+          for: 10m
+          labels:
+            severity: ticket
+          annotations:
+            summary: NexusPaas mean read latency is above the Beta read target
+            runbook_url: backend/docs/operational-readiness.md
+        - alert: NexusPaasHighMeanWriteLatency
+          expr: sum by (service) (rate(nexuspaas_http_request_duration_seconds_sum{service=~"audit-compliance-service|authorization-policy-service|ide-service|identity-service|image-registry-service|integration-proxy-service|k8s-control-service|media-upload-service|org-project-service|platform-gateway|request-notification-service|scheduler-quota-service|storage-service|usage-observability-service|workload-service",method=~"POST|PUT|PATCH|DELETE"}[5m])) / clamp_min(sum by (service) (rate(nexuspaas_http_requests_total{service=~"audit-compliance-service|authorization-policy-service|ide-service|identity-service|image-registry-service|integration-proxy-service|k8s-control-service|media-upload-service|org-project-service|platform-gateway|request-notification-service|scheduler-quota-service|storage-service|usage-observability-service|workload-service",method=~"POST|PUT|PATCH|DELETE"}[5m])), 1) > 1
+          for: 10m
+          labels:
+            severity: ticket
+          annotations:
+            summary: NexusPaas mean write latency is above the Beta write target
+            runbook_url: backend/docs/operational-readiness.md
+    - name: nexuspaas.production-beta.errors
+      rules:
+        - alert: NexusPaasService5xx
+          expr: sum by (service) (rate(nexuspaas_http_requests_total{service=~"audit-compliance-service|authorization-policy-service|ide-service|identity-service|image-registry-service|integration-proxy-service|k8s-control-service|media-upload-service|org-project-service|platform-gateway|request-notification-service|scheduler-quota-service|storage-service|usage-observability-service|workload-service",status=~"5.."}[5m])) > 0
+          for: 5m
+          labels:
+            severity: page
+          annotations:
+            summary: NexusPaas service is returning 5xx responses
+            runbook_url: backend/docs/operational-readiness.md
+        - alert: NexusPaasSyntheticSmokeFailed
+          expr: sum(kube_job_status_failed{namespace="nexuspaas",job_name=~"nexuspaas-synthetic-smoke-.*"}) > 0
+          for: 5m
+          labels:
+            severity: page
+          annotations:
+            summary: NexusPaas scheduled synthetic smoke failed
+            runbook_url: backend/docs/operational-readiness.md

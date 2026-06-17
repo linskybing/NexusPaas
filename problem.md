@@ -58,6 +58,9 @@ What changed in the current stacked work:
 - Adjusted the GitHub-hosted Sonar policy so repositories with no configured
   Sonar secrets skip Sonar explicitly instead of failing every workflow before
   a reachable Sonar endpoint/token exists.
+- Added `backend/deploy/observability/production-beta` with baseline Grafana
+  dashboard, authenticated Prometheus PodMonitor/PrometheusRule alerts, and a
+  scheduled synthetic smoke CronJob for the 15-service topology.
 
 ## 2. Current Verification
 
@@ -79,6 +82,14 @@ What changed in the current stacked work:
 | `! rg -n 'runner\\.temp' .github/workflows/backend-quality-gate.yml` | Pass | Workflow-level env no longer references the unavailable `runner` context |
 | `CI_GATE_SONAR_REQUIRED=false SONAR_TOKEN= SONAR_HOST_URL= bash backend/scripts/ci-security-gate.sh sonar` | Pass | GitHub no-secrets policy skips Sonar explicitly |
 | `CI_GATE_SONAR_REQUIRED=true SONAR_TOKEN= SONAR_HOST_URL= bash backend/scripts/ci-security-gate.sh sonar` | Expected fail | Explicitly required or partially configured Sonar still fails closed when credentials are missing |
+| `kubectl kustomize backend` | Pass | Root Production Beta topology still renders without optional observability CRDs |
+| `kubectl apply --dry-run=client --validate=false -f <rendered backend>` | Pass | Root Production Beta dry-run remains valid without Prometheus Operator CRDs |
+| `kubectl kustomize backend/deploy/observability/production-beta` | Pass | Optional Grafana/Prometheus Operator/CronJob observability overlay renders |
+| `ruby -e 'require "yaml"; require "json"; ...'` | Pass | Observability YAML parses and embedded Grafana dashboard JSON parses |
+| `go test ./internal/platform -run 'Deployment\|Operational\|Observability\|Release\|Beta' -count=1` | Pass | Deployment policy tests verify observability overlay coverage and secret contracts |
+| `go test ./... -count=1` | Pass | Full backend unit package suite passes after manifest/docs/test changes |
+| `bash backend/scripts/ci-security-gate.sh security` | Pass | govulncheck no vulnerabilities; OSV no issues; backend image build passes; Trivy reports 0 vulnerabilities |
+| `bash backend/scripts/ci-security-gate.sh sonar` | Pass | Local SonarScanner Quality Gate passed against `http://localhost:9000/dashboard?id=nexuspaas-backend` |
 
 ## 3. Resolved In This Branch
 
@@ -94,6 +105,7 @@ What changed in the current stacked work:
 | capability inventory | `function.md` was missing, leaving launch reviewers without a single current-backend capability inventory | `function.md` now maps current capabilities to the 15-service catalog, route/job/event evidence, owned data, dependencies, background workers, and explicit reference-parity limits |
 | GitHub workflow scheduling | `.github/workflows/backend-quality-gate.yml` used `${{ runner.temp }}` in workflow-level `env`, so GitHub failed the run before creating jobs or logs | CI temp paths now use literal `/tmp/...` values that are valid at workflow scope for the existing `ubuntu-latest` job |
 | GitHub Sonar no-secrets handling | GitHub-hosted runs failed at Sonar because the repository has no `SONAR_TOKEN` or `SONAR_HOST_URL` secrets | The workflow now skips Sonar only when no Sonar secrets are configured; any partial or configured Sonar setup remains fail-closed |
+| observability baseline provisioning | Dashboard, alert, authenticated scrape, and scheduled synthetic monitor resources were documented but not provisioned | `backend/deploy/observability/production-beta` now renders an optional Grafana/Prometheus Operator/CronJob overlay covering all 15 services without committing secrets |
 
 ## 4. Remaining Issues
 
@@ -101,7 +113,8 @@ What changed in the current stacked work:
 | --- | --- | --- | --- | --- |
 | High | reference parity | `references/CSCC_AI_Platform_Backend` is absent, so live reference diff cannot be performed | Reference-only behavior gaps remain unknown | Restore/provision the reference snapshot before parity-sensitive launch review |
 | Medium | coverage | Several packages remain below the per-package 80% target, although integration total meets the CI gate | Per-component risk remains masked by aggregate coverage | Raise low packages, especially `cmd/microservice`, `identity`, and schedulerquota follow-up paths |
-| Medium | live observability provisioning | Operational readiness docs exist, but Grafana dashboards, PrometheusRule alerts, and scheduled synthetic monitors are not yet provisioned | Operators have a tested contract but not the final live monitoring resources | Implement dashboard/alert/synthetic monitor manifests or GitOps resources in the next observability hardening slice |
+| Medium | live observability activation | Baseline Grafana, PodMonitor, PrometheusRule, and synthetic CronJob manifests exist, but live cluster activation evidence has not been captured | Operators have provisionable resources but not proof that dashboards, alerts, scrape auth, and scheduled smoke are working in staging | Apply `backend/deploy/observability/production-beta` in staging with real secrets and capture dashboard/alert/CronJob evidence |
+| Medium | metrics granularity | Current runtime metrics expose request counts and duration sums, not histogram buckets | p95 SLOs remain documented targets but alert rules can only use mean latency sentinels until runtime metrics improve | Add Prometheus histogram buckets for HTTP latency before final p95 SLO enforcement |
 | Medium | live staging rehearsal | The non-live Beta RC gate exists, but a real staging deploy/readiness/smoke/rollback/re-deploy rehearsal has not been captured | External Beta traffic remains blocked until real cluster evidence exists or the risk is explicitly accepted | Run the live staging checklist in `backend/docs/beta-launch-readiness.md` with real staging secrets |
 | Medium | GitHub Sonar provisioning | GitHub repository has no `SONAR_TOKEN` or `SONAR_HOST_URL` secrets, so hosted CI skips Sonar even though local Sonar evidence exists | Remote PR checks do not enforce Sonar Quality Gate until a GitHub-reachable Sonar endpoint/token is configured | Add SonarCloud or reachable SonarQube secrets and rerun the workflow with Sonar required |
 | Medium | data ownership | Scheduler-quota now uses owner-read contracts, but co-hosted mode can still read map-shaped records from the shared physical Postgres | Production Beta boundary is improved, not GA-complete | Continue toward typed DTO contracts or event-fed read models |
