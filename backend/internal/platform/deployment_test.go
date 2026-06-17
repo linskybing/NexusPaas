@@ -176,6 +176,48 @@ func TestProductionOperationalReadinessDocsCoverAllServices(t *testing.T) {
 	}
 }
 
+func TestProductionBetaReleaseCandidateGateIsDocumented(t *testing.T) {
+	scriptPath := "../../scripts/ci-security-gate.sh"
+	script := readTextFile(t, scriptPath)
+	requireContains(t, scriptPath, script, "beta-rc   quick, production-beta render/dry-run/rollback rehearsal, docker/runtime smoke, security, sonar, RC report")
+	requireContains(t, scriptPath, script, "beta-rc) run_beta_rc_gate")
+	requireContains(t, scriptPath, script, "run_production_beta_manifest_rehearsal")
+	requireContains(t, scriptPath, script, "run_runtime_smoke")
+	requireContains(t, scriptPath, script, "kubectl kustomize backend")
+	requireContains(t, scriptPath, script, "kubectl apply --dry-run=client --validate=false")
+	requireContains(t, scriptPath, script, "production-beta-rollback-plan.sh")
+	requireContains(t, scriptPath, script, "production-beta-redeploy-dry-run.txt")
+	requireContains(t, scriptPath, script, "runtime-smoke.log")
+	requireContains(t, scriptPath, script, "audit-compliance-service|/api/v1/audit/logs")
+	requireContains(t, scriptPath, script, "platform-gateway|/api/v1/gateway/health")
+	requireContains(t, scriptPath, script, "workload-service|/api/v1/jobs")
+	requireContains(t, scriptPath, script, "run_quick")
+	requireContains(t, scriptPath, script, "run_docker_gate")
+	requireContains(t, scriptPath, script, "run_security_gate")
+	requireContains(t, scriptPath, script, "run_sonar_gate")
+	requireContains(t, scriptPath, script, "External Production Beta traffic still requires a live staging rehearsal")
+
+	readinessPath := "../../docs/beta-launch-readiness.md"
+	readiness := readTextFile(t, readinessPath)
+	requireContains(t, readinessPath, readiness, "bash backend/scripts/ci-security-gate.sh beta-rc")
+	requireContains(t, readinessPath, readiness, "production-beta manifest rehearsal")
+	requireContains(t, readinessPath, readiness, "non-live runtime smoke")
+	requireContains(t, readinessPath, readiness, "one read-only endpoint per service")
+	requireContains(t, readinessPath, readiness, "rollback command plan for every service deployment")
+	requireContains(t, readinessPath, readiness, "re-deploy client dry-run")
+	requireContains(t, readinessPath, readiness, "Live Staging Rehearsal")
+	requireContains(t, readinessPath, readiness, "All 15 services become ready.")
+	requireContains(t, readinessPath, readiness, "no unaccepted launch blockers")
+
+	e2eDocsPath := "../../docs/e2e-testing.md"
+	e2eDocs := readTextFile(t, e2eDocsPath)
+	requireContains(t, e2eDocsPath, e2eDocs, "bash backend/scripts/ci-security-gate.sh beta-rc")
+	requireContains(t, e2eDocsPath, e2eDocs, "renders `kubectl kustomize backend`")
+	requireContains(t, e2eDocsPath, e2eDocs, "writes rollback commands for every service")
+	requireContains(t, e2eDocsPath, e2eDocs, "runtime smoke")
+	requireContains(t, e2eDocsPath, e2eDocs, "re-deploy evidence")
+}
+
 func requireProductionDeploymentManifest(t *testing.T, path string) {
 	t.Helper()
 	service := filepath.Base(filepath.Dir(filepath.Dir(path)))
