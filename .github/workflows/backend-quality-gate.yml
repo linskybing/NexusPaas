@@ -1,0 +1,78 @@
+name: Backend Quality Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+      - "feature/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-quality-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.25.11"
+  GOVULNCHECK_VERSION: "v1.3.0"
+  OSV_SCANNER_VERSION: "v2.0.2"
+  TRIVY_VERSION: "0.71.1"
+  SONAR_SCANNER_VERSION: "7.2.0.5079"
+  CI_GATE_ARTIFACT_DIR: ${{ runner.temp }}/nexuspaas-quality-gate
+  CI_GATE_TOOLS_DIR: ${{ runner.temp }}/nexuspaas-ci-tools
+  CI_GATE_DOCKER_CONFIG: ${{ runner.temp }}/nexuspaas-docker-config
+  CI_GATE_TRIVY_CACHE_DIR: ${{ runner.temp }}/nexuspaas-trivy-cache
+  CI_GATE_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+  CI_GATE_COVERAGE_THRESHOLD: "80.0"
+  TRIVY_TIMEOUT: "10m"
+  CI_GATE_SONAR_REQUIRED: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+  SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+  SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+jobs:
+  backend-quality-gate:
+    name: Backend Quality Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: backend/go.sum
+
+      - name: Validate workflow and gate script syntax
+        run: |
+          bash -n backend/scripts/ci-security-gate.sh
+          ruby -e 'require "yaml"; YAML.load_file(".github/workflows/backend-quality-gate.yml")'
+
+      - name: Quick backend gate
+        run: bash backend/scripts/ci-security-gate.sh quick
+
+      - name: Docker-backed E2E and coverage gate
+        run: bash backend/scripts/ci-security-gate.sh docker
+
+      - name: Security and image scan gate
+        run: bash backend/scripts/ci-security-gate.sh security
+
+      - name: SonarScanner Quality Gate
+        run: bash backend/scripts/ci-security-gate.sh sonar
+
+      - name: Upload quality gate artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-quality-gate
+          path: |
+            backend/coverage.out
+            ${{ env.CI_GATE_ARTIFACT_DIR }}/
+          if-no-files-found: ignore

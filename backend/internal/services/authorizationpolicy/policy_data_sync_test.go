@@ -2,6 +2,7 @@ package authorizationpolicy
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"testing"
 	"time"
@@ -187,6 +188,123 @@ func TestPolicyPlanWindowsCanDenyRuntime(t *testing.T) {
 		now:     now,
 	})
 	assertPolicyDataValue(t, data, "timeAllowed", "false")
+}
+
+func TestPolicyDataProjectionLookupHelpers(t *testing.T) {
+	ctx := context.Background()
+	app := platform.NewApp(platform.Config{ServiceName: serviceName})
+	createPolicyRecords(t, app, policyDataPlansResource, []map[string]any{{
+		"id":        "PL1",
+		"gpu_limit": 2,
+	}})
+	createPolicyRecords(t, app, policyDataImageAllowListsResource, []map[string]any{
+		{"id": "P1:T1", "project_id": "P1", "tag_id": "T1", "image_reference": "repo/app:v1", "enabled": true},
+		{"id": "GLOBAL:T2", "project_id": "*", "tag_id": "T2", "image_reference": "repo/base:v2", "enabled": true},
+		{"id": "P2:T3", "project_id": "P2", "tag_id": "T3", "image_reference": "repo/other:v3", "enabled": true},
+	})
+
+	if plan := policyPlanForProject(ctx, app, map[string]any{"id": "P1", "plan_id": "PL1"}); policyPlanID(plan) != "PL1" {
+		t.Fatalf("policyPlanForProject = %#v, want PL1", plan)
+	}
+	if plan := policyPlanForProject(ctx, app, map[string]any{"id": "P1"}); plan != nil {
+		t.Fatalf("policyPlanForProject without plan = %#v, want nil", plan)
+	}
+	if rules := policyImageRulesForProject(ctx, app, "P1"); len(rules) != 2 {
+		t.Fatalf("policyImageRulesForProject = %#v, want project plus global rules", rules)
+	}
+	if rules := policyImageRulesForProject(ctx, app, ""); len(rules) != 0 {
+		t.Fatalf("policyImageRulesForProject empty = %#v, want none", rules)
+	}
+}
+
+func TestPolicyDataPlanRuntimeActivationHelpers(t *testing.T) {
+	monday := time.Date(2026, 6, 15, 1, 2, 3, 0, time.UTC)
+	if policyPlanActive(map[string]any{}, monday) {
+		t.Fatal("plan without id should be inactive")
+	}
+	if policyPlanActive(map[string]any{"id": "PL1", "valid_from": monday.Add(time.Hour).Format(time.RFC3339)}, monday) {
+		t.Fatal("future plan should be inactive")
+	}
+	if policyPlanActive(map[string]any{"id": "PL1", "valid_until": monday.Add(-time.Hour)}, monday) {
+		t.Fatal("expired plan should be inactive")
+	}
+	if !policyPlanActive(map[string]any{"id": "PL1", "week_windows": []map[string]any{{"start": 0, "end": 604800}}}, monday) {
+		t.Fatal("current week window should be active")
+	}
+	if !policyPlanActive(map[string]any{"id": "PL1", "week_windows": "not-json"}, monday) {
+		t.Fatal("invalid week window payload should fall back to unrestricted runtime")
+	}
+}
+
+func TestPolicyDataWeekAndTimeRuntimeHelpers(t *testing.T) {
+	monday := time.Date(2026, 6, 15, 1, 2, 3, 0, time.UTC)
+	windows := policyWeekWindows(map[string]any{"week_windows": []any{map[string]any{"start": 0, "end": 7200}}})
+	if len(windows) != 1 || !policyWeekWindowsContain(windows, monday) {
+		t.Fatalf("policyWeekWindows = %#v, want active parsed window", windows)
+	}
+	if policyWeekSecond(monday) != 3723 {
+		t.Fatalf("policyWeekSecond = %d, want 3723", policyWeekSecond(monday))
+	}
+	if got := policyTimeValue(map[string]any{"when": monday}, "when"); got == nil || !got.Equal(monday) {
+		t.Fatalf("policyTimeValue(time) = %v, want %v", got, monday)
+	}
+	if got := policyTimeValue(map[string]any{"when": monday.Format(time.RFC3339)}, "when"); got == nil || !got.Equal(monday) {
+		t.Fatalf("policyTimeValue(string) = %v, want %v", got, monday)
+	}
+}
+
+func TestPolicyDataPayloadIDAndNumberHelpers(t *testing.T) {
+	if policyPlanPayloadHasRuntimeFields(map[string]any{"plan_id": "PL1"}) {
+		t.Fatal("plan payload without runtime fields should be false")
+	}
+	if !policyPlanPayloadHasRuntimeFields(map[string]any{"plan_id": "PL1", "gpuLimit": 1}) {
+		t.Fatal("plan payload with runtime field should be true")
+	}
+	if policyProjectID(map[string]any{"projectId": "P1"}) != "P1" || policyPlanID(map[string]any{"planId": "PL1"}) != "PL1" {
+		t.Fatal("policy project/plan ID aliases were not resolved")
+	}
+	if policyImageRuleID(map[string]any{"project_id": "P1", "tag_id": "T1"}) != "P1:T1" {
+		t.Fatal("policyImageRuleID did not synthesize project tag id")
+	}
+	if policyNonNegativeInt(map[string]any{"gpu": -1}, "gpu") != 0 {
+		t.Fatal("policyNonNegativeInt should clamp negatives")
+	}
+	if policyNumberValue(map[string]any{"n": json.Number("2.5")}, "n") != 2.5 ||
+		policyNumberValue(map[string]any{"n": float32(3.5)}, "n") != 3.5 ||
+		policyNumberValue(map[string]any{"n": "4.5"}, "n") != 4.5 ||
+		policyNumberValue(map[string]any{"n": "bad"}, "n") != 0 {
+		t.Fatal("policyNumberValue variants failed")
+	}
+	if policyInt64Value(int32(7), 0) != 7 || policyInt64Value(json.Number("8"), 0) != 8 || policyInt64Value("bad", 9) != 9 {
+		t.Fatal("policyInt64Value variants failed")
+	}
+}
+
+func TestPolicyDataImageListVariants(t *testing.T) {
+	rules := []map[string]any{
+		{"enabled": true, "repository": "repo/proxy"},
+		{"enabled": true, "repository": "repo/proxy", "tag": "latest"},
+		{"enabled": true, "image_reference": "repo/mirror:v1", "delivery_mode": "mirror"},
+		{"enabled": true, "image_reference": "repo/synced:v2", "delivery_mode": "synced"},
+		{"enabled": true, "image_reference": "repo/built:v3", "delivery_mode": "built"},
+		{"enabled": true, "image_reference": "repo/ignored:v4", "delivery_mode": "unknown"},
+		{"enabled": false, "image_reference": "repo/disabled:v5"},
+	}
+	lists := policyImageLists(rules)
+	assertPolicyDataValue(t, lists, "allowedProxyImages", ",repo/proxy:*,repo/proxy:latest,")
+	assertPolicyDataValue(t, lists, "allowedMirroredImages", ",repo/mirror:v1,")
+	assertPolicyDataValue(t, lists, "syncedMirroredImages", ",repo/synced:v2,")
+	assertPolicyDataValue(t, lists, "publishedBuiltImages", ",repo/built:v3,")
+
+	if ref := policyImageReference(map[string]any{"tag": "latest"}); ref != "" {
+		t.Fatalf("policyImageReference without repository = %q, want empty", ref)
+	}
+	if key := policyImageListKey(map[string]any{"delivery_mode": "mirrored synced"}); key != "syncedMirroredImages" {
+		t.Fatalf("policyImageListKey = %q, want syncedMirroredImages", key)
+	}
+	if list := policyCommaList([]string{"b", "", "a", "a"}); list != ",a,b," {
+		t.Fatalf("policyCommaList = %q, want sorted dedupe", list)
+	}
 }
 
 func policyDataUsagePod(namespace, name, projectID, gpu string) *corev1.Pod {

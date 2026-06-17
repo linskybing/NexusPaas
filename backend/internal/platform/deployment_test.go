@@ -27,7 +27,7 @@ func TestDeploymentManifestsAreProductionHardened(t *testing.T) {
 	requireContains(t, "../../Dockerfile", sharedDockerfile, "COPY internal ./internal")
 	requireContains(t, "../../Dockerfile", sharedDockerfile, "go build -trimpath -o /out/microservice ./cmd/microservice")
 	requireContains(t, "../../Dockerfile", sharedDockerfile, "FROM alpine:3.22")
-	requireContains(t, "../../Dockerfile", sharedDockerfile, "RUN apk add --no-cache ca-certificates \\")
+	requireContains(t, "../../Dockerfile", sharedDockerfile, "RUN apk add --no-cache --upgrade ca-certificates libcrypto3 libssl3 \\")
 	requireContains(t, "../../Dockerfile", sharedDockerfile, "&& addgroup -S -g 10001 app \\")
 	requireContains(t, "../../Dockerfile", sharedDockerfile, "&& adduser -S -D -H -u 10001 -G app app")
 	requireContains(t, "../../Dockerfile", sharedDockerfile, "USER app:app")

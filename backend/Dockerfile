@@ -1,4 +1,4 @@
-FROM golang:1.25-alpine AS build
+FROM golang:1.25.11-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -7,7 +7,7 @@ COPY internal ./internal
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/microservice ./cmd/microservice
 
 FROM alpine:3.22
-RUN apk add --no-cache ca-certificates \
+RUN apk add --no-cache --upgrade ca-certificates libcrypto3 libssl3 \
     && addgroup -S -g 10001 app \
     && adduser -S -D -H -u 10001 -G app app
 COPY --from=build /out/microservice /usr/local/bin/microservice
