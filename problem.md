@@ -5,14 +5,13 @@ _Generated: 2026-06-17. Branch: `main`._
 ## 1. Summary
 
 The backend remains a single Go module with 15 logical services selected by
-`SERVICE_NAME`. Main contains the Production Beta readiness stack through PR #7,
-and the current function-inventory branch adds the missing current-backend
-capability inventory. The stack adds 15-service production-beta manifests,
-CI/security gates, scheduler-quota owner-read boundary cleanup, operational
-readiness docs, and a non-live release-candidate rehearsal gate. The gate ties
-quick checks, production-beta manifest render/deploy dry-run, rollback command
-planning, re-deploy dry-run, Docker-backed E2E, runtime smoke, security scans,
-Sonar, and an RC evidence report into one repeatable command.
+`SERVICE_NAME`. Main contains the Production Beta readiness stack through PR #9:
+15-service production-beta manifests, CI/security gates, scheduler-quota
+owner-read boundary cleanup, operational readiness docs, a non-live
+release-candidate rehearsal gate, and the current-backend capability inventory.
+The gate ties quick checks, production-beta manifest render/deploy dry-run,
+rollback command planning, re-deploy dry-run, Docker-backed E2E, runtime smoke,
+security scans, Sonar, and an RC evidence report into one repeatable command.
 
 What changed in the current stacked work:
 
@@ -53,6 +52,12 @@ What changed in the current stacked work:
 - Added `function.md` as the current-backend capability inventory across the
   15-service catalog, route/event evidence, owned data, dependencies,
   background workers, and remaining parity risks.
+- Fixed the GitHub Actions workflow-level environment configuration so the
+  backend quality gate no longer references the unavailable `runner` context
+  before jobs are scheduled.
+- Adjusted the GitHub-hosted Sonar policy so repositories with no configured
+  Sonar secrets skip Sonar explicitly instead of failing every workflow before
+  a reachable Sonar endpoint/token exists.
 
 ## 2. Current Verification
 
@@ -69,6 +74,11 @@ What changed in the current stacked work:
 | `go test ./internal/platform ./internal/services -count=1` | Pass | Relevant backend platform/service tests still pass for this docs-only branch |
 | `go vet ./...` | Pass | Static Go vet check passes |
 | `go build ./...` | Pass | Backend packages still build |
+| `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/backend-quality-gate.yml")'` | Pass | Workflow YAML parses locally |
+| `bash -n backend/scripts/ci-security-gate.sh` | Pass | Quality gate script syntax remains valid |
+| `! rg -n 'runner\\.temp' .github/workflows/backend-quality-gate.yml` | Pass | Workflow-level env no longer references the unavailable `runner` context |
+| `CI_GATE_SONAR_REQUIRED=false SONAR_TOKEN= SONAR_HOST_URL= bash backend/scripts/ci-security-gate.sh sonar` | Pass | GitHub no-secrets policy skips Sonar explicitly |
+| `CI_GATE_SONAR_REQUIRED=true SONAR_TOKEN= SONAR_HOST_URL= bash backend/scripts/ci-security-gate.sh sonar` | Expected fail | Explicitly required or partially configured Sonar still fails closed when credentials are missing |
 
 ## 3. Resolved In This Branch
 
@@ -82,6 +92,8 @@ What changed in the current stacked work:
 | observability strategy | Trace/log/metric correlation and alert/runbook strategy existed only as NFR bullets | `docs/architecture/observability-strategy.md` defines the shared OpenTelemetry/Prometheus/logging model and links to the backend operations contract |
 | release rehearsal | Launch readiness required a repeatable RC rehearsal, but operators only had separate quick/docker/security/Sonar commands | `backend/scripts/ci-security-gate.sh beta-rc` runs quick checks, manifest render/deploy dry-run, rollback plan, re-deploy dry-run, Docker E2E, runtime smoke, security scans, Sonar, and RC report generation |
 | capability inventory | `function.md` was missing, leaving launch reviewers without a single current-backend capability inventory | `function.md` now maps current capabilities to the 15-service catalog, route/job/event evidence, owned data, dependencies, background workers, and explicit reference-parity limits |
+| GitHub workflow scheduling | `.github/workflows/backend-quality-gate.yml` used `${{ runner.temp }}` in workflow-level `env`, so GitHub failed the run before creating jobs or logs | CI temp paths now use literal `/tmp/...` values that are valid at workflow scope for the existing `ubuntu-latest` job |
+| GitHub Sonar no-secrets handling | GitHub-hosted runs failed at Sonar because the repository has no `SONAR_TOKEN` or `SONAR_HOST_URL` secrets | The workflow now skips Sonar only when no Sonar secrets are configured; any partial or configured Sonar setup remains fail-closed |
 
 ## 4. Remaining Issues
 
@@ -91,6 +103,7 @@ What changed in the current stacked work:
 | Medium | coverage | Several packages remain below the per-package 80% target, although integration total meets the CI gate | Per-component risk remains masked by aggregate coverage | Raise low packages, especially `cmd/microservice`, `identity`, and schedulerquota follow-up paths |
 | Medium | live observability provisioning | Operational readiness docs exist, but Grafana dashboards, PrometheusRule alerts, and scheduled synthetic monitors are not yet provisioned | Operators have a tested contract but not the final live monitoring resources | Implement dashboard/alert/synthetic monitor manifests or GitOps resources in the next observability hardening slice |
 | Medium | live staging rehearsal | The non-live Beta RC gate exists, but a real staging deploy/readiness/smoke/rollback/re-deploy rehearsal has not been captured | External Beta traffic remains blocked until real cluster evidence exists or the risk is explicitly accepted | Run the live staging checklist in `backend/docs/beta-launch-readiness.md` with real staging secrets |
+| Medium | GitHub Sonar provisioning | GitHub repository has no `SONAR_TOKEN` or `SONAR_HOST_URL` secrets, so hosted CI skips Sonar even though local Sonar evidence exists | Remote PR checks do not enforce Sonar Quality Gate until a GitHub-reachable Sonar endpoint/token is configured | Add SonarCloud or reachable SonarQube secrets and rerun the workflow with Sonar required |
 | Medium | data ownership | Scheduler-quota now uses owner-read contracts, but co-hosted mode can still read map-shaped records from the shared physical Postgres | Production Beta boundary is improved, not GA-complete | Continue toward typed DTO contracts or event-fed read models |
 | Low | catalog size | `internal/services/catalog.go` remains over the 800-line soft cap | Maintainability issue | Split catalog specs by service in a later refactor |
 
@@ -112,6 +125,6 @@ Rationale: main's scheduler-quota boundary cleanup, observability/runbook
 contract, production-beta manifest rehearsal, Docker-backed E2E, security scans,
 Sonar Quality Gate, and `beta-rc` rehearsal all pass. The repository still has
 broader Production Beta launch blockers: missing reference snapshot,
-per-package coverage gaps, missing live dashboard/alert
+per-package coverage gaps, missing GitHub Sonar provisioning, missing live dashboard/alert
 provisioning, missing live staging rehearsal evidence, and remaining shared
 physical Postgres transition debt.
