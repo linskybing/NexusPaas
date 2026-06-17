@@ -346,21 +346,7 @@ func scanIdentityRecord(row postgresRow) (contracts.Record[map[string]any], erro
 }
 
 func scanIdentityRecordRows(rows postgresRows) (contracts.Record[map[string]any], error) {
-	var record contracts.Record[map[string]any]
-	var raw []byte
-	if err := rows.Scan(&record.ID, &raw, &record.Version, &record.CreatedAt, &record.UpdatedAt); err != nil {
-		return contracts.Record[map[string]any]{}, err
-	}
-	if err := json.Unmarshal(raw, &record.Data); err != nil {
-		return contracts.Record[map[string]any]{}, err
-	}
-	if record.Data == nil {
-		record.Data = map[string]any{}
-	}
-	if record.Data["id"] == nil && record.ID != "" {
-		record.Data["id"] = record.ID
-	}
-	return record, nil
+	return scanIdentityRecord(rows)
 }
 
 func identityUserInsertColumns(data map[string]any, id string, _ time.Time) []identityColumnValue {
@@ -400,11 +386,7 @@ func identityRoleUpdateColumns(data map[string]any) []identityColumnValue {
 }
 
 func identitySessionInsertColumns(data map[string]any, id string, now time.Time) []identityColumnValue {
-	return []identityColumnValue{
-		{"user_id", identityTextDefault(data, "", "user_id", "userId")},
-		{"token", identityTextDefault(data, id, "token")},
-		{"expires_at", identityTimeDefault(data, now.Add(identityDefaultSessionTTL), "expires_at", "expiresAt")},
-	}
+	return identityTokenInsertColumns(data, id, now.Add(identityDefaultSessionTTL))
 }
 
 func identitySessionUpdateColumns(data map[string]any) []identityColumnValue {
@@ -416,10 +398,14 @@ func identitySessionUpdateColumns(data map[string]any) []identityColumnValue {
 }
 
 func identityRefreshTokenInsertColumns(data map[string]any, id string, now time.Time) []identityColumnValue {
+	return identityTokenInsertColumns(data, id, now.Add(identityDefaultRefreshTTL))
+}
+
+func identityTokenInsertColumns(data map[string]any, id string, fallbackExpiresAt time.Time) []identityColumnValue {
 	return []identityColumnValue{
 		{"user_id", identityTextDefault(data, "", "user_id", "userId")},
 		{"token", identityTextDefault(data, id, "token")},
-		{"expires_at", identityTimeDefault(data, now.Add(identityDefaultRefreshTTL), "expires_at", "expiresAt")},
+		{"expires_at", identityTimeDefault(data, fallbackExpiresAt, "expires_at", "expiresAt")},
 	}
 }
 
@@ -433,7 +419,7 @@ func identityAPITokenInsertColumns(data map[string]any, _ string, now time.Time)
 		{"name", identityTextDefault(data, "", "name")},
 		{"token_hash", identityTextDefault(data, "", "token_hash", "tokenHash")},
 		{"token_prefix", identityTextDefault(data, "", "token_prefix", "tokenPrefix")},
-		{"expires_at", identityNullableTimeDefault(data, now.Add(identityDefaultAPITokenTTL), "expires_at", "expiresAt")},
+		{"expires_at", identityTimeDefault(data, now.Add(identityDefaultAPITokenTTL), "expires_at", "expiresAt")},
 		{"last_used_at", identityNullableTime(data, "last_used_at", "lastUsedAt")},
 		{"revoked", identityBoolDefault(data, false, "revoked")},
 		{"revoked_at", identityNullableTime(data, "revoked_at", "revokedAt")},
@@ -557,13 +543,6 @@ func identityBoolUpdate(keys ...string) func(map[string]any) (any, bool) {
 }
 
 func identityTimeDefault(data map[string]any, fallback time.Time, keys ...string) time.Time {
-	if value, ok := identityTime(data, keys...); ok {
-		return value
-	}
-	return fallback
-}
-
-func identityNullableTimeDefault(data map[string]any, fallback time.Time, keys ...string) any {
 	if value, ok := identityTime(data, keys...); ok {
 		return value
 	}

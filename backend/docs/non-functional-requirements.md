@@ -59,6 +59,25 @@ All microservices must comply with the NFRs below; each service document only hi
 | NFR-OPER-02 | Configuration must be fully driven by environment variables/ConfigMap/Secret; production startup must never use dev default secrets. |
 | NFR-OPER-03 | Database migrations must be backward-compatible: expand → dual-write/dual-read → backfill → cutover → contract. |
 
+### Production Beta k3s Topology
+
+- `backend/deploy/k3s` remains the local development all-in-one stack.
+- `backend/kustomization.yaml` renders the Production Beta topology: shared
+  backing services plus the 15 independent service manifests. It lives at the
+  backend root so standard `kubectl kustomize backend` can read both
+  `deploy/k3s` resources and service-owned manifests without disabling load
+  restrictions.
+- `production-beta-runtime-config` supplies common Redis, event bus, JWT
+  audience, and `SERVICE_URLS` values. The Production Beta kustomization
+  injects this ConfigMap with an overlay patch so service-owned base manifests
+  stay environment-neutral. Service-specific Secrets may still override these
+  values when a managed secret source requires it.
+- `production-beta-runtime-secret-contract` documents required Secret names and
+  keys only; it must not contain real credentials.
+- Static `SERVICE_API_KEY` is a Production Beta transition mechanism for
+  service-to-service authentication. GA should replace it with mTLS or workload
+  identity.
+
 ## Maintainability
 
 | ID | Requirement |
