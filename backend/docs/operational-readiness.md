@@ -112,6 +112,13 @@ maintenance:
   service may return 5xx.
 - Capture status, latency, request_id, trace_id, and service version.
 
+The baseline scheduled monitor lives in
+`backend/deploy/observability/production-beta`. It provisions a CronJob that
+runs the same checklist every five minutes against the 15-service topology. The
+CronJob uses the externally managed `nexuspaas-synthetic-smoke-secret`; the
+Prometheus PodMonitor uses the separate `nexuspaas-prometheus-scrape-secret` so
+authenticated `/metrics` scraping does not require committed credentials.
+
 ## Service Operations Matrix
 
 | Service | Owner / Escalation | Critical Journeys | Operations Contract |
@@ -134,10 +141,19 @@ maintenance:
 
 ## Remaining Production Beta Work
 
-This document establishes the reviewable contract. Production Beta still needs:
+This document establishes the reviewable contract. The baseline observability
+manifests are provisioned in `backend/deploy/observability/production-beta`:
 
-- Dashboard resources provisioned in Grafana or an equivalent tool.
-- Alert rules provisioned in PrometheusRule or an equivalent alerting system.
-- Scheduled synthetic monitoring for the 15-service topology.
+- Grafana dashboard ConfigMap for the 15-service Production Beta dashboard.
+- Prometheus Operator PodMonitor and PrometheusRule resources for authenticated
+  scrape and baseline alerts.
+- Scheduled CronJob synthetic monitoring for the 15-service topology.
+
+Production Beta still needs:
+
+- Live cluster activation evidence for the dashboard, PodMonitor,
+  PrometheusRule, and CronJob resources.
+- Runtime histogram metrics before p95 SLO alerts can replace the current mean
+  latency sentinels.
 - Staging rehearsal for deploy, smoke, rollback, and re-deploy.
 - GA replacement of static service keys with mTLS or workload identity.

@@ -180,13 +180,24 @@ Smoke failures should record request ID, trace ID, status code, latency, and the
 service-registry snapshot so operators can determine whether the issue is
 routing, startup, auth, dependency health, or service behavior.
 
+The Production Beta baseline overlay is
+`backend/deploy/observability/production-beta`. It contains a Grafana dashboard
+ConfigMap, Prometheus Operator `PodMonitor` and `PrometheusRule` resources, and
+a Kubernetes `CronJob` synthetic monitor. The overlay is separate from the root
+backend kustomization because Prometheus Operator CRDs are optional
+infrastructure prerequisites and should not break the root non-live dry-run
+gate. The PodMonitor uses `nexuspaas-prometheus-scrape-secret` for bearer-token
+scrape auth; the CronJob uses `nexuspaas-synthetic-smoke-secret` for smoke
+credentials.
+
 ## Production Beta Gaps
 
-This strategy closes the documentation and testable contract gap only. The
-following remain launch-readiness work:
+This strategy closes the documentation, testable contract, and baseline
+observability manifest gap. The following remain launch-readiness work:
 
-- Provision Grafana dashboards or equivalent dashboard resources.
-- Provision PrometheusRule or equivalent alert rules.
-- Add a scheduled synthetic monitor for the 15-service topology.
+- Activate the overlay in a live cluster and capture dashboard, alert, scrape,
+  and CronJob evidence.
+- Add runtime histogram buckets before p95 latency SLO alerts replace the
+  current mean latency sentinel rules.
 - Replace static service keys with mTLS or workload identity before GA.
 - Exercise rollback and incident runbooks in staging.
