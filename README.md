@@ -61,8 +61,8 @@ docker compose -f backend/deploy/local/docker-compose.yml up -d
 
 # 2. Build and test
 cd backend
-go build ./...
-go test ./...
+make build
+make test
 
 # 3. Run the platform (all services co-hosted in one process for local dev)
 go run ./cmd/microservice
@@ -77,10 +77,23 @@ go test -tags integration ./...
 
 Kubernetes (k3s) manifests are under [`backend/deploy/k3s`](backend/deploy/k3s).
 
+## Local quality checks
+
+Backend developer checks are exposed through [`backend/Makefile`](backend/Makefile):
+
+```bash
+cd backend
+make lint    # gofmt check + go vet
+make check   # quick local CI gate: gofmt, vet, tests, build
+```
+
+Use `make help` to list all targets. Heavier CI-equivalent gates are available
+when Docker, network access, and any required secrets are configured:
+`make ci-docker`, `make ci-security`, `make ci-sonar`, and `make ci-all`.
+
 ## Contributing
 
 This repository follows a structured plan → review → implement workflow; see
 [AGENTS.md](AGENTS.md) and [`docs/agents/`](docs/agents) for the conventions. Before opening
-a PR, make sure `go build ./...`, `go vet ./...`, `go test ./...`, and `gofmt -l .` are all
-clean from `backend/`.
-
+a PR, run `make check` from `backend/` and address any formatting, vet, test, or
+build failures.

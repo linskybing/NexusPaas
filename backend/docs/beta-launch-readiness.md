@@ -26,16 +26,31 @@ The gate must pass these phases:
    - re-deploy client dry-run
 3. Docker-backed migrations, integration coverage, focused E2E, and full
    non-live E2E.
-4. non-live runtime smoke:
+4. non-live runtime smoke (routing/process smoke):
    - `SERVICE_NAME=all` starts on `TEST_RUNTIME_PORT` (default `18080`)
    - `/healthz`, `/readyz`, `/metrics`, `/openapi.json`, and
      `/service-registry` return 200
    - `/service-registry` lists all 15 services
    - one read-only endpoint per service returns 2xx or expected 4xx; no service
      returns 5xx
-5. govulncheck, OSV source scan, backend image build, and Trivy image scan.
-6. SonarScanner Quality Gate when configured or required.
-7. generated RC evidence report at `${ARTIFACT_DIR}/beta-rc-report.md`.
+   - this proves route registration and process health only; it is not
+     accepted as 15-service collaboration evidence
+5. 15-service collaboration smoke:
+   - starts Postgres, Redis, MinIO, and 15 independent backend service
+     containers from the same backend image
+   - uses production-like `SERVICE_NAME`, `SERVICE_URLS`, `SERVICE_API_KEY`,
+     static API-key principals, `REQUIRE_AUTH=true`, and
+     `DEV_HEADER_AUTH=false`
+   - verifies identity remote auth, workload-to-scheduler admission,
+     scheduler owner-read contracts, storage mount-plan, media upload,
+     request-notification events, bad service credentials, missing
+     `SERVICE_URLS`, and scheduler outage fail-closed behavior
+   - writes `collaboration-smoke.log`,
+     `collaboration-smoke-summary.json`, and
+     `collaboration-smoke-summary.md` under `${ARTIFACT_DIR}`
+6. govulncheck, OSV source scan, backend image build, and Trivy image scan.
+7. SonarScanner Quality Gate when configured or required.
+8. generated RC evidence report at `${ARTIFACT_DIR}/beta-rc-report.md`.
 
 The default artifact directory is under `/tmp/nexuspaas-quality-gate/<run-id>`.
 Override it with `CI_GATE_ARTIFACT_DIR` when a CI job needs to upload artifacts.
@@ -59,7 +74,8 @@ The live rehearsal must prove:
 - The service registry lists all 15 services.
 - One read-only smoke endpoint per service returns 2xx or an expected 4xx; no
   service returns 5xx.
-- Critical user journeys E2E pass.
+- Critical 15-service collaboration journeys pass, including service-to-service
+  auth failure cases and unavailable dependency fail-closed checks.
 - Rollback command rehearsal is executed against staging workloads.
 - Re-deploy returns the environment to the candidate version and repeats smoke.
 

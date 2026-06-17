@@ -146,6 +146,79 @@ func TestStorageMountPlanClientRequiresRemoteConfig(t *testing.T) {
 	}
 }
 
+func TestStorageMountPlanClientRequiresAppAndServiceKey(t *testing.T) {
+	if _, err := newStorageMountPlanClient(nil); err == nil || !strings.Contains(err.Error(), "not configured") {
+		t.Fatalf("nil app err = %v, want not configured", err)
+	}
+	_, err := newStorageMountPlanClient(platform.NewApp(platform.Config{
+		ServiceName: serviceName,
+		ServiceURLs: map[string]string{
+			storageServiceName: "https://storage.internal",
+		},
+	}))
+	if err == nil || !strings.Contains(err.Error(), "service API key") {
+		t.Fatalf("err = %v, want missing service API key", err)
+	}
+}
+
+func TestStorageMountPlanClientEndpointAndDecodeBranches(t *testing.T) {
+	remote := httpStorageMountPlanClient{baseURL: "https://storage.internal/root/"}
+	endpoint, err := remote.endpoint(storageMountPlanPath("P1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if endpoint != "https://storage.internal/root/internal/storage/projects/P1/mount-plan" {
+		t.Fatalf("endpoint = %q, want joined mount-plan path", endpoint)
+	}
+	for _, baseURL := range []string{":", "/relative"} {
+		remote.baseURL = baseURL
+		if _, err := remote.endpoint("/path"); err == nil {
+			t.Fatalf("baseURL %q was accepted", baseURL)
+		}
+	}
+
+	if _, err := decodeStorageMountPlan([]byte(`{"error":{"message":"denied"}}`)); err == nil || !strings.Contains(err.Error(), "denied") {
+		t.Fatalf("error envelope err = %v, want denied", err)
+	}
+	empty, err := decodeStorageMountPlan([]byte(`{"data":null}`))
+	if err != nil || empty.ProjectID != "" {
+		t.Fatalf("empty plan = %#v err=%v, want zero plan", empty, err)
+	}
+	if _, err := decodeStorageMountPlan([]byte(`{bad-json`)); err == nil {
+		t.Fatal("malformed envelope was accepted")
+	}
+	if _, err := decodeStorageMountPlan([]byte(`{"data":{bad-json}}`)); err == nil {
+		t.Fatal("malformed plan data was accepted")
+	}
+}
+
+func TestStorageMountPlanClientHTTPStatusBranches(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  int
+		wantErr error
+	}{
+		{name: "invalid request", status: http.StatusBadRequest, wantErr: cluster.ErrInvalidManifest},
+		{name: "server error", status: http.StatusBadGateway},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.status)
+			}))
+			defer server.Close()
+			client := httpStorageMountPlanClient{baseURL: server.URL, apiKey: "service-key", client: server.Client()}
+			_, err := client.Resolve(context.Background(), "P1", storageMountPlanRequest{UserID: "U1"})
+			if err == nil {
+				t.Fatal("err = nil, want HTTP status error")
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Fatalf("err = %v, want wrapping %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestStorageMountSourceGuardNoDirectStorageResourceAccess(t *testing.T) {
 	forbidden := regexp.MustCompile(`\b(groupStorageResource|projectBindingsResource|storagePermissionsResource|projectPermissionsResource|storagePoliciesResource|fastTransfersResource|userStorageResource)\b|storage-service:(group_storage|storage_permissions|storage_access_policies|storage_bindings|project_storage_permissions|fast_transfers|user_storage)`)
 	var violations []string

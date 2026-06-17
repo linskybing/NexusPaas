@@ -68,6 +68,20 @@ What changed in the current stacked work:
   auth cleanup registration, login captcha/lockout edges, admin credential
   revocation, and helper/repository branches. `internal/services/identity` now
   meets the per-package 80% target locally.
+- Hardened backend coverage for the remaining previously sub-80 packages without
+  changing public API, database schema, deployment manifests, or runtime
+  contracts. The formerly low packages now report: `cmd/microservice` 90.5%,
+  `internal/platform` 80.2%, `internal/services/gpuusage` 83.4%,
+  `internal/services/imageregistry` 81.2%,
+  `internal/services/integrationproxy` 87.1%,
+  `internal/services/k8scontrol` 91.5%,
+  `internal/services/requestnotification` 80.6%,
+  `internal/services/storage` 82.2%, and `internal/services/workload` 81.4%.
+- Added a Docker Compose collaboration-smoke topology for Postgres, Redis,
+  MinIO, and 15 independent backend service containers. The Docker gate now
+  fails closed on missing scheduler owner-read `SERVICE_URLS`, bad service
+  credentials, scheduler outage, and cross-service workflow mismatches instead
+  of accepting only all-in-one routing smoke.
 
 ## 2. Current Verification
 
@@ -75,11 +89,11 @@ What changed in the current stacked work:
 | --- | --- | --- |
 | `go test ./internal/platform -run 'Deployment\|Operational\|Release\|Beta' -count=1` | Pass | Deployment hardening tests plus operational readiness and Beta RC docs/script guards |
 | `bash backend/scripts/ci-security-gate.sh quick` | Pass | gofmt, go vet, `go test ./... -count=1`, `go build ./...` |
-| `bash backend/scripts/ci-security-gate.sh docker` | Pass | Postgres/Redis/MinIO healthy; migrations apply/validate; integration total coverage 80.5%; focused E2E, full non-live E2E, and runtime smoke pass |
+| `bash backend/scripts/ci-security-gate.sh docker` | Pass | Postgres/Redis/MinIO healthy; migrations apply/validate; integration total coverage 82.7%; focused E2E, full non-live E2E, all-in-one routing smoke, and 15-service collaboration smoke pass |
 | `bash backend/scripts/ci-security-gate.sh security` | Pass | govulncheck: no vulnerabilities; OSV: no issues; Trivy image scan: 0 vulnerabilities |
 | `bash backend/scripts/ci-security-gate.sh sonar` | Pass | Sonar Quality Gate OK |
-| `bash backend/scripts/ci-security-gate.sh beta-rc` | Pass | Passed on main commit `fa1d041`; quick checks, production-beta manifest render/deploy dry-run, rollback plan, re-deploy dry-run, Docker E2E, runtime smoke, security scans, Sonar, and RC report all passed; runtime smoke verified core endpoints 200, 15 registered services, and no per-service smoke 5xx |
-| `git diff --check` | Pass | Function inventory documentation diff has no whitespace errors |
+| `bash backend/scripts/ci-security-gate.sh beta-rc` | Pass | Passed on commit `0aac41a`; quick checks, production-beta manifest render/deploy dry-run, rollback plan, re-deploy dry-run, Docker E2E, routing/process smoke, 15-service collaboration smoke, security scans, Sonar, and RC report all passed |
+| `git diff --check` | Pass | Current branch diff has no whitespace errors |
 | `test -f function.md` plus per-service/per-worker `rg` checks | Pass | `function.md` covers all 15 services, required background workers, and explicitly states reference parity is unverified |
 | `go test ./internal/platform ./internal/services -count=1` | Pass | Relevant backend platform/service tests still pass for this docs-only branch |
 | `go vet ./...` | Pass | Static Go vet check passes |
@@ -107,6 +121,11 @@ What changed in the current stacked work:
 | `bash backend/scripts/ci-security-gate.sh sonar` | Pass | Local SonarScanner Quality Gate passed against `http://localhost:9000/dashboard?id=nexuspaas-backend` |
 | `go test ./internal/services/identity -coverprofile=/tmp/identity.cover -count=1` | Pass | `internal/services/identity` coverage is 80.3% |
 | `go tool cover -func=/tmp/identity.cover` | Pass | Identity package total coverage reports 80.3% |
+| `go test ./cmd/microservice ./internal/platform ./internal/services/gpuusage ./internal/services/imageregistry ./internal/services/integrationproxy ./internal/services/k8scontrol ./internal/services/requestnotification ./internal/services/storage ./internal/services/workload -coverprofile=/tmp/nexuspaas-low-coverage.out -count=1` | Pass | Formerly sub-80 packages are now `cmd/microservice` 90.5%, `internal/platform` 80.2%, `gpuusage` 83.4%, `imageregistry` 81.2%, `integrationproxy` 87.1%, `k8scontrol` 91.5%, `requestnotification` 80.6%, `storage` 82.2%, and `workload` 81.4% |
+| `go test ./... -coverprofile=/tmp/nexuspaas-coverage.out -count=1` | Pass | Full backend coverage suite passes; all tested packages report at least 80.0% coverage |
+| `go test -tags e2e ./internal/e2e -run TestComposeCollaborationSmoke -count=1 -v` | Pass | Build-tagged collaboration runner compiles; skips unless `COMPOSE_COLLABORATION_SMOKE=1` is set by the Docker gate |
+| `/var/folders/xl/4ctb0b7j68z74pg5pc0h9wmh0000gn/T/nexuspaas-quality-gate/local-4661/beta-rc-report.md` | Pass | Run `local4661` produced the RC report after quick, production-beta dry-runs, Docker E2E, routing/process smoke, 15-service collaboration smoke, security scans, and Sonar all passed |
+| `/var/folders/xl/4ctb0b7j68z74pg5pc0h9wmh0000gn/T/nexuspaas-quality-gate/local-4661/collaboration-smoke-summary.md` | Pass | Run `local4661` verified 15 isolated registries, identity remote auth ignoring forged `X-User-ID`, workload->scheduler admission, scheduler owner-read and bad credential failures, storage mount-plan, media upload, request-notification domain/audit events, and scheduler outage fail-closed behavior |
 
 ## 3. Resolved In This Branch
 
@@ -125,13 +144,14 @@ What changed in the current stacked work:
 | observability baseline provisioning | Dashboard, alert, authenticated scrape, and scheduled synthetic monitor resources were documented but not provisioned | `backend/deploy/observability/production-beta` now renders an optional Grafana/Prometheus Operator/CronJob overlay covering all 15 services without committing secrets |
 | metrics granularity | Runtime metrics exposed request counts and duration sums but no histogram buckets | `/metrics` now emits Prometheus-compatible HTTP duration buckets/count/sum; dashboard and alert rules use p95 `histogram_quantile` |
 | identity package coverage | `internal/services/identity` was below the per-package 80% target for a core IAM service | Focused identity tests now cover API-token current revocation, denylist behavior, OIDC/Dex revocation registration, auth cleanup, login edge cases, admin credential revocation, and helper/repository branches; local coverage is 80.3% |
+| backend package coverage | Nine backend packages were below the per-package 80% target: `cmd/microservice`, `internal/platform`, `gpuusage`, `imageregistry`, `integrationproxy`, `k8scontrol`, `requestnotification`, `storage`, and `workload` | A focused coverage run now reports all nine at or above 80.0%: 90.5%, 80.2%, 83.4%, 81.2%, 87.1%, 91.5%, 80.6%, 82.2%, and 81.4%, respectively |
+| 15-service collaboration evidence | The previous Docker smoke could prove `SERVICE_NAME=all` routing/process health but not independent service cooperation | `ci-security-gate.sh docker` now starts 15 backend containers with production-like service URLs, service keys, and auth settings, then verifies critical state-changing cross-service workflows and fail-closed negative paths |
 
 ## 4. Remaining Issues
 
 | Priority | Area | Problem | Impact | Recommended Next Step |
 | --- | --- | --- | --- | --- |
 | High | reference parity | `references/CSCC_AI_Platform_Backend` is absent, so live reference diff cannot be performed | Reference-only behavior gaps remain unknown | Restore/provision the reference snapshot before parity-sensitive launch review |
-| Medium | coverage | Several packages remain below the per-package 80% target, although integration total meets the CI gate; `internal/services/identity` is now at 80.3% locally | Per-component risk remains masked by aggregate coverage | Raise remaining low packages, especially `cmd/microservice` and other sub-80 service packages |
 | Medium | live observability activation | Baseline Grafana, PodMonitor, PrometheusRule, and synthetic CronJob manifests exist, but live cluster activation evidence has not been captured | Operators have provisionable resources but not proof that dashboards, alerts, scrape auth, and scheduled smoke are working in staging | Apply `backend/deploy/observability/production-beta` in staging with real secrets and capture dashboard/alert/CronJob evidence |
 | Medium | live staging rehearsal | The non-live Beta RC gate exists, but a real staging deploy/readiness/smoke/rollback/re-deploy rehearsal has not been captured | External Beta traffic remains blocked until real cluster evidence exists or the risk is explicitly accepted | Run the live staging checklist in `backend/docs/beta-launch-readiness.md` with real staging secrets |
 | Medium | GitHub Sonar provisioning | GitHub repository has no `SONAR_TOKEN` or `SONAR_HOST_URL` secrets, so hosted CI skips Sonar even though local Sonar evidence exists | Remote PR checks do not enforce Sonar Quality Gate until a GitHub-reachable Sonar endpoint/token is configured | Add SonarCloud or reachable SonarQube secrets and rerun the workflow with Sonar required |
@@ -149,13 +169,13 @@ What changed in the current stacked work:
 
 ## 6. Reviewer Status
 
-Status: Non-live Production Beta RC gate passed on main; external Beta traffic
-is still blocked pending live staging evidence or explicit risk acceptance.
+Status: Non-live Beta RC gate now includes and passes the 15-service
+collaboration smoke; external Beta traffic is still blocked pending live
+staging evidence or explicit risk acceptance.
 
-Rationale: main's scheduler-quota boundary cleanup, observability/runbook
-contract, production-beta manifest rehearsal, Docker-backed E2E, security scans,
-Sonar Quality Gate, and `beta-rc` rehearsal all pass. The repository still has
-broader Production Beta launch blockers: missing reference snapshot,
-remaining per-package coverage gaps, missing GitHub Sonar provisioning, missing live dashboard/alert
-provisioning, missing live staging rehearsal evidence, and remaining shared
-physical Postgres transition debt.
+Rationale: the local Docker gate now proves both the older all-in-one
+routing/process smoke and independent 15-service collaboration workflows across
+real containers. The repository still has broader Production Beta launch
+blockers: missing reference snapshot, missing GitHub Sonar provisioning, missing
+live dashboard/alert provisioning, missing live staging rehearsal evidence, and
+remaining shared physical Postgres transition debt.

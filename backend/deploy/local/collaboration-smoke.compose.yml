@@ -1,0 +1,211 @@
+# CI/local production-like collaboration smoke topology.
+#
+# This file intentionally differs from docker-compose.yml: it starts the shared
+# backing services plus all 15 backend service containers so the gate can verify
+# service-to-service cooperation over SERVICE_URLS and X-Service-Key.
+
+x-backend-env: &backend-env
+  HTTP_ADDR: ":8080"
+  REQUIRE_AUTH: "true"
+  DEV_HEADER_AUTH: "false"
+  PRODUCTION: "true"
+  LOG_LEVEL: "info"
+  API_KEYS: "${TEST_RUNTIME_API_KEY},${TEST_RUNTIME_SERVICE_KEY}"
+  API_KEY_PRINCIPALS: "${COLLAB_API_KEY_PRINCIPALS}"
+  SERVICE_API_KEY: "${TEST_RUNTIME_SERVICE_KEY}"
+  SERVICE_URLS: "${COLLAB_SERVICE_URLS}"
+  DATABASE_URL: "postgres://nexuspaas:${TEST_POSTGRES_PASSWORD}@postgres:5432/nexuspaas?sslmode=disable"
+  REDIS_URL: "redis://redis:6379/0"
+  EVENT_BUS_URL: "redis://redis:6379/1"
+  OBJECT_STORE_URL: "http://minio:9000"
+  OBJECT_STORE_ACCESS_KEY: "${TEST_OBJECT_STORE_ACCESS_KEY}"
+  OBJECT_STORE_SECRET_KEY: "${TEST_OBJECT_STORE_SECRET_KEY}"
+  OBJECT_STORE_BUCKET: "${TEST_OBJECT_STORE_BUCKET}"
+  AUTHORIZATION_POLICY_URL: "http://authorization-policy-service:8080"
+  AUTHORIZATION_POLICY_API_KEY: "${TEST_RUNTIME_SERVICE_KEY}"
+  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  OTEL_TRACES_SAMPLER: "parentbased_traceratio"
+  OTEL_TRACES_SAMPLER_ARG: "0.1"
+  OTEL_RESOURCE_ATTRIBUTES: "service.namespace=nexuspaas,deployment.environment=collaboration-smoke"
+
+x-backend-service: &backend-service
+  image: "${BACKEND_IMAGE}"
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    minio:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz >/dev/null"]
+    interval: 3s
+    timeout: 3s
+    retries: 30
+  ports:
+    - target: 8080
+      host_ip: 127.0.0.1
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: nexuspaas
+      POSTGRES_PASSWORD: "${TEST_POSTGRES_PASSWORD}"
+      POSTGRES_DB: nexuspaas
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexuspaas -d nexuspaas"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    ports:
+      - target: 5432
+        host_ip: 127.0.0.1
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    ports:
+      - target: 6379
+        host_ip: 127.0.0.1
+    volumes:
+      - redis-data:/data
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-08T15-41-24Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: "${TEST_OBJECT_STORE_ACCESS_KEY}"
+      MINIO_ROOT_PASSWORD: "${TEST_OBJECT_STORE_SECRET_KEY}"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    ports:
+      - target: 9000
+        host_ip: 127.0.0.1
+      - target: 9001
+        host_ip: 127.0.0.1
+    volumes:
+      - minio-data:/data
+
+  migrate:
+    <<: *backend-service
+    profiles: ["tasks"]
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: "all"
+      ADMIN_TASK: "apply-migrations"
+    ports: []
+
+  ensure-object-store-bucket:
+    <<: *backend-service
+    profiles: ["tasks"]
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: "media-upload-service"
+      ADMIN_TASK: "ensure-object-store-bucket"
+    ports: []
+
+  audit-compliance-service:
+    <<: *backend-service
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: "audit-compliance-service"
+
+  authorization-policy-service:
+    <<: *backend-service
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: "authorization-policy-service"
+
+  ide-service:
+    <<: *backend-service
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: "ide-service"
+
+  identity-service:
+    <<: *backend-service
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: "identity-service"
+
+  image-registry-service:
+    <<: *backend-service
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: "image-registry-service"
+
+  integration-proxy-service:
+    <<: *backend-service
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: "integration-proxy-service"
+
+  k8s-control-service:
+    <<: *backend-service
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: "k8s-control-service"
+
+  media-upload-service:
+    <<: *backend-service
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: "media-upload-service"
+
+  org-project-service:
+    <<: *backend-service
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: "org-project-service"
+
+  platform-gateway:
+    <<: *backend-service
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: "platform-gateway"
+
+  request-notification-service:
+    <<: *backend-service
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: "request-notification-service"
+
+  scheduler-quota-service:
+    <<: *backend-service
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: "scheduler-quota-service"
+
+  storage-service:
+    <<: *backend-service
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: "storage-service"
+
+  usage-observability-service:
+    <<: *backend-service
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: "usage-observability-service"
+
+  workload-service:
+    <<: *backend-service
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: "workload-service"
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:

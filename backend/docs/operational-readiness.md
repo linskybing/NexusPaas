@@ -110,6 +110,10 @@ maintenance:
 - `GET /service-registry` returns all 15 services.
 - One read-only smoke endpoint per service returns 2xx or an expected 4xx; no
   service may return 5xx.
+- CI/local release gates must also run the 15-service collaboration smoke
+  topology so critical workflows prove service-to-service contracts, events,
+  object storage, and fail-closed dependency behavior across independent
+  backend containers.
 - Capture status, latency, request_id, trace_id, and service version.
 
 The baseline scheduled monitor lives in
@@ -121,6 +125,11 @@ authenticated `/metrics` scraping does not require committed credentials.
 Runtime `/metrics` exposes HTTP duration histogram buckets so dashboard panels
 and PrometheusRule alerts can use p95 `histogram_quantile` queries instead of
 mean latency sentinels.
+
+The scheduled monitor remains a low-cost read-only synthetic smoke. The
+Docker-backed `ci-security-gate.sh docker` and `beta-rc` gates provide the
+heavier collaboration evidence by starting 15 backend containers and exercising
+state-changing cross-service workflows.
 
 ## Service Operations Matrix
 

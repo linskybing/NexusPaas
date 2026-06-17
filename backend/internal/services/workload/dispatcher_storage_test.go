@@ -122,3 +122,103 @@ func TestInjectStorageMountsIntoSuppliedVCJobTasks(t *testing.T) {
 		t.Fatalf("VCJob container mounts = %#v, want one injected mount", containerMounts)
 	}
 }
+
+func TestStorageMountSpecFromMapCoversManifestAndSharePlans(t *testing.T) {
+	mount, ok, err := storageMountSpecFromMap(map[string]any{
+		"name":             "Team Data",
+		"claim_name":       "datasets-pvc",
+		"mount_path":       "/mnt/datasets",
+		"read_only":        "true",
+		"sub_path":         "team-a",
+		"source_namespace": "group-storage",
+		"source_pvc":       "datasets-source",
+		"target_pvc":       "datasets-pvc",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || mount.Name != "team-data" || mount.ClaimName != "datasets-pvc" ||
+		mount.MountPath != "/mnt/datasets" || !mount.ReadOnly || mount.SubPath != "team-a" ||
+		mount.SourceNamespace != "group-storage" || mount.SourcePVC != "datasets-source" || mount.TargetPVC != "datasets-pvc" {
+		t.Fatalf("mount = %#v, want manifest mount with share details", mount)
+	}
+
+	opOnly, ok, err := storageMountSpecFromMap(map[string]any{
+		"source_namespace": "group-storage",
+		"source_pvc":       "datasets-source",
+		"target_pvc":       "datasets-pvc",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || opOnly.ClaimName != "" || opOnly.SourcePVC != "datasets-source" || opOnly.TargetPVC != "datasets-pvc" {
+		t.Fatalf("opOnly = %#v, want PVC share operation-only spec", opOnly)
+	}
+
+	empty, ok, err := storageMountSpecFromMap(map[string]any{"ignored": true})
+	if err != nil || ok || empty != (storageMountSpec{}) {
+		t.Fatalf("empty = %#v ok=%v err=%v, want ignored", empty, ok, err)
+	}
+}
+
+func TestStorageMountSpecFromMapRejectsInvalidShapes(t *testing.T) {
+	tests := []map[string]any{
+		{"claim_name": "datasets-pvc"},
+		{"mount_path": "/mnt/datasets"},
+		{"source_pvc": "datasets-source", "target_pvc": "datasets-pvc"},
+	}
+	for _, tc := range tests {
+		if _, _, err := storageMountSpecFromMap(tc); !errors.Is(err, cluster.ErrInvalidManifest) {
+			t.Fatalf("storageMountSpecFromMap(%#v) err = %v, want invalid manifest", tc, err)
+		}
+	}
+}
+
+func TestPVCMountOpsFromSpecsDedupesAndFilters(t *testing.T) {
+	ops := pvcMountOpsFromSpecs([]storageMountSpec{
+		{SourceNamespace: "group-storage", SourcePVC: "datasets-source", TargetPVC: "datasets-pvc"},
+		{SourceNamespace: "group-storage", SourcePVC: "datasets-source", TargetPVC: "datasets-pvc", MountPath: "/mnt/datasets"},
+		{SourceNamespace: "group-storage", SourcePVC: "", TargetPVC: "skip"},
+	})
+	if len(ops) != 1 || ops[0].sourceNamespace != "group-storage" || ops[0].sourcePVC != "datasets-source" || ops[0].targetPVC != "datasets-pvc" {
+		t.Fatalf("ops = %#v, want one deduped PVC mount op", ops)
+	}
+}
+
+func TestExistingStorageMountMergeBranches(t *testing.T) {
+	existing := map[string]any{"name": "datasets", "mountPath": "/mnt/datasets"}
+	if err := mergeExistingStorageMount(existing, storageMountSpec{Name: "datasets", MountPath: "/mnt/datasets", ReadOnly: true, SubPath: "team-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if existing["readOnly"] != true || existing["subPath"] != "team-a" {
+		t.Fatalf("existing = %#v, want readOnly and subPath merged", existing)
+	}
+	if err := mergeExistingStorageMount(existing, storageMountSpec{Name: "datasets", MountPath: "/different"}); !errors.Is(err, cluster.ErrInvalidManifest) {
+		t.Fatalf("err = %v, want mountPath conflict", err)
+	}
+	if err := mergeExistingStorageSubPath(existing, storageMountSpec{Name: "datasets", SubPath: "other"}); !errors.Is(err, cluster.ErrInvalidManifest) {
+		t.Fatalf("err = %v, want subPath conflict", err)
+	}
+}
+
+func TestCollectDispatchPVCClaimNamesWalksNestedSpecs(t *testing.T) {
+	claims := collectDispatchPVCClaimNames([]dispatchResource{{
+		Name: "deploy",
+		Kind: "Deployment",
+		Raw: []byte(`{
+			"apiVersion":"apps/v1",
+			"kind":"Deployment",
+			"spec":{"template":{"spec":{"volumes":[
+				{"name":"data","persistentVolumeClaim":{"claimName":"datasets-pvc"}},
+				{"name":"empty","emptyDir":{}}
+			],"containers":[{"name":"main"}]}}}
+		}`),
+	}, {
+		Name: "bad",
+		Kind: "Pod",
+		Raw:  []byte(`{bad-json`),
+	}})
+	if _, ok := claims["datasets-pvc"]; !ok || len(claims) != 1 {
+		t.Fatalf("claims = %#v, want nested deployment PVC only", claims)
+	}
+}

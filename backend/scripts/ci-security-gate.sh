@@ -23,6 +23,8 @@ TEST_OBJECT_STORE_SECRET_KEY="${TEST_OBJECT_STORE_SECRET_KEY:-nexuspaas-secret}"
 TEST_OBJECT_STORE_BUCKET="${TEST_OBJECT_STORE_BUCKET:-media-e2e}"
 TEST_RUNTIME_API_KEY="${TEST_RUNTIME_API_KEY:-smoke-api-key}"
 TEST_RUNTIME_SERVICE_KEY="${TEST_RUNTIME_SERVICE_KEY:-smoke-service-key}"
+COLLAB_SMOKE_ADMIN_PRINCIPAL_ID="${COLLAB_SMOKE_ADMIN_PRINCIPAL_ID:-smoke-admin}"
+COLLAB_SMOKE_SERVICE_PRINCIPAL_ID="${COLLAB_SMOKE_SERVICE_PRINCIPAL_ID:-smoke-service}"
 
 CI_GATE_COVERAGE_THRESHOLD="${CI_GATE_COVERAGE_THRESHOLD:-80.0}"
 CI_GATE_CLEANUP="${CI_GATE_CLEANUP:-1}"
@@ -40,6 +42,8 @@ POSTGRES_CONTAINER="nexuspaas-ci-postgres-${RUN_SUFFIX}"
 REDIS_CONTAINER="nexuspaas-ci-redis-${RUN_SUFFIX}"
 MINIO_CONTAINER="nexuspaas-ci-minio-${RUN_SUFFIX}"
 BACKEND_IMAGE="${BACKEND_IMAGE:-nexuspaas-backend:ci-${RUN_SUFFIX}}"
+COLLAB_COMPOSE_FILE="${BACKEND_DIR}/deploy/local/collaboration-smoke.compose.yml"
+COLLAB_COMPOSE_PROJECT="${COLLAB_COMPOSE_PROJECT:-nexuspaas-collab-${RUN_SUFFIX}}"
 RUNTIME_PID=""
 
 FOCUSED_E2E_PATTERN='TestServiceRouteIsolationContract|TestServiceIsolationValidationE2E|TestIsolatedRuntimeRegistrationE2E|TestProviderConsumerContractMatrix|TestCriticalCrossServiceJourneys|TestSchedulerAdmissionOwnerReadContractsE2E|TestNonBlobIsolatedServiceIgnoresObjectStoreConfigE2E|TestStorageMountPlanContractE2E'
@@ -75,6 +79,10 @@ docker_cli() {
   DOCKER_CONFIG="${DOCKER_CONFIG_DIR}" docker "$@"
 }
 
+docker_compose() {
+  docker compose "$@"
+}
+
 cleanup_runtime() {
   if [ -n "${RUNTIME_PID}" ] && kill -0 "${RUNTIME_PID}" >/dev/null 2>&1; then
     kill "${RUNTIME_PID}" >/dev/null 2>&1 || true
@@ -91,8 +99,20 @@ cleanup_containers() {
   docker_cli rm -f "${MINIO_CONTAINER}" "${REDIS_CONTAINER}" "${POSTGRES_CONTAINER}" >/dev/null 2>&1 || true
 }
 
+cleanup_collaboration_compose() {
+  if [ ! -f "${COLLAB_COMPOSE_FILE}" ]; then
+    return
+  fi
+  if [ "${CI_GATE_CLEANUP}" != "1" ]; then
+    log "Leaving collaboration compose project for inspection: ${COLLAB_COMPOSE_PROJECT}"
+    return
+  fi
+  docker_compose -p "${COLLAB_COMPOSE_PROJECT}" -f "${COLLAB_COMPOSE_FILE}" down -v --remove-orphans >/dev/null 2>&1 || true
+}
+
 cleanup_gate() {
   cleanup_runtime
+  cleanup_collaboration_compose
   cleanup_containers
 }
 
@@ -102,10 +122,10 @@ Usage: backend/scripts/ci-security-gate.sh <quick|docker|security|sonar|beta-rc|
 
 Subcommands:
   quick     gofmt check, go vet, go test, go build from backend/
-  docker    Docker-backed migrations, integration coverage, focused E2E, full non-live E2E, runtime smoke
+  docker    Docker-backed migrations, integration coverage, focused E2E, full non-live E2E, routing smoke, 15-service collaboration smoke
   security  govulncheck, OSV source scan, backend image build, Trivy image scan
   sonar     SonarScanner with Quality Gate wait when configured or required
-  beta-rc   quick, production-beta render/dry-run/rollback rehearsal, docker/runtime smoke, security, sonar, RC report
+  beta-rc   quick, production-beta render/dry-run/rollback rehearsal, docker/routing/collaboration smoke, security, sonar, RC report
   all       quick, docker, security, sonar
 USAGE
 }
@@ -382,6 +402,244 @@ EOF
   cleanup_runtime
 }
 
+collaboration_service_names() {
+  cat <<'EOF'
+audit-compliance-service
+authorization-policy-service
+ide-service
+identity-service
+image-registry-service
+integration-proxy-service
+k8s-control-service
+media-upload-service
+org-project-service
+platform-gateway
+request-notification-service
+scheduler-quota-service
+storage-service
+usage-observability-service
+workload-service
+EOF
+}
+
+json_string() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  printf '"%s"' "${value}"
+}
+
+collaboration_service_urls_json() {
+  local first=1 service
+  printf '{'
+  while IFS= read -r service; do
+    [ -n "${service}" ] || continue
+    if [ "${first}" = "0" ]; then
+      printf ','
+    fi
+    first=0
+    json_string "${service}"
+    printf ':'
+    json_string "http://${service}:8080"
+  done < <(collaboration_service_names)
+  printf '}'
+}
+
+collaboration_api_key_principals_json() {
+  printf '{'
+  json_string "${TEST_RUNTIME_API_KEY}"
+  printf ':{"id":'
+  json_string "${COLLAB_SMOKE_ADMIN_PRINCIPAL_ID}"
+  printf ',"username":'
+  json_string "${COLLAB_SMOKE_ADMIN_PRINCIPAL_ID}"
+  printf ',"role":"admin","admin":true,"scopes":["*"]},'
+  json_string "${TEST_RUNTIME_SERVICE_KEY}"
+  printf ':{"id":'
+  json_string "${COLLAB_SMOKE_SERVICE_PRINCIPAL_ID}"
+  printf ',"username":'
+  json_string "${COLLAB_SMOKE_SERVICE_PRINCIPAL_ID}"
+  printf ',"role":"service","scopes":["*"]}}'
+}
+
+compose_host_port() {
+  local service="$1"
+  local target="$2"
+  local endpoint port
+  endpoint="$(docker_compose -p "${COLLAB_COMPOSE_PROJECT}" -f "${COLLAB_COMPOSE_FILE}" port "${service}" "${target}" | tail -n 1)"
+  [ -n "${endpoint}" ] || die "compose service ${service} does not expose ${target}"
+  port="${endpoint##*:}"
+  [ -n "${port}" ] || die "could not parse host port from ${endpoint}"
+  printf '%s\n' "${port}"
+}
+
+collaboration_host_service_urls_json() {
+  local first=1 service port
+  printf '{'
+  while IFS= read -r service; do
+    [ -n "${service}" ] || continue
+    port="$(compose_host_port "${service}" 8080)"
+    if [ "${first}" = "0" ]; then
+      printf ','
+    fi
+    first=0
+    json_string "${service}"
+    printf ':'
+    json_string "http://127.0.0.1:${port}"
+  done < <(collaboration_service_names)
+  printf '}'
+}
+
+wait_for_compose_http() {
+  local service="$1"
+  local url="$2"
+  local attempt
+  for attempt in $(seq 1 90); do
+    if curl -fsS "${url}/healthz" >/dev/null 2>&1; then
+      log "${service} is healthy at ${url}"
+      return 0
+    fi
+    sleep 1
+  done
+  docker_compose -p "${COLLAB_COMPOSE_PROJECT}" -f "${COLLAB_COMPOSE_FILE}" logs --no-color "${service}" >&2 || true
+  die "${service} did not become healthy at ${url}"
+}
+
+wait_for_collaboration_services() {
+  local service port url
+  while IFS= read -r service; do
+    [ -n "${service}" ] || continue
+    port="$(compose_host_port "${service}" 8080)"
+    url="http://127.0.0.1:${port}"
+    wait_for_compose_http "${service}" "${url}"
+  done < <(collaboration_service_names)
+}
+
+run_collaboration_missing_service_urls_check() {
+  local log_file="${ARTIFACT_DIR}/collaboration-missing-service-urls.log"
+  local container status exit_code attempt
+
+  log "Checking isolated scheduler-quota fails closed without required SERVICE_URLS"
+  container="$(
+    docker_compose -p "${COLLAB_COMPOSE_PROJECT}" -f "${COLLAB_COMPOSE_FILE}" run -d --no-deps \
+      -e SERVICE_NAME=scheduler-quota-service \
+      -e "SERVICE_URLS={}" \
+      scheduler-quota-service
+  )"
+  for attempt in $(seq 1 20); do
+    status="$(docker_cli inspect -f '{{.State.Status}}' "${container}" 2>/dev/null || true)"
+    if [ "${status}" = "exited" ]; then
+      break
+    fi
+    sleep 1
+  done
+  docker_cli logs "${container}" >"${log_file}" 2>&1 || true
+  status="$(docker_cli inspect -f '{{.State.Status}}' "${container}" 2>/dev/null || true)"
+  if [ "${status}" != "exited" ]; then
+    docker_cli rm -f "${container}" >/dev/null 2>&1 || true
+    die "scheduler-quota-service started without required SERVICE_URLS"
+  fi
+  exit_code="$(docker_cli inspect -f '{{.State.ExitCode}}' "${container}" 2>/dev/null || printf '0')"
+  docker_cli rm -f "${container}" >/dev/null 2>&1 || true
+  if [ "${exit_code}" = "0" ]; then
+    die "scheduler-quota-service exited successfully without required SERVICE_URLS"
+  fi
+  grep -Eiq 'service isolation|SERVICE_URLS|owner-read|scheduler-quota-service' "${log_file}" \
+    || die "missing SERVICE_URLS check failed without actionable service-isolation log"
+}
+
+run_compose_collaboration_smoke() {
+  need_cmd docker
+  need_cmd go
+  need_cmd curl
+  [ -f "${COLLAB_COMPOSE_FILE}" ] || die "missing collaboration compose file: ${COLLAB_COMPOSE_FILE}"
+
+  local service_urls principals host_urls
+  local postgres_port redis_port minio_port
+  local database_url redis_url event_bus_url object_store_url
+  local service_array=()
+  local service
+  local log_file="${ARTIFACT_DIR}/collaboration-smoke.log"
+  local compose_log="${ARTIFACT_DIR}/collaboration-compose.log"
+  local summary_json="${ARTIFACT_DIR}/collaboration-smoke-summary.json"
+  local summary_md="${ARTIFACT_DIR}/collaboration-smoke-summary.md"
+  local test_status
+
+  while IFS= read -r service; do
+    [ -n "${service}" ] && service_array+=("${service}")
+  done < <(collaboration_service_names)
+
+  service_urls="$(collaboration_service_urls_json)"
+  principals="$(collaboration_api_key_principals_json)"
+
+  export BACKEND_IMAGE
+  export TEST_POSTGRES_PASSWORD
+  export TEST_OBJECT_STORE_ACCESS_KEY
+  export TEST_OBJECT_STORE_SECRET_KEY
+  export TEST_OBJECT_STORE_BUCKET
+  export TEST_RUNTIME_API_KEY
+  export TEST_RUNTIME_SERVICE_KEY
+  export COLLAB_SERVICE_URLS="${service_urls}"
+  export COLLAB_API_KEY_PRINCIPALS="${principals}"
+
+  log "Building backend image ${BACKEND_IMAGE} for collaboration smoke"
+  docker_cli build -t "${BACKEND_IMAGE}" "${BACKEND_DIR}"
+
+  log "Starting collaboration backing services via compose project ${COLLAB_COMPOSE_PROJECT}"
+  docker_compose -p "${COLLAB_COMPOSE_PROJECT}" -f "${COLLAB_COMPOSE_FILE}" up -d postgres redis minio
+
+  log "Applying migrations in collaboration topology"
+  docker_compose -p "${COLLAB_COMPOSE_PROJECT}" -f "${COLLAB_COMPOSE_FILE}" --profile tasks run --rm migrate
+
+  log "Ensuring collaboration object-store bucket"
+  docker_compose -p "${COLLAB_COMPOSE_PROJECT}" -f "${COLLAB_COMPOSE_FILE}" --profile tasks run --rm ensure-object-store-bucket
+
+  run_collaboration_missing_service_urls_check
+
+  log "Starting 15 isolated backend service containers"
+  docker_compose -p "${COLLAB_COMPOSE_PROJECT}" -f "${COLLAB_COMPOSE_FILE}" up -d "${service_array[@]}"
+  wait_for_collaboration_services
+
+  postgres_port="$(compose_host_port postgres 5432)"
+  redis_port="$(compose_host_port redis 6379)"
+  minio_port="$(compose_host_port minio 9000)"
+  database_url="postgres://nexuspaas:${TEST_POSTGRES_PASSWORD}@127.0.0.1:${postgres_port}/nexuspaas?sslmode=disable"
+  redis_url="redis://127.0.0.1:${redis_port}/0"
+  event_bus_url="redis://127.0.0.1:${redis_port}/1"
+  object_store_url="http://127.0.0.1:${minio_port}"
+  host_urls="$(collaboration_host_service_urls_json)"
+
+  log "Running 15-service collaboration smoke"
+  set +e
+  run_backend env \
+    COMPOSE_COLLABORATION_SMOKE=1 \
+    COMPOSE_COLLABORATION_PROJECT="${COLLAB_COMPOSE_PROJECT}" \
+    COMPOSE_COLLABORATION_FILE="${COLLAB_COMPOSE_FILE}" \
+    COLLAB_SMOKE_RUN_ID="${RUN_SUFFIX}" \
+    COLLAB_SMOKE_ADMIN_PRINCIPAL_ID="${COLLAB_SMOKE_ADMIN_PRINCIPAL_ID}" \
+    COLLAB_SMOKE_SERVICE_PRINCIPAL_ID="${COLLAB_SMOKE_SERVICE_PRINCIPAL_ID}" \
+    COLLAB_SMOKE_SERVICE_URLS="${host_urls}" \
+    COLLAB_SMOKE_DATABASE_URL="${database_url}" \
+    COLLAB_SMOKE_REDIS_URL="${redis_url}" \
+    COLLAB_SMOKE_EVENT_BUS_URL="${event_bus_url}" \
+    COLLAB_SMOKE_OBJECT_STORE_URL="${object_store_url}" \
+    COLLAB_SMOKE_SUMMARY_JSON="${summary_json}" \
+    COLLAB_SMOKE_SUMMARY_MD="${summary_md}" \
+    TEST_RUNTIME_API_KEY="${TEST_RUNTIME_API_KEY}" \
+    TEST_RUNTIME_SERVICE_KEY="${TEST_RUNTIME_SERVICE_KEY}" \
+    TEST_OBJECT_STORE_ACCESS_KEY="${TEST_OBJECT_STORE_ACCESS_KEY}" \
+    TEST_OBJECT_STORE_SECRET_KEY="${TEST_OBJECT_STORE_SECRET_KEY}" \
+    TEST_OBJECT_STORE_BUCKET="${TEST_OBJECT_STORE_BUCKET}" \
+    go test -tags e2e ./internal/e2e -run '^TestComposeCollaborationSmoke$' -count=1 -v 2>&1 | tee "${log_file}"
+  test_status=${PIPESTATUS[0]}
+  set -e
+
+  docker_compose -p "${COLLAB_COMPOSE_PROJECT}" -f "${COLLAB_COMPOSE_FILE}" logs --no-color >"${compose_log}" 2>&1 || true
+  if [ "${test_status}" -ne 0 ]; then
+    die "15-service collaboration smoke failed; see ${log_file} and ${summary_md}"
+  fi
+}
+
 run_docker_gate() {
   need_cmd go
   start_backing_services
@@ -390,6 +648,7 @@ run_docker_gate() {
   run_focused_e2e
   run_full_non_live_e2e
   run_runtime_smoke
+  run_compose_collaboration_smoke
 }
 
 service_manifest_names() {
@@ -657,7 +916,7 @@ write_beta_rc_report() {
     printf -- '- Production-beta manifest deploy dry-run: passed\n'
     printf -- '- Production-beta rollback command rehearsal: passed\n'
     printf -- '- Production-beta re-deploy dry-run: passed\n'
-    printf -- '- Docker-backed migrations, integration coverage, focused E2E, full non-live E2E, and runtime smoke: passed\n'
+    printf -- '- Docker-backed migrations, integration coverage, focused E2E, full non-live E2E, routing smoke, and 15-service collaboration smoke: passed\n'
     printf -- '- Security gate: passed\n'
     printf -- '- Sonar gate: %s\n\n' "${sonar_status}"
     printf '## Key Artifacts\n\n'
@@ -670,9 +929,13 @@ write_beta_rc_report() {
     printf -- '- Focused E2E log: `%s`\n' "${ARTIFACT_DIR}/focused-e2e.log"
     printf -- '- Full E2E log: `%s`\n' "${ARTIFACT_DIR}/full-e2e.log"
     printf -- '- Runtime smoke log: `%s`\n' "${ARTIFACT_DIR}/runtime-smoke.log"
-    printf -- '- Runtime log: `%s`\n\n' "${ARTIFACT_DIR}/runtime.log"
+    printf -- '- Runtime log: `%s`\n' "${ARTIFACT_DIR}/runtime.log"
+    printf -- '- Collaboration smoke log: `%s`\n' "${ARTIFACT_DIR}/collaboration-smoke.log"
+    printf -- '- Collaboration smoke summary: `%s`\n' "${ARTIFACT_DIR}/collaboration-smoke-summary.md"
+    printf -- '- Collaboration smoke JSON: `%s`\n' "${ARTIFACT_DIR}/collaboration-smoke-summary.json"
+    printf -- '- Collaboration compose log: `%s`\n\n' "${ARTIFACT_DIR}/collaboration-compose.log"
     printf '## Live Staging Caveat\n\n'
-    printf 'This gate is non-live by default. External Production Beta traffic still requires a live staging rehearsal with real secrets, ready pods, 15-service health/ready/metrics smoke, rollback, and re-deploy evidence.\n'
+    printf 'This gate is non-live by default. It validates the local 15-service Docker collaboration topology. External Production Beta traffic still requires a live staging rehearsal with real secrets, ready pods, 15-service health/ready/metrics smoke, rollback, and re-deploy evidence.\n'
   } >"${report}"
   log "Beta RC report written to ${report}"
 }
