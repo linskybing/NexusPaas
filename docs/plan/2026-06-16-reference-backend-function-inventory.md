@@ -1,205 +1,208 @@
-# Reference Backend Function Inventory
+# Current Backend Function Inventory
 
 ## 1. Objective
 
-Create a documentation-only function inventory at `/Users/sky/workspaces/function.md` that maps the reference backend capabilities to the target microservice catalog for future development planning.
+Create `/Users/sky/workspaces/function.md` as the single current-backend
+capability inventory for NexusPaas Production Beta planning. The document must
+map implemented and documented capabilities to the existing 15-service catalog,
+show route/event/background-worker coverage, and identify ownership,
+dependencies, and unresolved parity risks.
 
 ## 2. Background
 
-The repository contains the legacy/reference Go backend under `references/CSCC_AI_Platform_Backend` and a target microservice architecture under `backend/`. The requested output is a capability inventory, not a code migration. It must preserve the current route/function coverage while assigning each capability to the existing bounded-context service catalog.
+`problem.md` currently lists missing `function.md` as a High blocker because
+there is no single capability inventory for launch readiness and parity
+planning. The previous plan assumed the legacy reference snapshot at
+`references/CSCC_AI_Platform_Backend` was present, but the current repository
+state does not contain that snapshot. This PR must therefore not claim live
+reference parity. It will close only the missing-inventory blocker by creating a
+current-backend source of truth, while leaving the missing reference snapshot as
+a separate launch risk.
 
 ## 3. Source References
 
-- `references/CSCC_AI_Platform_Backend/README.md`
-- `references/CSCC_AI_Platform_Backend/docs/en/02_architecture.md`
-- `references/CSCC_AI_Platform_Backend/internal/api/routes/*.go`
-- `references/CSCC_AI_Platform_Backend/internal/plugin/builtin/job/plugin.go`
-- `references/CSCC_AI_Platform_Backend/internal/api/openapi/spec/paths/*.yaml`
-- `references/CSCC_AI_Platform_Backend/internal/api/routes/background.go`
-- `references/CSCC_AI_Platform_Backend/internal/domain/*`
-- `references/CSCC_AI_Platform_Backend/internal/repository/*.go`
+- `problem.md`
 - `backend/README.md`
 - `backend/docs/api-route-mapping.md`
 - `backend/docs/event-contracts.md`
 - `backend/docs/migration-roadmap.md`
+- `backend/docs/non-functional-requirements.md`
+- `backend/docs/operational-readiness.md`
+- `backend/docs/beta-launch-readiness.md`
+- `backend/internal/services/catalog.go`
 - `backend/*-service/README.md`
 - `backend/platform-gateway/README.md`
 
 ## 4. Assumptions
 
-- `function.md` should be created at the workspace root: `/Users/sky/workspaces/function.md`.
-- Existing dirty worktree changes are user-owned and must not be reverted or reformatted.
-- `references/CSCC_AI_Platform_Backend` is the feature source of truth.
-- Current `backend/` service docs are used only to assign target microservice boundaries.
-- The document should use the existing 15-service catalog and avoid proposing new services.
-- This task is documentation-only; no production code, schema, config, or deployment file changes are required.
+- `references/CSCC_AI_Platform_Backend` is unavailable in the current worktree.
+- `function.md` should be created at the repository root.
+- The inventory uses the existing 15-service catalog and does not introduce new
+  service boundaries.
+- This is a documentation and launch-readiness bookkeeping change only.
+- Existing local `long-term.md` is user-owned and remains untracked.
 
 ## 5. Non-Goals
 
-- Do not implement or refactor microservices.
-- Do not modify existing source code, tests, service READMEs, deployment manifests, migrations, or route mappings.
-- Do not redesign service boundaries beyond the existing 15-service catalog.
-- Do not generate OpenAPI files or service contracts.
-- Do not run code formatters or code generators.
+- Do not implement, refactor, or re-route services.
+- Do not modify migrations, Kubernetes manifests, CI scripts, runtime config, or
+  production code.
+- Do not claim reference parity without the missing reference snapshot.
+- Do not invent additional services or split by controller/table.
+- Do not remove live staging, observability provisioning, coverage, or data
+  boundary risks from `problem.md`.
 
 ## 6. Current Behavior
 
-Reference backend functionality is spread across route files, the job plugin, OpenAPI path fragments, application/domain/repository modules, cron tasks, and existing microservice planning documents. There is no single `function.md` that lists all capabilities and maps them to target services.
+The repository has route mapping, service README files, event contracts,
+operational readiness docs, and the service catalog, but there is no single
+`function.md` that gives reviewers and launch owners a current capability
+inventory. `problem.md` therefore still reports missing capability inventory as
+a High blocker.
 
 ## 7. Target Behavior
 
-`function.md` provides a concise but complete function table for microservice development. It maps each capability to a target service, current routes/jobs/events, owned data, dependencies, and notes. It separately covers non-HTTP behavior such as cron tasks, collectors, dispatchers, reapers, policy sync, OIDC provider flows, JWT-only proxies, WebSockets, and audit/event obligations.
+`function.md` provides a concise but complete current-backend inventory. It
+must:
+
+- list all 15 target services,
+- group user-visible and operational capabilities by domain,
+- map each capability to target service, route/job/event evidence, owned data,
+  dependencies, and notes,
+- separately list non-HTTP background jobs and maintenance workers,
+- identify gateway/security/audit obligations,
+- state that reference parity is still unverified because the reference snapshot
+  is absent.
+
+`problem.md` should then downgrade the `function.md` blocker to resolved
+evidence while preserving the separate reference snapshot blocker.
 
 ## 8. Affected Domains
 
 - Platform gateway and edge routing
-- Identity and account management
-- Authorization and policy
-- Organization, groups, projects, and tenancy
-- Workloads, config files, jobs, scheduler, quota, and priority
-- Kubernetes control and IDE workspaces
-- Storage, image registry, media upload, and integration proxies
-- Usage, dashboard, audit, notifications, and compliance
+- Identity, account management, OIDC, and user API tokens
+- Authorization policy, domain RBAC, proxy RBAC, and policy sync
+- Organization, groups, projects, membership, and tenancy
+- Workload config, jobs, scheduling, quota, and Kubernetes control
+- IDE workspaces, storage, image registry, media upload, integrations
+- Usage/dashboard, audit/compliance, requests, notifications, announcements
+- Production Beta release governance and problem tracking
 
 ## 9. Affected Files
 
-- Add `docs/plan/2026-06-16-reference-backend-function-inventory.md`
+- Update `docs/plan/2026-06-16-reference-backend-function-inventory.md`
 - Add `function.md`
+- Update `problem.md`
 
 ## 10. API / Contract Changes
 
-None. This is a documentation inventory only. Existing public `/api/v1` routes, WebSocket paths, proxy paths, OpenAPI behavior, and response contracts remain unchanged.
+None. Existing external `/api/v1` routes, internal owner-read contracts,
+background workers, events, and response contracts are not changed. The
+inventory documents current contracts only.
 
 ## 11. Database / Migration Changes
 
-None. The inventory will mention owned data areas, but it will not create migrations, change schemas, or alter data ownership in code.
+None. The inventory names owned data areas but does not change schemas,
+migrations, ownership, or storage behavior.
 
 ## 12. Configuration Changes
 
-None. The inventory may mention config-driven background jobs and external dependencies, but no environment variables, ConfigMaps, Secrets, or deployment settings will change.
+None. The inventory can mention operational dependencies and configuration
+surfaces, but no environment variables, ConfigMaps, Secrets, or deployment
+files change.
 
 ## 13. Observability Changes
 
-None in runtime behavior. The inventory will document observability-related capabilities such as metrics, traces, audit events, usage collectors, dashboards, and background worker monitoring.
+No runtime telemetry changes. The inventory documents existing observability,
+audit, usage, metrics, dashboard, and synthetic-smoke expectations so launch
+review can trace capabilities to operational evidence.
 
 ## 14. Security Considerations
 
-The document must preserve security-relevant distinctions:
-
-- Gateway/API key/JWT/User API Token entry points.
-- JWT-only browser routes for proxies, WebSockets, IDE, FileBrowser, and image serving.
-- Centralized authorization-policy ownership for Casbin, domain RBAC, and proxy RBAC.
-- AuditEvent obligations for administrative operations, permission changes, and important Job/Storage/Image lifecycle events.
-- No secrets or credentials should be added to the document.
+- Preserve the distinction between gateway auth, service-to-service owner reads,
+  JWT-only browser/proxy routes, OIDC, API tokens, and proxy RBAC.
+- Mark admin, permission-changing, tenant-changing, job/storage/image, and
+  integration operations as audit-relevant where applicable.
+- Do not add credentials, tokens, secret values, or example production secrets.
+- Do not weaken `problem.md` security or live staging blockers.
 
 ## 15. Implementation Steps
 
-1. Create this Draft plan file under `docs/plan/`.
-2. Run Reviewer Agent plan review and revise until `Status: Approved`.
-3. Create `/Users/sky/workspaces/function.md` after plan approval.
-4. Build the function inventory using the existing 15-service catalog:
-   - `platform-gateway`
-   - `identity-service`
-   - `authorization-policy-service`
-   - `org-project-service`
-   - `workload-service`
-   - `scheduler-quota-service`
-   - `k8s-control-service`
-   - `ide-service`
-   - `storage-service`
-   - `image-registry-service`
-   - `usage-observability-service`
-   - `audit-compliance-service`
-   - `request-notification-service`
-   - `integration-proxy-service`
-   - `media-upload-service`
-5. Include function table columns:
-   - `ID`
-   - `Domain`
-   - `Function`
-   - `Target Microservice`
-   - `Current Routes / Jobs / Events`
-   - `Owned Data`
-   - `Dependencies`
-   - `Notes`
-6. Cover these capability groups:
-   - auth/session/API tokens/CLI/OIDC/users
-   - RBAC/Casbin/proxy RBAC/policy sync
-   - groups/user-groups/projects/members/workspace settings/GPU claims
-   - configfiles/jobs/job GPU views
-   - plans/queues/quota/preemption/priority
-   - K8s logs/resources/WebSockets/cluster state
-   - IDE lifecycle/proxy/idle reaping
-   - user/group/project storage/FileBrowser/fast transfer/Longhorn validation
-   - image requests/builds/catalog/Harbor governance
-   - usage/dashboard/resource-hours/GPU snapshots
-   - audit/report/security posture
-   - forms/notifications/announcements
-   - external UI proxies/VPN
-   - media upload/serve
-   - gateway health/metrics/OpenAPI/routing
-7. Add a separate non-HTTP coverage checklist for background jobs:
-   - audit cleanup
-   - Harbor health checks
-   - LDAP mirror sync
-   - cluster resource collector
-   - GPU usage collector
-   - resource hours collector
-   - resource quota reconciler
-   - priority class sync
-   - idle reaper
-   - plan window reaper
-   - workload runtime reaper
-   - policy data sync
-   - Longhorn RWX health reconciler
-   - VPN usage collector
-   - queue metrics collector
-   - job dispatcher
-8. Verify route/service/background coverage.
-9. Run Reviewer Agent implementation review and address any requested documentation fixes.
+1. Revise this plan to reflect the current repository state and the missing
+   reference snapshot.
+2. Obtain Reviewer Agent approval before creating `function.md`.
+3. Add `function.md` with:
+   - launch-readiness scope and evidence limits,
+   - 15-service catalog summary,
+   - capability inventory table,
+   - non-HTTP/background-worker checklist,
+   - cross-service contract and audit/security notes,
+   - remaining gaps.
+4. Update `problem.md`:
+   - mark capability inventory as resolved with `function.md` evidence,
+   - keep missing reference snapshot as a High launch blocker,
+   - keep other blockers unchanged unless wording must reference the new file.
+5. Run focused verification.
+6. Submit implementation to Reviewer Agent and fix any requested changes.
 
 ## 16. Verification Plan
 
-- Compare `function.md` rows against route scopes extracted from `references/CSCC_AI_Platform_Backend/internal/api/routes/*.go`.
-- Compare job rows against `references/CSCC_AI_Platform_Backend/internal/plugin/builtin/job/plugin.go`.
-- Compare route coverage against OpenAPI path fragments in `references/CSCC_AI_Platform_Backend/internal/api/openapi/spec/paths/*.yaml`.
-- Confirm every route scope in `backend/docs/api-route-mapping.md` maps to at least one function row.
-- Confirm every service README in `backend/` maps to at least one function row.
-- Confirm background jobs from `internal/api/routes/background.go` are listed outside the HTTP API table.
-- No code build is required because this is documentation-only.
+- `git diff --check`
+- `test -f function.md`
+- `for service in platform-gateway identity-service authorization-policy-service org-project-service workload-service scheduler-quota-service k8s-control-service ide-service storage-service image-registry-service usage-observability-service audit-compliance-service request-notification-service integration-proxy-service media-upload-service; do rg -q "$service" function.md || exit 1; done`
+- `for worker in "audit cleanup" "Harbor health" "LDAP mirror" "cluster resource collector" "GPU usage collector" "resource hours collector" "resource quota reconciler" "priority class sync" "idle reaper" "plan window reaper" "workload runtime reaper" "policy data sync" "Longhorn RWX" "VPN usage collector" "queue metrics collector" "job dispatcher"; do rg -qi "$worker" function.md || exit 1; done`
+- `rg -n "reference parity.*unverified|reference snapshot.*absent|references/CSCC_AI_Platform_Backend.*absent" function.md`
+- `rg -n "reference parity.*unverified|reference snapshot.*absent|references/CSCC_AI_Platform_Backend.*absent" problem.md`
+- `rg -n "\\| High \\| reference parity \\| .*references/CSCC_AI_Platform_Backend.*absent" problem.md`
+- `cd backend && go test ./internal/platform ./internal/services -count=1`
+- `cd backend && go vet ./...`
+- `cd backend && go build ./...`
+
+Full Docker-backed, security, and Sonar gates are not required for this
+documentation-only slice unless reviewer requests them; the previous `main`
+non-live RC evidence remains valid but will not be reused as proof for this PR's
+new file content.
 
 ## 17. Rollback Plan
 
-Rollback is limited to removing the newly added documentation files:
+Rollback is limited to reverting this documentation PR:
 
-- Remove `docs/plan/2026-06-16-reference-backend-function-inventory.md`
-- Remove `function.md`
+- remove `function.md`,
+- restore the previous plan wording,
+- restore the previous `problem.md` missing-inventory entry.
 
-No runtime or data rollback is needed.
+No runtime, data, migration, or deployment rollback is needed.
 
 ## 18. Risks and Tradeoffs
 
-- Risk: Missing non-route behavior if only HTTP paths are inventoried. Mitigation: include background jobs, plugin routes, events, domains, repositories, and service READMEs.
-- Risk: Over-splitting by controller or table. Mitigation: use existing bounded-context service catalog and capability-based grouping.
-- Risk: Dirty worktree contains unrelated changes. Mitigation: only add the two approved documentation files and do not edit existing files.
-- Tradeoff: The inventory is broad, so some rows group related endpoints instead of listing every method as a separate row. This keeps the document usable for microservice planning while preserving route references in each group.
+- Risk: Readers may mistake current-backend inventory for reference parity.
+  Mitigation: `function.md` and `problem.md` explicitly state reference parity is
+  unverified until the missing snapshot is restored.
+- Risk: A broad table becomes too large to maintain. Mitigation: group related
+  endpoints by capability and rely on route/service docs for exhaustive route
+  details.
+- Risk: Documentation drift. Mitigation: cite current route mapping, service
+  catalog, event contracts, and operational readiness docs as the evidence base.
+- Tradeoff: This PR closes the inventory blocker but does not resolve live
+  staging or reference parity.
 
 ## 19. Reviewer Checklist
 
 | Category | Check |
 | --- | --- |
-| Requirement Fit | `function.md` maps reference backend capabilities to target microservices. |
-| Scope Control | Only the plan file and `function.md` are changed. |
-| Architecture | Uses existing bounded-context service catalog, not controller/table splitting. |
-| API Contract | Documents current routes but changes no API contract. |
-| Data Ownership | Each row identifies owned data at a capability level. |
-| Config | No config changes. |
-| Observability | Background jobs, audit, usage, metrics, and dashboard capabilities are covered. |
-| Security | JWT-only routes, RBAC ownership, and audit obligations are preserved. |
-| Testing | Documentation verification checks route, service, OpenAPI, and background coverage. |
-| Rollback | Remove the two added documentation files. |
-| Diff Scope | No unrelated dirty files are touched. |
+| Requirement Fit | `function.md` exists and gives a current-backend capability inventory. |
+| Scope Control | Only plan/docs/problem tracking files change. |
+| Architecture | Inventory follows the existing 15-service bounded-context catalog. |
+| Microservice Boundary | No new service boundaries are introduced. |
+| API Contract | Routes/contracts are documented but not changed. |
+| Data Ownership | Each capability group identifies owned data at service level. |
+| Config | No runtime configuration changes are made. |
+| Observability | Background jobs, usage, metrics, audit, and synthetic smoke are represented. |
+| Security | Gateway auth, JWT-only routes, proxy RBAC, service auth, and audit obligations are preserved. |
+| Testing | Verification checks file existence, service/background coverage, diff cleanliness, and relevant Go packages. |
+| Rollback | Reverting documentation files is sufficient. |
+| Diff Scope | No unrelated files or untracked `long-term.md` are included. |
 
 ## 20. Status
 
-Status: Draft
+Status: Approved
