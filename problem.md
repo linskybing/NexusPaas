@@ -1,15 +1,17 @@
 # Backend Gap & Code Problem Review
 
-_Generated: 2026-06-17. Branch: `feature/beta-launch-hardening`._
+_Generated: 2026-06-17. Branch: `main`._
 
 ## 1. Summary
 
 The backend remains a single Go module with 15 logical services selected by
-`SERVICE_NAME`. This branch advances the Production Beta launch-hardening
-roadmap by adding a non-live release-candidate rehearsal gate. The gate ties
-quick checks, production-beta manifest render/deploy dry-run, rollback command
-planning, re-deploy dry-run, Docker-backed E2E, runtime smoke, security scans,
-Sonar, and an RC evidence report into one repeatable command.
+`SERVICE_NAME`. Main now contains the Production Beta readiness stack through
+PR #7. The stack adds 15-service production-beta manifests, CI/security gates,
+scheduler-quota owner-read boundary cleanup, operational readiness docs, and a
+non-live release-candidate rehearsal gate. The gate ties quick checks,
+production-beta manifest render/deploy dry-run, rollback command planning,
+re-deploy dry-run, Docker-backed E2E, runtime smoke, security scans, Sonar, and
+an RC evidence report into one repeatable command.
 
 What changed in the current stacked work:
 
@@ -44,6 +46,9 @@ What changed in the current stacked work:
   `/service-registry`, and one read-only endpoint for each of the 15 services
   must avoid 5xx.
 - Added `.gitignore` coverage for `backend/.e2e-gate/` local artifacts.
+- Preserved the remaining useful test coverage from superseded PR #2 before
+  closing it: Kubernetes native-object apply branches, RWX/Longhorn
+  volume-share helpers, and scheduler-quota workload eviction client contracts.
 
 ## 2. Current Verification
 
@@ -51,10 +56,10 @@ What changed in the current stacked work:
 | --- | --- | --- |
 | `go test ./internal/platform -run 'Deployment\|Operational\|Release\|Beta' -count=1` | Pass | Deployment hardening tests plus operational readiness and Beta RC docs/script guards |
 | `bash backend/scripts/ci-security-gate.sh quick` | Pass | gofmt, go vet, `go test ./... -count=1`, `go build ./...` |
-| `bash backend/scripts/ci-security-gate.sh docker` | Pass | Postgres/Redis/MinIO healthy; migrations apply/validate; integration total coverage 80.0%; focused E2E and full non-live E2E pass |
+| `bash backend/scripts/ci-security-gate.sh docker` | Pass | Postgres/Redis/MinIO healthy; migrations apply/validate; integration total coverage 80.5%; focused E2E, full non-live E2E, and runtime smoke pass |
 | `bash backend/scripts/ci-security-gate.sh security` | Pass | govulncheck: no vulnerabilities; OSV: no issues; Trivy image scan: 0 vulnerabilities |
 | `bash backend/scripts/ci-security-gate.sh sonar` | Pass | Sonar Quality Gate OK |
-| `bash backend/scripts/ci-security-gate.sh beta-rc` | Pass | Quick checks, production-beta manifest render/deploy dry-run, rollback plan, re-deploy dry-run, Docker E2E, runtime smoke, security scans, Sonar, and RC report all passed; runtime smoke verified core endpoints 200, 15 registered services, and no per-service smoke 5xx |
+| `bash backend/scripts/ci-security-gate.sh beta-rc` | Pass | Passed on main commit `d01fc55`; quick checks, production-beta manifest render/deploy dry-run, rollback plan, re-deploy dry-run, Docker E2E, runtime smoke, security scans, Sonar, and RC report all passed; runtime smoke verified core endpoints 200, 15 registered services, and no per-service smoke 5xx |
 
 ## 3. Resolved In This Branch
 
@@ -91,13 +96,13 @@ What changed in the current stacked work:
 
 ## 6. Reviewer Status
 
-Status: Changes Required
+Status: Non-live Production Beta RC gate passed on main; external Beta traffic
+is still blocked pending live staging evidence or explicit risk acceptance.
 
-Rationale: this branch's scheduler-quota boundary cleanup,
-observability/runbook contract, and non-live Beta RC gate are passing local
-quality, Docker-backed E2E, security scans, Sonar Quality Gate, and the new
-`beta-rc` rehearsal. The repository still has broader Production Beta blockers
-outside this PR: missing reference snapshot, missing `function.md`, unignored
-`.e2e-gate` artifacts, per-package coverage gaps, missing live dashboard/alert
+Rationale: main's scheduler-quota boundary cleanup, observability/runbook
+contract, production-beta manifest rehearsal, Docker-backed E2E, security scans,
+Sonar Quality Gate, and `beta-rc` rehearsal all pass. The repository still has
+broader Production Beta launch blockers: missing reference snapshot, missing
+`function.md`, per-package coverage gaps, missing live dashboard/alert
 provisioning, missing live staging rehearsal evidence, and remaining shared
 physical Postgres transition debt.
