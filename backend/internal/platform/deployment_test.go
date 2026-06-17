@@ -193,8 +193,12 @@ func TestProductionBetaObservabilityManifestsAreProvisioned(t *testing.T) {
 	requireContains(t, dashboardPath, dashboard, "Deployment availability")
 	requireContains(t, dashboardPath, dashboard, "Synthetic smoke failures")
 	requireContains(t, dashboardPath, dashboard, "nexuspaas_http_requests_total")
-	requireContains(t, dashboardPath, dashboard, "nexuspaas_http_request_duration_seconds_sum")
+	requireContains(t, dashboardPath, dashboard, "nexuspaas_http_request_duration_seconds_bucket")
+	requireContains(t, dashboardPath, dashboard, "histogram_quantile(0.95")
+	requireContains(t, dashboardPath, dashboard, "sum by (service, le)")
 	requireContains(t, dashboardPath, dashboard, "kube_deployment_status_replicas_available")
+	requireNotContains(t, dashboardPath, dashboard, "Mean request latency")
+	requireNotContains(t, dashboardPath, dashboard, "mean latency")
 
 	rulesPath := base + "/prometheus-rules.yaml"
 	rules := readTextFile(t, rulesPath)
@@ -209,7 +213,14 @@ func TestProductionBetaObservabilityManifestsAreProvisioned(t *testing.T) {
 	requireContains(t, rulesPath, rules, "key: bearer-token")
 	requireNotContains(t, rulesPath, rules, "bearerTokenSecret")
 	requireContains(t, rulesPath, rules, "NexusPaasCoreAvailabilityBurn")
+	requireContains(t, rulesPath, rules, "NexusPaasHighReadP95Latency")
+	requireContains(t, rulesPath, rules, "NexusPaasHighWriteP95Latency")
 	requireContains(t, rulesPath, rules, "NexusPaasSyntheticSmokeFailed")
+	requireContains(t, rulesPath, rules, "histogram_quantile(0.95")
+	requireContains(t, rulesPath, rules, "sum by (service, le)")
+	requireContains(t, rulesPath, rules, "nexuspaas_http_request_duration_seconds_bucket")
+	requireNotContains(t, rulesPath, rules, "HighMean")
+	requireNotContains(t, rulesPath, rules, "mean read latency")
 
 	syntheticPath := base + "/synthetic-smoke.yaml"
 	synthetic := readTextFile(t, syntheticPath)
