@@ -5,7 +5,7 @@ _Generated: 2026-06-17. Branch: `main`._
 ## 1. Summary
 
 The backend remains a single Go module with 15 logical services selected by
-`SERVICE_NAME`. Main contains the Production Beta readiness stack through PR #9:
+`SERVICE_NAME`. Main contains the Production Beta readiness stack through PR #12:
 15-service production-beta manifests, CI/security gates, scheduler-quota
 owner-read boundary cleanup, operational readiness docs, a non-live
 release-candidate rehearsal gate, and the current-backend capability inventory.
@@ -63,6 +63,11 @@ What changed in the current stacked work:
   scheduled synthetic smoke CronJob for the 15-service topology.
 - Added runtime HTTP duration histogram buckets and updated the observability
   overlay latency dashboard/alerts to use p95 `histogram_quantile` queries.
+- Added focused identity package tests for API-token middleware revocation,
+  internal API-token denylist enforcement, Dex/OIDC revocation registration,
+  auth cleanup registration, login captcha/lockout edges, admin credential
+  revocation, and helper/repository branches. `internal/services/identity` now
+  meets the per-package 80% target locally.
 
 ## 2. Current Verification
 
@@ -100,6 +105,8 @@ What changed in the current stacked work:
 | `git diff --check` | Pass | Histogram branch diff has no whitespace errors |
 | `bash backend/scripts/ci-security-gate.sh security` | Pass | govulncheck no vulnerabilities; OSV no issues; backend image build passes; Trivy reports 0 vulnerabilities |
 | `bash backend/scripts/ci-security-gate.sh sonar` | Pass | Local SonarScanner Quality Gate passed against `http://localhost:9000/dashboard?id=nexuspaas-backend` |
+| `go test ./internal/services/identity -coverprofile=/tmp/identity.cover -count=1` | Pass | `internal/services/identity` coverage is 80.3% |
+| `go tool cover -func=/tmp/identity.cover` | Pass | Identity package total coverage reports 80.3% |
 
 ## 3. Resolved In This Branch
 
@@ -117,13 +124,14 @@ What changed in the current stacked work:
 | GitHub Sonar no-secrets handling | GitHub-hosted runs failed at Sonar because the repository has no `SONAR_TOKEN` or `SONAR_HOST_URL` secrets | The workflow now skips Sonar only when no Sonar secrets are configured; any partial or configured Sonar setup remains fail-closed |
 | observability baseline provisioning | Dashboard, alert, authenticated scrape, and scheduled synthetic monitor resources were documented but not provisioned | `backend/deploy/observability/production-beta` now renders an optional Grafana/Prometheus Operator/CronJob overlay covering all 15 services without committing secrets |
 | metrics granularity | Runtime metrics exposed request counts and duration sums but no histogram buckets | `/metrics` now emits Prometheus-compatible HTTP duration buckets/count/sum; dashboard and alert rules use p95 `histogram_quantile` |
+| identity package coverage | `internal/services/identity` was below the per-package 80% target for a core IAM service | Focused identity tests now cover API-token current revocation, denylist behavior, OIDC/Dex revocation registration, auth cleanup, login edge cases, admin credential revocation, and helper/repository branches; local coverage is 80.3% |
 
 ## 4. Remaining Issues
 
 | Priority | Area | Problem | Impact | Recommended Next Step |
 | --- | --- | --- | --- | --- |
 | High | reference parity | `references/CSCC_AI_Platform_Backend` is absent, so live reference diff cannot be performed | Reference-only behavior gaps remain unknown | Restore/provision the reference snapshot before parity-sensitive launch review |
-| Medium | coverage | Several packages remain below the per-package 80% target, although integration total meets the CI gate | Per-component risk remains masked by aggregate coverage | Raise low packages, especially `cmd/microservice`, `identity`, and schedulerquota follow-up paths |
+| Medium | coverage | Several packages remain below the per-package 80% target, although integration total meets the CI gate; `internal/services/identity` is now at 80.3% locally | Per-component risk remains masked by aggregate coverage | Raise remaining low packages, especially `cmd/microservice` and other sub-80 service packages |
 | Medium | live observability activation | Baseline Grafana, PodMonitor, PrometheusRule, and synthetic CronJob manifests exist, but live cluster activation evidence has not been captured | Operators have provisionable resources but not proof that dashboards, alerts, scrape auth, and scheduled smoke are working in staging | Apply `backend/deploy/observability/production-beta` in staging with real secrets and capture dashboard/alert/CronJob evidence |
 | Medium | live staging rehearsal | The non-live Beta RC gate exists, but a real staging deploy/readiness/smoke/rollback/re-deploy rehearsal has not been captured | External Beta traffic remains blocked until real cluster evidence exists or the risk is explicitly accepted | Run the live staging checklist in `backend/docs/beta-launch-readiness.md` with real staging secrets |
 | Medium | GitHub Sonar provisioning | GitHub repository has no `SONAR_TOKEN` or `SONAR_HOST_URL` secrets, so hosted CI skips Sonar even though local Sonar evidence exists | Remote PR checks do not enforce Sonar Quality Gate until a GitHub-reachable Sonar endpoint/token is configured | Add SonarCloud or reachable SonarQube secrets and rerun the workflow with Sonar required |
@@ -148,6 +156,6 @@ Rationale: main's scheduler-quota boundary cleanup, observability/runbook
 contract, production-beta manifest rehearsal, Docker-backed E2E, security scans,
 Sonar Quality Gate, and `beta-rc` rehearsal all pass. The repository still has
 broader Production Beta launch blockers: missing reference snapshot,
-per-package coverage gaps, missing GitHub Sonar provisioning, missing live dashboard/alert
+remaining per-package coverage gaps, missing GitHub Sonar provisioning, missing live dashboard/alert
 provisioning, missing live staging rehearsal evidence, and remaining shared
 physical Postgres transition debt.

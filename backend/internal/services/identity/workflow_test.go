@@ -113,6 +113,318 @@ func TestIdentityAPITokenLifecycleDirect(t *testing.T) {
 	assertIdentityStatus(t, code, data, http.StatusNotFound)
 }
 
+func TestIdentityAPITokenCurrentRevocationThroughMiddleware(t *testing.T) {
+	serviceKey := testServiceKey(t)
+	app := newRoutedIdentityAuthTestApp(serviceKey)
+	seedIdentityUser(t, app, "US1", "dana")
+	seedIdentitySession(t, app, "session-1", "US1")
+
+	created := identityResponseMap(t, serveIdentityHTTP(t, app, http.MethodPost, "/api/v1/me/api-tokens", `{"name":"notebook"}`, map[string]string{"Cookie": "token=session-1"}, http.StatusCreated))
+	rawToken := created["token"].(string)
+	tokenID := created["id"].(string)
+	if rawToken == "" || tokenID == "" || created["token_hash"] != nil {
+		t.Fatalf("created api token = %#v, want raw token without hash leak", created)
+	}
+	if got := activeAPITokenCount(app, identityRequest(http.MethodGet, "/api/v1/me/api-tokens", ""), "US1"); got != 1 {
+		t.Fatalf("active API token count = %d, want 1", got)
+	}
+
+	serveIdentityHTTP(t, app, http.MethodGet, "/api/v1/me/api-tokens", "", map[string]string{"Authorization": "Bearer " + rawToken}, http.StatusOK)
+	postInternalIdentityAuth(t, app, serviceKey, "/internal/identity/auth/api-token", rawToken, http.StatusOK)
+
+	// The current-token endpoint must rely on the platform-authenticated API token
+	// context, not a caller-supplied header.
+	serveIdentityHTTP(t, app, http.MethodDelete, "/api/v1/me/api-tokens/current", "", map[string]string{
+		"Cookie":         "token=session-1",
+		"X-API-Token-ID": tokenID,
+	}, http.StatusBadRequest)
+
+	serveIdentityHTTP(t, app, http.MethodDelete, "/api/v1/me/api-tokens/current", "", map[string]string{"Authorization": "Bearer " + rawToken}, http.StatusOK)
+	stored, ok := app.Store.Get(context.Background(), apiTokensResource, tokenID)
+	if !ok || stored.Data["revoked"] != true || stored.Data["revoked_at"] == nil {
+		t.Fatalf("revoked token record = %#v found=%v, want revoked metadata", stored.Data, ok)
+	}
+	if revoked, err := app.Revocations.IsRevoked(context.Background(), "api_token", tokenID); err != nil || !revoked {
+		t.Fatalf("revocation denylist token=%s revoked=%v err=%v, want revoked", tokenID, revoked, err)
+	}
+	serveIdentityHTTP(t, app, http.MethodGet, "/api/v1/me/api-tokens", "", map[string]string{"Authorization": "Bearer " + rawToken}, http.StatusUnauthorized)
+}
+
+func TestIdentityInternalAPITokenAuthRejectsDenylistedCredential(t *testing.T) {
+	serviceKey := testServiceKey(t)
+	app := newRoutedIdentityAuthTestApp(serviceKey)
+	seedIdentityUser(t, app, "US1", "dana")
+	seedIdentitySession(t, app, "session-1", "US1")
+
+	created := identityResponseMap(t, serveIdentityHTTP(t, app, http.MethodPost, "/api/v1/me/api-tokens", `{"name":"automation"}`, map[string]string{"Cookie": "token=session-1"}, http.StatusCreated))
+	rawToken := created["token"].(string)
+	tokenID := created["id"].(string)
+	if err := app.Revocations.Revoke(context.Background(), "api_token", tokenID, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+
+	postInternalIdentityAuth(t, app, serviceKey, "/internal/identity/auth/api-token", rawToken, http.StatusUnauthorized)
+	serveIdentityHTTP(t, app, http.MethodGet, "/api/v1/me/api-tokens", "", map[string]string{"Authorization": "Bearer " + rawToken}, http.StatusUnauthorized)
+	stored, ok := app.Store.Get(context.Background(), apiTokensResource, tokenID)
+	if !ok || stored.Data["revoked"] == true {
+		t.Fatalf("stored token = %#v found=%v, want active store record rejected only by denylist", stored.Data, ok)
+	}
+}
+
+func TestIdentityOIDCRevokeViaDenylistParameters(t *testing.T) {
+	app := newIdentityTestApp()
+
+	code, data, degraded := oidcRevokeViaDenylist(app, identityRequest(http.MethodPost, "/revoke", ""), platform.RouteSpec{})
+	if degraded != nil || code != http.StatusBadRequest {
+		t.Fatalf("missing token revoke status=%d degraded=%v data=%#v, want 400", code, degraded, data)
+	}
+
+	for _, tc := range []struct {
+		name string
+		req  *http.Request
+	}{
+		{name: "form token", req: identityFormRequest(http.MethodPost, "/revoke", "token=opaque-token")},
+		{name: "bearer token", req: func() *http.Request {
+			req := identityRequest(http.MethodPost, "/revoke", "")
+			req.Header.Set("Authorization", "Bearer opaque-token")
+			return req
+		}()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, data, degraded := oidcRevokeViaDenylist(app, tc.req, platform.RouteSpec{})
+			if degraded != nil || code != http.StatusOK {
+				t.Fatalf("status=%d degraded=%v data=%#v, want 200", code, degraded, data)
+			}
+			raw := data.(platform.RawResponse)
+			if !strings.Contains(string(raw.Body), `"revoked":true`) {
+				t.Fatalf("body = %s, want revoked response", raw.Body)
+			}
+		})
+	}
+}
+
+func TestIdentityRequireAuthSelfServiceFallbackForPlatformAuthenticatedUser(t *testing.T) {
+	app := platform.NewApp(platform.Config{ServiceName: serviceName, RequireAuth: true})
+
+	anonymousReq := identityRequest(http.MethodPut, "/api/v1/users/REMOTE/settings", `{"settings":{"theme":"dark"}}`)
+	anonymousReq.SetPathValue("id", "REMOTE")
+	code, data, _ := updateUserSettings(app, anonymousReq, platform.RouteSpec{})
+	assertIdentityStatus(t, code, data, http.StatusUnauthorized)
+
+	platformReq := identityUserRequest(http.MethodPut, "/api/v1/users/REMOTE/settings", `{"settings":{"theme":"dark"}}`, "REMOTE")
+	platformReq.SetPathValue("id", "REMOTE")
+	code, data, _ = updateUserSettings(app, platformReq, platform.RouteSpec{})
+	assertIdentityStatus(t, code, data, http.StatusNotFound)
+	if got := data.(map[string]any)["message"]; got != msgUserNotFound {
+		t.Fatalf("fallback response = %#v, want user-not-found after platform auth", data)
+	}
+}
+
+func TestIdentityRegisterWiresDexProxyAndAuthCleanup(t *testing.T) {
+	app := platform.NewApp(platform.Config{ServiceName: "all", DexURL: "http://127.0.0.1:1", ExternalURLs: map[string]string{}})
+	Register(app)
+
+	if app.CustomHandlers["POST /api/v1/oidc/revoke"] == nil || app.CustomHandlers["POST /revoke"] == nil {
+		t.Fatalf("dex revoke proxy handlers not registered: %#v", app.CustomHandlers)
+	}
+	if app.CustomHandlers["POST /oauth/token"] == nil || app.CustomHandlers["POST /device_authorization"] == nil {
+		t.Fatalf("dex token/device proxy handlers not registered: %#v", app.CustomHandlers)
+	}
+	if !containsString(app.MaintenanceTaskNames(), "identity-auth-cleanup") {
+		t.Fatalf("maintenance tasks = %v, want identity-auth-cleanup", app.MaintenanceTaskNames())
+	}
+
+	if _, err := app.Store.Create(context.Background(), sessionsResource, map[string]any{
+		"id":         "expired-session",
+		"user_id":    "US1",
+		"expires_at": time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app.RunMaintenanceOnce(context.Background(), time.Minute)
+	if _, ok := app.Store.Get(context.Background(), sessionsResource, "expired-session"); ok {
+		t.Fatal("registered auth cleanup did not remove expired session")
+	}
+}
+
+func TestIdentityAPITokenQuotaAndValidationBranchesDirect(t *testing.T) {
+	app := newIdentityTestApp()
+	seedIdentityUser(t, app, "US1", "dana")
+	req := identityUserRequest(http.MethodPost, "/api/v1/me/api-tokens", "", "US1")
+
+	if _, status, data := createAPITokenForUser(app, req, "US1", "bad\nname"); status != http.StatusBadRequest || data["message"] == "" {
+		t.Fatalf("invalid token name status=%d data=%#v, want 400", status, data)
+	}
+	for i := 0; i < defaultAPITokenMax; i++ {
+		if _, status, data := createAPITokenForUser(app, req, "US1", "token-"+string(rune('a'+i))); status != http.StatusCreated {
+			t.Fatalf("token %d status=%d data=%#v, want created", i, status, data)
+		}
+	}
+	if _, status, data := createAPITokenForUser(app, req, "US1", "overflow"); status != http.StatusTooManyRequests || data["message"] == "" {
+		t.Fatalf("quota overflow status=%d data=%#v, want 429", status, data)
+	}
+}
+
+func TestIdentityLoginCaptchaAndLockoutEdgeBranchesDirect(t *testing.T) {
+	app := newIdentityTestApp()
+	seedIdentityUser(t, app, "US1", "dana")
+	req := identityRequest(http.MethodPost, pathLogin, `{"username":"dana","password":"correct-password"}`)
+	id := loginFailureID("dana", requestIP(req))
+	if _, err := app.Store.Create(context.Background(), loginFailuresResource, map[string]any{
+		"id":       id,
+		"username": "dana",
+		"ip":       requestIP(req),
+		"failures": defaultLoginMaxFailed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code, data, _ := login(app, req, platform.RouteSpec{})
+	assertIdentityStatus(t, code, data, http.StatusUnauthorized)
+	if data.(map[string]any)["message"] != msgCaptchaRequired {
+		t.Fatalf("captcha-required response = %#v", data)
+	}
+
+	lockReq := identityRequest(http.MethodPost, pathLogin, `{"username":"locked","password":"correct-password"}`)
+	lockID := loginFailureID("locked", requestIP(lockReq))
+	if _, err := app.Store.Create(context.Background(), loginFailuresResource, map[string]any{
+		"id":           lockID,
+		"username":     "locked",
+		"ip":           requestIP(lockReq),
+		"failures":     defaultLoginMaxFailed + 1,
+		"locked_until": "not-a-time",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !loginLocked(app, lockReq, "locked") {
+		t.Fatal("invalid locked_until should fail closed as locked")
+	}
+	if _, ok := app.Store.Update(context.Background(), loginFailuresResource, lockID, map[string]any{"locked_until": time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)}); !ok {
+		t.Fatal("failed to update lockout record")
+	}
+	if loginLocked(app, lockReq, "locked") {
+		t.Fatal("expired locked_until should not remain locked")
+	}
+	if _, ok := app.Store.Get(context.Background(), loginFailuresResource, lockID); ok {
+		t.Fatal("expired lockout record should be cleared")
+	}
+}
+
+func TestIdentityAdminEdgeBranchesAndCredentialRevocationDirect(t *testing.T) {
+	app := newIdentityAdminTestApp(t)
+
+	otherReq := identityAdminRequest(http.MethodGet, "/api/v1/users/ADMIN", "", "U1")
+	otherReq.SetPathValue("id", "ADMIN")
+	code, data, _ := getUserByID(app, otherReq, platform.RouteSpec{})
+	assertIdentityAdminStatus(t, code, data, http.StatusForbidden)
+
+	missingReq := identityAdminRequest(http.MethodGet, "/api/v1/users/missing", "", "ADMIN")
+	missingReq.SetPathValue("id", "missing")
+	code, data, _ = getUserByID(app, missingReq, platform.RouteSpec{})
+	assertIdentityAdminStatus(t, code, data, http.StatusNotFound)
+
+	badJSONReq := identityAdminRequest(http.MethodPut, "/api/v1/users/U1", `{bad`, "ADMIN")
+	badJSONReq.SetPathValue("id", "U1")
+	code, data, _ = updateUser(app, badJSONReq, platform.RouteSpec{})
+	assertIdentityAdminStatus(t, code, data, http.StatusBadRequest)
+
+	emptyUpdateReq := identityAdminRequest(http.MethodPut, "/api/v1/users/U1", `{"unknown":true}`, "U1")
+	emptyUpdateReq.SetPathValue("id", "U1")
+	code, data, _ = updateUser(app, emptyUpdateReq, platform.RouteSpec{})
+	assertIdentityAdminStatus(t, code, data, http.StatusBadRequest)
+
+	adminUpdateReq := identityAdminRequest(http.MethodPut, "/api/v1/users/U1", `{"status":"disabled","system_role":1,"capabilities":{"adminPanel":true}}`, "ADMIN")
+	adminUpdateReq.SetPathValue("id", "U1")
+	code, data, _ = updateUser(app, adminUpdateReq, platform.RouteSpec{})
+	assertIdentityAdminStatus(t, code, data, http.StatusOK)
+	updated, _ := app.Store.Get(context.Background(), usersResource, "U1")
+	if updated.Data["status"] != "disabled" || updated.Data["system_role"] != 1 || updated.Data["role"] != "manager" {
+		t.Fatalf("admin update = %#v, want status plus manager role", updated.Data)
+	}
+
+	code, data, _ = batchResetPassword(app, identityAdminRequest(http.MethodPut, "/api/v1/users/batch/password", `{"ids":["U1"],"password":"123"}`, "ADMIN"), platform.RouteSpec{})
+	assertIdentityAdminStatus(t, code, data, http.StatusBadRequest)
+	code, data, _ = batchUpdateRole(app, identityAdminRequest(http.MethodPut, "/api/v1/users/batch/role", `{bad`, "ADMIN"), platform.RouteSpec{})
+	assertIdentityAdminStatus(t, code, data, http.StatusBadRequest)
+	code, data, _ = batchDeleteUsers(app, identityAdminRequest(http.MethodDelete, "/api/v1/users/batch", `{bad`, "ADMIN"), platform.RouteSpec{})
+	assertIdentityAdminStatus(t, code, data, http.StatusBadRequest)
+
+	deleteApp := newIdentityAdminTestApp(t)
+	if _, err := deleteApp.Store.Create(context.Background(), apiTokensResource, map[string]any{
+		"id":         "AT1",
+		"user_id":    "U1",
+		"name":       "ci",
+		"token_hash": platform.HashSecret("nexuspaas_delete"),
+		"expires_at": time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+		"revoked":    false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deleteReq := identityAdminRequest(http.MethodDelete, "/api/v1/users/U1", "", "ADMIN")
+	deleteReq.SetPathValue("id", "U1")
+	code, data, _ = deleteUser(deleteApp, deleteReq, platform.RouteSpec{})
+	assertIdentityAdminStatus(t, code, data, http.StatusOK)
+	if revoked, err := deleteApp.Revocations.IsRevoked(context.Background(), "api_token", "AT1"); err != nil || !revoked {
+		t.Fatalf("deleted user api token revoked=%v err=%v, want revoked", revoked, err)
+	}
+}
+
+func TestIdentityPrincipalRepositoryNilAndNextIDBranchesDirect(t *testing.T) {
+	nilRepo := principalRepository(nil)
+	if nilRepo.UserResourceName() != usersResource || nilRepo.RoleResourceName() != rolesResource {
+		t.Fatalf("resource names = %q/%q", nilRepo.UserResourceName(), nilRepo.RoleResourceName())
+	}
+	if nilRepo.NextUserID() != "" || len(nilRepo.ListUsers(context.Background())) != 0 {
+		t.Fatalf("nil repo should be inert")
+	}
+	if _, ok := nilRepo.GetUser(context.Background(), "US1"); ok {
+		t.Fatal("nil repo returned a user")
+	}
+
+	app := newIdentityTestApp()
+	if id := nextID(app, identityRequest(http.MethodGet, "/", ""), usersResource, "US", 2600001); id != "US2600001" {
+		t.Fatalf("nextID = %q, want US2600001", id)
+	}
+}
+
+func TestIdentityAPITokenMetadataAndExpiryHelpersDirect(t *testing.T) {
+	metadata := apiTokenMetadata(map[string]any{
+		"id":           "AT1",
+		"name":         "ci",
+		"token_prefix": "nexuspaas_abc",
+		"token_hash":   "must-not-leak",
+		"expires_at":   "soon",
+		"created_at":   "now",
+		"last_used_at": "later",
+	})
+	if metadata["last_used_at"] != "later" || metadata["token_hash"] != nil {
+		t.Fatalf("metadata = %#v, want last_used_at without token_hash", metadata)
+	}
+	if tokenExpired(map[string]any{}) {
+		t.Fatal("token without expiry should not be expired")
+	}
+	if !tokenExpired(map[string]any{"expires_at": "not-a-time"}) {
+		t.Fatal("invalid expiry should be treated as expired")
+	}
+}
+
+func TestIdentityGenericHelperBranchesDirect(t *testing.T) {
+	if got := intValue(map[string]any{"n": int64(7)}, "n", 0); got != 7 {
+		t.Fatalf("int64 intValue = %d, want 7", got)
+	}
+	if got := intValue(map[string]any{"n": json.Number("8")}, "n", 0); got != 8 {
+		t.Fatalf("json.Number intValue = %d, want 8", got)
+	}
+	if got := textValue(map[string]any{"m": time.January}, "m"); got != "January" {
+		t.Fatalf("Stringer textValue = %q, want January", got)
+	}
+	if maps := mapSlice([]any{map[string]any{"id": "one"}, "skip"}); len(maps) != 1 || maps[0]["id"] != "one" {
+		t.Fatalf("mapSlice = %#v, want one map", maps)
+	}
+	if ids := firstUserIDs(map[string]any{"user_id": "US1"}); len(ids) != 1 || ids[0] != "US1" {
+		t.Fatalf("firstUserIDs = %#v, want US1", ids)
+	}
+}
+
 func TestIdentityUserPagingAndSettingsDirect(t *testing.T) {
 	app := newIdentityTestApp()
 	seedIdentityUser(t, app, "ADMIN", "admin")
@@ -225,6 +537,23 @@ func newIdentityTestApp() *platform.App {
 	return app
 }
 
+func newRoutedIdentityAuthTestApp(serviceKey string) *platform.App {
+	app := platform.NewApp(platform.Config{
+		ServiceName:   "all",
+		HTTPAddr:      ":0",
+		RequireAuth:   true,
+		ServiceAPIKey: serviceKey,
+		ExternalURLs:  map[string]string{},
+	})
+	Register(app)
+	app.RegisterService(platform.ServiceSpec{Name: serviceName, Routes: []platform.RouteSpec{
+		{Method: http.MethodGet, Pattern: "/api/v1/me/api-tokens", Resource: "api_tokens", AuthRequired: true},
+		{Method: http.MethodPost, Pattern: "/api/v1/me/api-tokens", Resource: "api_tokens", AuthRequired: true},
+		{Method: http.MethodDelete, Pattern: "/api/v1/me/api-tokens/current", Resource: "api_tokens", AuthRequired: true},
+	}})
+	return app
+}
+
 func seedIdentityUser(t *testing.T, app *platform.App, id, username string) {
 	t.Helper()
 	if _, err := app.Store.Create(context.Background(), usersResource, map[string]any{
@@ -237,6 +566,33 @@ func seedIdentityUser(t *testing.T, app *platform.App, id, username string) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func seedIdentitySession(t *testing.T, app *platform.App, token, userID string) {
+	t.Helper()
+	if _, err := app.Store.Create(context.Background(), sessionsResource, map[string]any{
+		"id":         token,
+		"token":      token,
+		"user_id":    userID,
+		"created_at": time.Now().UTC().Format(time.RFC3339),
+		"expires_at": time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func serveIdentityHTTP(t *testing.T, app *platform.App, method, target, body string, headers map[string]string, want int) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := identityRequest(method, target, body)
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
+	app.ServeHTTP(rec, req)
+	if rec.Code != want {
+		t.Fatalf("%s %s status = %d, want %d; body=%s", method, target, rec.Code, want, rec.Body.String())
+	}
+	return rec
 }
 
 func identityRequest(method, target, body string) *http.Request {
@@ -259,6 +615,17 @@ func identityUserRequest(method, target, body, userID string) *http.Request {
 		req.Header.Set(headerUserID, userID)
 	}
 	return req
+}
+
+func identityResponseMap(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	var envelope struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	return envelope.Data
 }
 
 func identityRawData(t *testing.T, data any) map[string]any {
