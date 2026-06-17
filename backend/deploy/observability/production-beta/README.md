@@ -40,7 +40,7 @@ kubectl apply -k backend/deploy/observability/production-beta
 - `PodMonitor` scrapes authenticated `/metrics` on every backend pod and relabels
   the Kubernetes `app` label into the Prometheus `service` label.
 - `PrometheusRule` adds baseline alerts for scrape loss, deployment
-  unavailability, core availability burn, high mean latency, 5xx responses, and
+  unavailability, core availability burn, high p95 latency, 5xx responses, and
   synthetic smoke failures.
 - `nexuspaas-production-beta-dashboard` defines the Grafana dashboard for the 15
   backend services and the Beta SLO targets.

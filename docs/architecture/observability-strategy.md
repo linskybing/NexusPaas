@@ -188,7 +188,8 @@ backend kustomization because Prometheus Operator CRDs are optional
 infrastructure prerequisites and should not break the root non-live dry-run
 gate. The PodMonitor uses `nexuspaas-prometheus-scrape-secret` for bearer-token
 scrape auth; the CronJob uses `nexuspaas-synthetic-smoke-secret` for smoke
-credentials.
+credentials. Runtime HTTP duration metrics include Prometheus histogram buckets,
+so p95 dashboard panels and alert rules use `histogram_quantile`.
 
 ## Production Beta Gaps
 
@@ -197,7 +198,5 @@ observability manifest gap. The following remain launch-readiness work:
 
 - Activate the overlay in a live cluster and capture dashboard, alert, scrape,
   and CronJob evidence.
-- Add runtime histogram buckets before p95 latency SLO alerts replace the
-  current mean latency sentinel rules.
 - Replace static service keys with mTLS or workload identity before GA.
 - Exercise rollback and incident runbooks in staging.

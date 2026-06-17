@@ -118,6 +118,9 @@ runs the same checklist every five minutes against the 15-service topology. The
 CronJob uses the externally managed `nexuspaas-synthetic-smoke-secret`; the
 Prometheus PodMonitor uses the separate `nexuspaas-prometheus-scrape-secret` so
 authenticated `/metrics` scraping does not require committed credentials.
+Runtime `/metrics` exposes HTTP duration histogram buckets so dashboard panels
+and PrometheusRule alerts can use p95 `histogram_quantile` queries instead of
+mean latency sentinels.
 
 ## Service Operations Matrix
 
@@ -153,7 +156,5 @@ Production Beta still needs:
 
 - Live cluster activation evidence for the dashboard, PodMonitor,
   PrometheusRule, and CronJob resources.
-- Runtime histogram metrics before p95 SLO alerts can replace the current mean
-  latency sentinels.
 - Staging rehearsal for deploy, smoke, rollback, and re-deploy.
 - GA replacement of static service keys with mTLS or workload identity.

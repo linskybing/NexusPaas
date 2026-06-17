@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -92,6 +93,7 @@ func TestRunAdminTaskValidateMigrations(t *testing.T) {
 
 func TestMetricsObserveAndServeHTTP(t *testing.T) {
 	metrics := NewMetrics()
+	metrics.Observe("/api/v1/a", http.MethodGet, http.StatusOK, 200*time.Millisecond)
 	metrics.Observe("/api/v1/a", http.MethodGet, http.StatusOK, 1500*time.Millisecond)
 	metrics.Observe("/api/v1/a", http.MethodPost, http.StatusInternalServerError, 500*time.Millisecond)
 	metrics.Inc("k8s-degraded")
@@ -101,15 +103,45 @@ func TestMetricsObserveAndServeHTTP(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		"# TYPE nexuspaas_http_requests_total counter",
-		`nexuspaas_http_requests_total{route="/api/v1/a",method="GET",status="200"} 1`,
+		`nexuspaas_http_requests_total{route="/api/v1/a",method="GET",status="200"} 2`,
 		`nexuspaas_http_requests_total{route="/api/v1/a",method="POST",status="500"} 1`,
-		"# TYPE nexuspaas_http_request_duration_seconds_sum counter",
-		`nexuspaas_http_request_duration_seconds_sum{route="/api/v1/a",method="GET",status="200"} 1.500000`,
+		"# TYPE nexuspaas_http_request_duration_seconds histogram",
 		"nexuspaas_k8s_degraded_total 1",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("metrics body missing %q:\n%s", want, body)
 		}
+	}
+	getLabels := `route="/api/v1/a",method="GET",status="200"`
+	postLabels := `route="/api/v1/a",method="POST",status="500"`
+	if got := metricSampleInt(t, body, "nexuspaas_http_request_duration_seconds_bucket", getLabels+`,le="0.1"`); got != 0 {
+		t.Fatalf("GET le=0.1 bucket = %d, want 0", got)
+	}
+	if got := metricSampleInt(t, body, "nexuspaas_http_request_duration_seconds_bucket", getLabels+`,le="0.25"`); got != 1 {
+		t.Fatalf("GET le=0.25 bucket = %d, want 1", got)
+	}
+	if got := metricSampleInt(t, body, "nexuspaas_http_request_duration_seconds_bucket", getLabels+`,le="0.5"`); got != 1 {
+		t.Fatalf("GET le=0.5 bucket = %d, want 1", got)
+	}
+	if got := metricSampleInt(t, body, "nexuspaas_http_request_duration_seconds_bucket", getLabels+`,le="2"`); got != 2 {
+		t.Fatalf("GET le=2 bucket = %d, want 2", got)
+	}
+	getInf := metricSampleInt(t, body, "nexuspaas_http_request_duration_seconds_bucket", getLabels+`,le="+Inf"`)
+	getCount := metricSampleInt(t, body, "nexuspaas_http_request_duration_seconds_count", getLabels)
+	if getInf != 2 || getCount != 2 || getInf != getCount {
+		t.Fatalf("GET +Inf/count = %d/%d, want 2 and equal", getInf, getCount)
+	}
+	if got := metricSampleFloat(t, body, "nexuspaas_http_request_duration_seconds_sum", getLabels); got != 1.7 {
+		t.Fatalf("GET duration sum = %f, want 1.7", got)
+	}
+	if got := metricSampleInt(t, body, "nexuspaas_http_request_duration_seconds_bucket", postLabels+`,le="0.3"`); got != 0 {
+		t.Fatalf("POST le=0.3 bucket = %d, want 0", got)
+	}
+	if got := metricSampleInt(t, body, "nexuspaas_http_request_duration_seconds_bucket", postLabels+`,le="0.5"`); got != 1 {
+		t.Fatalf("POST le=0.5 bucket = %d, want 1", got)
+	}
+	if got := metricSampleInt(t, body, "nexuspaas_http_request_duration_seconds_count", postLabels); got != 1 {
+		t.Fatalf("POST duration count = %d, want 1", got)
 	}
 }
 
@@ -193,6 +225,36 @@ func TestRollbackTargetSwitches(t *testing.T) {
 	if got := app.RollbackTargetFor(route); got != "monolith" {
 		t.Fatalf("rolled back route target = %q, want monolith", got)
 	}
+}
+
+func metricSampleInt(t *testing.T, body, metric, labels string) int {
+	t.Helper()
+	value, err := strconv.Atoi(metricSampleValue(t, body, metric, labels))
+	if err != nil {
+		t.Fatalf("%s{%s} value is not an int: %v", metric, labels, err)
+	}
+	return value
+}
+
+func metricSampleFloat(t *testing.T, body, metric, labels string) float64 {
+	t.Helper()
+	value, err := strconv.ParseFloat(metricSampleValue(t, body, metric, labels), 64)
+	if err != nil {
+		t.Fatalf("%s{%s} value is not a float: %v", metric, labels, err)
+	}
+	return value
+}
+
+func metricSampleValue(t *testing.T, body, metric, labels string) string {
+	t.Helper()
+	prefix := metric + "{" + labels + "} "
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		}
+	}
+	t.Fatalf("metrics body missing %s{%s}:\n%s", metric, labels, body)
+	return ""
 }
 
 func withTempWD(t *testing.T, dir string) {

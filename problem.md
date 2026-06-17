@@ -61,6 +61,8 @@ What changed in the current stacked work:
 - Added `backend/deploy/observability/production-beta` with baseline Grafana
   dashboard, authenticated Prometheus PodMonitor/PrometheusRule alerts, and a
   scheduled synthetic smoke CronJob for the 15-service topology.
+- Added runtime HTTP duration histogram buckets and updated the observability
+  overlay latency dashboard/alerts to use p95 `histogram_quantile` queries.
 
 ## 2. Current Verification
 
@@ -90,6 +92,14 @@ What changed in the current stacked work:
 | `go test ./... -count=1` | Pass | Full backend unit package suite passes after manifest/docs/test changes |
 | `bash backend/scripts/ci-security-gate.sh security` | Pass | govulncheck no vulnerabilities; OSV no issues; backend image build passes; Trivy reports 0 vulnerabilities |
 | `bash backend/scripts/ci-security-gate.sh sonar` | Pass | Local SonarScanner Quality Gate passed against `http://localhost:9000/dashboard?id=nexuspaas-backend` |
+| `go test ./internal/platform -run 'Metrics\|Deployment\|Operational\|Observability\|Release\|Beta' -count=1` | Pass | Histogram metric contract plus deployment/observability policy tests pass |
+| `kubectl kustomize backend/deploy/observability/production-beta` plus YAML/JSON parse | Pass | p95 dashboard/PrometheusRule overlay still renders and embedded dashboard JSON parses |
+| `go test ./... -count=1` | Pass | Full backend unit package suite passes after histogram and p95 overlay changes |
+| `go vet ./...` | Pass | Static Go vet check passes after histogram changes |
+| `go build ./...` | Pass | Backend packages still build after histogram changes |
+| `git diff --check` | Pass | Histogram branch diff has no whitespace errors |
+| `bash backend/scripts/ci-security-gate.sh security` | Pass | govulncheck no vulnerabilities; OSV no issues; backend image build passes; Trivy reports 0 vulnerabilities |
+| `bash backend/scripts/ci-security-gate.sh sonar` | Pass | Local SonarScanner Quality Gate passed against `http://localhost:9000/dashboard?id=nexuspaas-backend` |
 
 ## 3. Resolved In This Branch
 
@@ -106,6 +116,7 @@ What changed in the current stacked work:
 | GitHub workflow scheduling | `.github/workflows/backend-quality-gate.yml` used `${{ runner.temp }}` in workflow-level `env`, so GitHub failed the run before creating jobs or logs | CI temp paths now use literal `/tmp/...` values that are valid at workflow scope for the existing `ubuntu-latest` job |
 | GitHub Sonar no-secrets handling | GitHub-hosted runs failed at Sonar because the repository has no `SONAR_TOKEN` or `SONAR_HOST_URL` secrets | The workflow now skips Sonar only when no Sonar secrets are configured; any partial or configured Sonar setup remains fail-closed |
 | observability baseline provisioning | Dashboard, alert, authenticated scrape, and scheduled synthetic monitor resources were documented but not provisioned | `backend/deploy/observability/production-beta` now renders an optional Grafana/Prometheus Operator/CronJob overlay covering all 15 services without committing secrets |
+| metrics granularity | Runtime metrics exposed request counts and duration sums but no histogram buckets | `/metrics` now emits Prometheus-compatible HTTP duration buckets/count/sum; dashboard and alert rules use p95 `histogram_quantile` |
 
 ## 4. Remaining Issues
 
@@ -114,7 +125,6 @@ What changed in the current stacked work:
 | High | reference parity | `references/CSCC_AI_Platform_Backend` is absent, so live reference diff cannot be performed | Reference-only behavior gaps remain unknown | Restore/provision the reference snapshot before parity-sensitive launch review |
 | Medium | coverage | Several packages remain below the per-package 80% target, although integration total meets the CI gate | Per-component risk remains masked by aggregate coverage | Raise low packages, especially `cmd/microservice`, `identity`, and schedulerquota follow-up paths |
 | Medium | live observability activation | Baseline Grafana, PodMonitor, PrometheusRule, and synthetic CronJob manifests exist, but live cluster activation evidence has not been captured | Operators have provisionable resources but not proof that dashboards, alerts, scrape auth, and scheduled smoke are working in staging | Apply `backend/deploy/observability/production-beta` in staging with real secrets and capture dashboard/alert/CronJob evidence |
-| Medium | metrics granularity | Current runtime metrics expose request counts and duration sums, not histogram buckets | p95 SLOs remain documented targets but alert rules can only use mean latency sentinels until runtime metrics improve | Add Prometheus histogram buckets for HTTP latency before final p95 SLO enforcement |
 | Medium | live staging rehearsal | The non-live Beta RC gate exists, but a real staging deploy/readiness/smoke/rollback/re-deploy rehearsal has not been captured | External Beta traffic remains blocked until real cluster evidence exists or the risk is explicitly accepted | Run the live staging checklist in `backend/docs/beta-launch-readiness.md` with real staging secrets |
 | Medium | GitHub Sonar provisioning | GitHub repository has no `SONAR_TOKEN` or `SONAR_HOST_URL` secrets, so hosted CI skips Sonar even though local Sonar evidence exists | Remote PR checks do not enforce Sonar Quality Gate until a GitHub-reachable Sonar endpoint/token is configured | Add SonarCloud or reachable SonarQube secrets and rerun the workflow with Sonar required |
 | Medium | data ownership | Scheduler-quota now uses owner-read contracts, but co-hosted mode can still read map-shaped records from the shared physical Postgres | Production Beta boundary is improved, not GA-complete | Continue toward typed DTO contracts or event-fed read models |

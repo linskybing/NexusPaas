@@ -61,11 +61,11 @@ data:
         {
           "id": 4,
           "type": "timeseries",
-          "title": "Mean request latency",
-          "description": "Uses current duration sum/request count metrics. Runtime histogram buckets are required before enforcing p95 panels.",
+          "title": "p95 request latency",
+          "description": "Uses HTTP duration histogram buckets for Production Beta p95 latency SLOs.",
           "targets": [
             {
-              "expr": "sum by (service) (rate(nexuspaas_http_request_duration_seconds_sum{service=~\"$service\"}[5m])) / clamp_min(sum by (service) (rate(nexuspaas_http_requests_total{service=~\"$service\"}[5m])), 1)"
+              "expr": "histogram_quantile(0.95, sum by (service, le) (rate(nexuspaas_http_request_duration_seconds_bucket{service=~\"$service\"}[5m])))"
             }
           ]
         },

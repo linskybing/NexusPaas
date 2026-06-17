@@ -83,21 +83,21 @@ spec:
             runbook_url: backend/docs/operational-readiness.md
     - name: nexuspaas.production-beta.latency
       rules:
-        - alert: NexusPaasHighMeanReadLatency
-          expr: sum by (service) (rate(nexuspaas_http_request_duration_seconds_sum{service=~"audit-compliance-service|authorization-policy-service|ide-service|identity-service|image-registry-service|integration-proxy-service|k8s-control-service|media-upload-service|org-project-service|platform-gateway|request-notification-service|scheduler-quota-service|storage-service|usage-observability-service|workload-service",method="GET"}[5m])) / clamp_min(sum by (service) (rate(nexuspaas_http_requests_total{service=~"audit-compliance-service|authorization-policy-service|ide-service|identity-service|image-registry-service|integration-proxy-service|k8s-control-service|media-upload-service|org-project-service|platform-gateway|request-notification-service|scheduler-quota-service|storage-service|usage-observability-service|workload-service",method="GET"}[5m])), 1) > 0.5
+        - alert: NexusPaasHighReadP95Latency
+          expr: histogram_quantile(0.95, sum by (service, le) (rate(nexuspaas_http_request_duration_seconds_bucket{service=~"audit-compliance-service|authorization-policy-service|ide-service|identity-service|image-registry-service|integration-proxy-service|k8s-control-service|media-upload-service|org-project-service|platform-gateway|request-notification-service|scheduler-quota-service|storage-service|usage-observability-service|workload-service",method="GET"}[5m]))) > 0.5
           for: 10m
           labels:
             severity: ticket
           annotations:
-            summary: NexusPaas mean read latency is above the Beta read target
+            summary: NexusPaas p95 read latency is above the Beta read target
             runbook_url: backend/docs/operational-readiness.md
-        - alert: NexusPaasHighMeanWriteLatency
-          expr: sum by (service) (rate(nexuspaas_http_request_duration_seconds_sum{service=~"audit-compliance-service|authorization-policy-service|ide-service|identity-service|image-registry-service|integration-proxy-service|k8s-control-service|media-upload-service|org-project-service|platform-gateway|request-notification-service|scheduler-quota-service|storage-service|usage-observability-service|workload-service",method=~"POST|PUT|PATCH|DELETE"}[5m])) / clamp_min(sum by (service) (rate(nexuspaas_http_requests_total{service=~"audit-compliance-service|authorization-policy-service|ide-service|identity-service|image-registry-service|integration-proxy-service|k8s-control-service|media-upload-service|org-project-service|platform-gateway|request-notification-service|scheduler-quota-service|storage-service|usage-observability-service|workload-service",method=~"POST|PUT|PATCH|DELETE"}[5m])), 1) > 1
+        - alert: NexusPaasHighWriteP95Latency
+          expr: histogram_quantile(0.95, sum by (service, le) (rate(nexuspaas_http_request_duration_seconds_bucket{service=~"audit-compliance-service|authorization-policy-service|ide-service|identity-service|image-registry-service|integration-proxy-service|k8s-control-service|media-upload-service|org-project-service|platform-gateway|request-notification-service|scheduler-quota-service|storage-service|usage-observability-service|workload-service",method=~"POST|PUT|PATCH|DELETE"}[5m]))) > 1
           for: 10m
           labels:
             severity: ticket
           annotations:
-            summary: NexusPaas mean write latency is above the Beta write target
+            summary: NexusPaas p95 write latency is above the Beta write target
             runbook_url: backend/docs/operational-readiness.md
     - name: nexuspaas.production-beta.errors
       rules:
