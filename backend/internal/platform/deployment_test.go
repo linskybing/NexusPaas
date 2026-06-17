@@ -124,6 +124,58 @@ func TestProductionBetaRuntimeConfigAndSecretContract(t *testing.T) {
 	}
 }
 
+func TestProductionOperationalReadinessDocsCoverAllServices(t *testing.T) {
+	readinessPath := "../../docs/operational-readiness.md"
+	readiness := readTextFile(t, readinessPath)
+	nfrPath := "../../docs/non-functional-requirements.md"
+	nfrs := readTextFile(t, nfrPath)
+	requireContains(t, readinessPath, readiness, "Core API availability | >= 99.5%")
+	requireContains(t, readinessPath, readiness, "Job submit synchronous phase | p95 < 2s")
+	requireContains(t, readinessPath, readiness, "General read latency | p95 < 500ms")
+	requireContains(t, readinessPath, readiness, "General write latency | p95 < 1s")
+	requireContains(t, readinessPath, readiness, "`request_id`")
+	requireContains(t, readinessPath, readiness, "`trace_id`")
+	requireContains(t, readinessPath, readiness, "`user_id`")
+	requireContains(t, readinessPath, readiness, "`project_id`")
+	requireContains(t, readinessPath, readiness, "`traceparent`")
+	requireContains(t, readinessPath, readiness, "`tracestate`")
+	requireContains(t, readinessPath, readiness, "`OTEL_EXPORTER_OTLP_ENDPOINT`")
+	requireContains(t, readinessPath, readiness, "Do not log secrets")
+	requireContains(t, readinessPath, readiness, "Standard Runbook Template")
+	requireContains(t, readinessPath, readiness, "Synthetic Smoke Checklist")
+	requireContains(t, readinessPath, readiness, "GET /service-registry")
+	requireContains(t, readinessPath, readiness, "all 15 services")
+	requireContains(t, readinessPath, readiness, "kubectl rollout undo deployment/<service>")
+	requireContains(t, nfrPath, nfrs, "docs/operational-readiness.md")
+	requireContains(t, nfrPath, nfrs, "../../docs/architecture/observability-strategy.md")
+
+	strategyPath := "../../../docs/architecture/observability-strategy.md"
+	strategy := readTextFile(t, strategyPath)
+	requireContains(t, strategyPath, strategy, "15 independently deployed backend services")
+	requireContains(t, strategyPath, strategy, "../../backend/docs/operational-readiness.md")
+	requireContains(t, strategyPath, strategy, "OpenTelemetry Collector")
+	requireContains(t, strategyPath, strategy, "Prometheus")
+	requireContains(t, strategyPath, strategy, "Grafana")
+	requireContains(t, strategyPath, strategy, "W3C Trace Context")
+	requireContains(t, strategyPath, strategy, "Production Beta Gaps")
+
+	rows := serviceOperationRows(t, readinessPath, readiness)
+	deployments := serviceDeploymentManifests(t)
+	if len(rows) != len(deployments) {
+		t.Fatalf("%s service operations row count = %d, want %d: %#v", readinessPath, len(rows), len(deployments), rows)
+	}
+	for _, deployment := range deployments {
+		service := filepath.Base(filepath.Dir(filepath.Dir(deployment)))
+		row, ok := rows[service]
+		if !ok {
+			t.Fatalf("%s does not contain an operations row for %s", readinessPath, service)
+		}
+		for _, marker := range []string{"SLO:", "Dashboard:", "Alerts:", "Runbook:", "Rollback:", "Synthetic:"} {
+			requireContains(t, readinessPath+" "+service+" row", row, marker)
+		}
+	}
+}
+
 func requireProductionDeploymentManifest(t *testing.T, path string) {
 	t.Helper()
 	service := filepath.Base(filepath.Dir(filepath.Dir(path)))
@@ -265,6 +317,27 @@ func extractServiceURLs(t *testing.T, path, body string) map[string]string {
 		t.Fatalf("%s SERVICE_URLS is not valid JSON: %v", path, err)
 	}
 	return urls
+}
+
+func serviceOperationRows(t *testing.T, path, body string) map[string]string {
+	t.Helper()
+	rows := map[string]string{}
+	for _, line := range strings.Split(body, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "| ") || !strings.Contains(trimmed, " SLO:") || !strings.Contains(trimmed, " Synthetic:") {
+			continue
+		}
+		parts := strings.Split(trimmed, "|")
+		if len(parts) < 5 {
+			t.Fatalf("%s malformed service operations row: %s", path, trimmed)
+		}
+		service := strings.TrimSpace(parts[1])
+		if _, exists := rows[service]; exists {
+			t.Fatalf("%s contains a duplicate service operations row for %s", path, service)
+		}
+		rows[service] = trimmed
+	}
+	return rows
 }
 
 func requireFileExists(t *testing.T, path string) {
