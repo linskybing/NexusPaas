@@ -51,6 +51,13 @@ All microservices must comply with the NFRs below; each service document only hi
 | NFR-OBS-01 | All services must emit structured logs, Prometheus metrics, and OpenTelemetry traces, propagating trace_id/request_id/user_id/project_id. |
 | NFR-OBS-02 | Cross-service dashboards must cover: API latency/error, job queue depth, dispatch latency, K8s API errors, storage transfers, image builds, and audit backlog. |
 
+Production Beta operational readiness is specified in
+`docs/operational-readiness.md` and the repository-level
+`../../docs/architecture/observability-strategy.md`. Those documents define the
+required SLOs, dashboard panels, alert policy, runbook template, rollback
+expectations, synthetic smoke checks, and per-service operations matrix for the
+15-service deployment topology.
+
 ## Operability
 
 | ID | Requirement |
