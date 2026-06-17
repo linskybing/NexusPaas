@@ -72,16 +72,72 @@ func TestCreateByJSONCreatesDeploymentAndRejectsUnsupportedKind(t *testing.T) {
 	}
 }
 
+func TestCreateByJSONCreatesRemainingNativeObjects(t *testing.T) {
+	ctx := context.Background()
+	cl := New(fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "proj-p1"}}), "proj")
+	cases := []struct {
+		name string
+		raw  []byte
+		kind string
+	}{
+		{
+			name: "pod",
+			kind: "Pod",
+			raw:  []byte(`{"apiVersion":"v1","kind":"Pod","metadata":{"name":"shell"},"spec":{"containers":[{"name":"main","image":"busybox"}]}}`),
+		},
+		{
+			name: "configmap",
+			kind: "ConfigMap",
+			raw:  []byte(`{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"settings"},"data":{"mode":"test"}}`),
+		},
+		{
+			name: "secret",
+			kind: "Secret",
+			raw:  []byte(`{"apiVersion":"v1","kind":"Secret","metadata":{"name":"creds"},"stringData":{"token":"secret"}}`),
+		},
+		{
+			name: "service",
+			kind: "Service",
+			raw:  []byte(`{"apiVersion":"v1","kind":"Service","metadata":{"name":"api"},"spec":{"ports":[{"port":80}]}}`),
+		},
+		{
+			name: "ingress",
+			kind: "Ingress",
+			raw:  []byte(`{"apiVersion":"networking.k8s.io/v1","kind":"Ingress","metadata":{"name":"web"}}`),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			created, err := cl.CreateByJSON(ctx, "proj-p1", tc.raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if created.Kind != tc.kind || created.Namespace != "proj-p1" || created.Name == "" {
+				t.Fatalf("created object = %#v, want %s in proj-p1", created, tc.kind)
+			}
+		})
+	}
+}
+
 func TestCreateByJSONRequiresConfiguredClientAndValidManifest(t *testing.T) {
 	if err := (*Client)(nil).EnsureNamespace(context.Background(), "proj-p1"); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("nil EnsureNamespace err = %v, want ErrUnavailable", err)
+	}
+	if err := New(fake.NewSimpleClientset(), "proj").EnsureNamespace(context.Background(), " "); !errors.Is(err, ErrInvalidManifest) {
+		t.Fatalf("blank EnsureNamespace err = %v, want ErrInvalidManifest", err)
 	}
 	if _, err := (*Client)(nil).CreateByJSON(context.Background(), "proj-p1", []byte(`{"kind":"Pod"}`)); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("nil CreateByJSON err = %v, want ErrUnavailable", err)
 	}
 	cl := New(fake.NewSimpleClientset(), "proj")
+	if _, err := cl.CreateByJSON(context.Background(), "proj-p1", nil); !errors.Is(err, ErrInvalidManifest) {
+		t.Fatalf("empty manifest err = %v, want ErrInvalidManifest", err)
+	}
 	if _, err := cl.CreateByJSON(context.Background(), "proj-p1", []byte(`{`)); !errors.Is(err, ErrInvalidManifest) {
 		t.Fatalf("invalid manifest err = %v, want ErrInvalidManifest", err)
+	}
+	if _, err := cl.CreateByJSON(context.Background(), "proj-p1", []byte(`{"apiVersion":"v1","metadata":{"name":"missing-kind"}}`)); !errors.Is(err, ErrInvalidManifest) {
+		t.Fatalf("missing kind err = %v, want ErrInvalidManifest", err)
 	}
 }
 
