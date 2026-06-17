@@ -81,3 +81,45 @@ func TestValidateServiceIsolationRejectsRemoteReadsWithoutDomainContract(t *test
 		t.Fatal("expected uncontracted remote resource to remain an isolation gap")
 	}
 }
+
+func TestValidateServiceIsolationOwnerReadRequiresServiceKey(t *testing.T) {
+	app := NewApp(Config{
+		ServiceName: "widget-service",
+		ServiceURLs: map[string]string{"identity-service": "http://identity-service"},
+	})
+	app.RegisterOwnerReadDependencies("widget-service", testIdentityUsersResource)
+
+	err := app.ValidateServiceIsolation()
+	if err == nil {
+		t.Fatal("expected owner read without SERVICE_API_KEY to fail isolation validation")
+	}
+	if !strings.Contains(err.Error(), "(owner-read)") {
+		t.Fatalf("error %q does not classify owner-read dependency", err.Error())
+	}
+}
+
+func TestValidateServiceIsolationAllowsOwnerReadWithServiceKey(t *testing.T) {
+	app := NewApp(Config{
+		ServiceName:   "widget-service",
+		ServiceURLs:   map[string]string{"identity-service": "http://identity-service"},
+		ServiceAPIKey: "service-key",
+	})
+	app.RegisterOwnerReadDependencies("widget-service", testIdentityUsersResource)
+
+	if err := app.ValidateServiceIsolation(); err != nil {
+		t.Fatalf("configured owner read should pass isolation validation: %v", err)
+	}
+}
+
+func TestValidateServiceIsolationRejectsOwnerReadWithoutDomainContract(t *testing.T) {
+	app := NewApp(Config{
+		ServiceName:   "widget-service",
+		ServiceURLs:   map[string]string{"identity-service": "http://identity-service"},
+		ServiceAPIKey: "service-key",
+	})
+	app.RegisterOwnerReadDependencies("widget-service", testIdentitySessions)
+
+	if err := app.ValidateServiceIsolation(); err == nil {
+		t.Fatal("expected uncontracted owner read to remain an isolation gap")
+	}
+}

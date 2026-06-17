@@ -45,13 +45,25 @@ func reapExpiredPlanWindows(
 	now time.Time,
 	deletionEnabled bool,
 ) error {
+	return reapExpiredPlanWindowsWithReader(ctx, cl, store, newAdmissionReader(store), evictor, now, deletionEnabled)
+}
+
+func reapExpiredPlanWindowsWithReader(
+	ctx context.Context,
+	cl *cluster.Client,
+	store platform.RecordStore,
+	reader admissionReader,
+	evictor workloadEvictionClient,
+	now time.Time,
+	deletionEnabled bool,
+) error {
 	repo := schedulerQuotaRepositoryFromStore(store)
-	if cl == nil || store == nil || repo == nil || evictor == nil {
+	if cl == nil || store == nil || repo == nil || reader == nil || evictor == nil {
 		return nil
 	}
 	reaper := planWindowReaper{cl: cl, evictor: evictor, deletionEnabled: deletionEnabled}
 	checkTime := now.Add(-planWindowGracePeriod)
-	for _, project := range store.List(ctx, projectsResource) {
+	for _, project := range reader.ListProjects(ctx) {
 		reason := planWindowEvictionReason(ctx, repo, project, now, checkTime)
 		if reason == "" {
 			continue
@@ -159,6 +171,6 @@ func registerPlanWindowReaper(app *platform.App) {
 			slog.Warn("plan window reaper: workload eviction contract unavailable, skipping cycle", "error", err)
 			return nil
 		}
-		return reapExpiredPlanWindows(ctx, app.Cluster, app.Store, evictor, time.Now().UTC(), app.Config.PlanWindowPodDeletion)
+		return reapExpiredPlanWindowsWithReader(ctx, app.Cluster, app.Store, newAdmissionReaderForApp(app), evictor, time.Now().UTC(), app.Config.PlanWindowPodDeletion)
 	})
 }

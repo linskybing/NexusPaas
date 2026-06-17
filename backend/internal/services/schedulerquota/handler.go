@@ -155,7 +155,7 @@ func batchDeleteQueues(app *platform.App, r *http.Request, _ platform.RouteSpec)
 }
 
 func listQueuesByProject(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
-	project, found := app.Store.Get(r.Context(), projectsResource, pathValue(r, "project_id"))
+	project, found := newAdmissionReaderForApp(app).Project(r.Context(), pathValue(r, "project_id"))
 	if !found {
 		return http.StatusNotFound, shared.ErrorData("project not found"), nil
 	}
@@ -341,7 +341,7 @@ func getProjectLiveQuota(app *platform.App, r *http.Request, _ platform.RouteSpe
 	if record, found := repo.GetLiveQuota(r.Context(), projectID); found {
 		return http.StatusOK, record, nil
 	}
-	project, found := app.Store.Get(r.Context(), projectsResource, projectID)
+	project, found := newAdmissionReaderForApp(app).Project(r.Context(), projectID)
 	if !found {
 		return http.StatusNotFound, shared.ErrorData(msgQuotaNotFound), nil
 	}

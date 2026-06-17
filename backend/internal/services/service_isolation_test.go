@@ -64,9 +64,9 @@ func TestRegisterAllServiceIsolationAllowsIDEWorkspace(t *testing.T) {
 }
 
 func TestRegisterAllServiceIsolationFailsSchedulerQuotaWithoutContractConfig(t *testing.T) {
-	// The org-project/workload read contracts exist (problem.md #3), but isolation still
-	// fails closed when this isolated process has no SERVICE_URLS/SERVICE_API_KEY to reach
-	// the owners — a contract alone is not enough (service_isolation.go requires both).
+	// The org-project/workload read contracts exist, but isolation still fails
+	// closed when this isolated process has no SERVICE_URLS/SERVICE_API_KEY to
+	// reach the owners. A contract alone is not enough.
 	app := platform.NewApp(platform.Config{ServiceName: serviceSchedulerQuota, HTTPAddr: ":0"})
 	RegisterAll(app)
 
@@ -86,7 +86,7 @@ func TestRegisterAllServiceIsolationFailsSchedulerQuotaWithoutContractConfig(t *
 func TestRegisterAllServiceIsolationAllowsSchedulerQuotaWithOwnerContracts(t *testing.T) {
 	// With the org-project + workload read contracts registered and their owners
 	// reachable via SERVICE_URLS + a service key, isolated scheduler-quota resolves its
-	// admission reads through owner APIs and passes isolation validation (problem.md #3).
+	// foreign reads through owner APIs and passes isolation validation.
 	app := platform.NewApp(platform.Config{
 		ServiceName: serviceSchedulerQuota,
 		HTTPAddr:    ":0",
@@ -122,22 +122,23 @@ func TestRegisterAllServiceIsolationFailsSchedulerQuotaWithUnrelatedIdentityCont
 	})
 }
 
-// TestSchedulerQuotaOrgProjectProjectsDependencyIsReadOnly proves the plan-binding
-// owner contract retired scheduler-quota's direct write to the org-project project
-// aggregate (problem.md #2): the remaining dependency is read-only (Get/List), and
-// Update is no longer registered.
-func TestSchedulerQuotaOrgProjectProjectsDependencyIsReadOnly(t *testing.T) {
-	dependency, found := findStoreDependency(serviceSchedulerQuota, serviceOrgProject+":projects")
-	if !found {
-		t.Fatal("missing scheduler-quota dependency on org-project projects")
-	}
-	for _, mode := range []string{storeAccessGet, storeAccessList} {
-		if !slices.Contains(dependency.access, mode) {
-			t.Fatalf("scheduler-quota org-project projects access = %v, want %s", dependency.access, mode)
+func TestSchedulerQuotaUsesOwnerReadDependenciesNotStoreDependencies(t *testing.T) {
+	for _, dependency := range serviceStoreDependencies() {
+		if dependency.service == serviceSchedulerQuota && resourceOwner(dependency.resource) != serviceSchedulerQuota {
+			t.Fatalf("scheduler-quota must not keep shared-store dependency %s", dependency.resource)
 		}
 	}
-	if slices.Contains(dependency.access, storeAccessUpdate) {
-		t.Fatalf("scheduler-quota org-project projects access = %v, must not include Update after the binding contract", dependency.access)
+
+	got := ownerReadResourcesForService(serviceSchedulerQuota)
+	want := []string{
+		serviceOrgProject + ":project_members",
+		serviceOrgProject + ":projects",
+		serviceOrgProject + ":user_groups",
+		serviceOrgProject + ":user_quotas",
+		serviceWorkload + ":jobs",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("scheduler-quota owner-read dependencies = %v, want %v", got, want)
 	}
 }
 
@@ -285,11 +286,12 @@ func assertIsolationGaps(t *testing.T, err error, want []string) {
 	}
 }
 
-func findStoreDependency(service, resource string) (storeDependency, bool) {
-	for _, dependency := range serviceStoreDependencies() {
-		if dependency.service == service && dependency.resource == resource {
-			return dependency, true
+func ownerReadResourcesForService(service string) []string {
+	var resources []string
+	for _, dependency := range serviceOwnerReadDependencies() {
+		if dependency.service == service {
+			resources = append(resources, dependency.resource)
 		}
 	}
-	return storeDependency{}, false
+	return resources
 }

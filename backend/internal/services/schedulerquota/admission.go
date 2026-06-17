@@ -107,7 +107,7 @@ func reviewSubmitAdmission(app *platform.App, r *http.Request, _ platform.RouteS
 	if repo == nil {
 		return http.StatusServiceUnavailable, admissionDenied(req, "submit policy store is not configured"), nil
 	}
-	review, err := evaluateSubmitAdmission(r.Context(), newAdmissionReader(app.Store), req, time.Now().UTC())
+	review, err := evaluateSubmitAdmission(r.Context(), newAdmissionReaderForApp(app), req, time.Now().UTC())
 	if err != nil {
 		status := http.StatusUnprocessableEntity
 		var denied admissionDeny
