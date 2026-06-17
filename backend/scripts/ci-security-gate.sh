@@ -81,13 +81,14 @@ cleanup_containers() {
 
 usage() {
   cat <<'USAGE'
-Usage: backend/scripts/ci-security-gate.sh <quick|docker|security|sonar|all>
+Usage: backend/scripts/ci-security-gate.sh <quick|docker|security|sonar|beta-rc|all>
 
 Subcommands:
   quick     gofmt check, go vet, go test, go build from backend/
   docker    Docker-backed migrations, integration coverage, focused E2E, full non-live E2E
   security  govulncheck, OSV source scan, backend image build, Trivy image scan
   sonar     SonarScanner with Quality Gate wait when configured or required
+  beta-rc   quick, production-beta render/dry-run/rollback rehearsal, docker, security, sonar, RC report
   all       quick, docker, security, sonar
 USAGE
 }
@@ -266,6 +267,117 @@ run_docker_gate() {
   run_full_non_live_e2e
 }
 
+service_manifest_names() {
+  find "${BACKEND_DIR}" -mindepth 2 -maxdepth 3 -path '*/k8s/deployment.yaml' -type f \
+    | while IFS= read -r manifest; do
+      basename "$(dirname "$(dirname "${manifest}")")"
+    done \
+    | sort
+}
+
+rendered_has_deployment() {
+  local render_file="$1"
+  local deployment_name="$2"
+  awk -v want="${deployment_name}" '
+    $0 == "kind: Deployment" {
+      in_deployment = 1
+      name = ""
+    }
+    in_deployment && $0 ~ /^  name: / {
+      name = $2
+    }
+    in_deployment && $0 == "---" {
+      if (name == want) {
+        found = 1
+      }
+      in_deployment = 0
+      name = ""
+    }
+    END {
+      if (in_deployment && name == want) {
+        found = 1
+      }
+      exit found ? 0 : 1
+    }
+  ' "${render_file}"
+}
+
+file_sha256() {
+  local path="$1"
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "${path}" | awk '{print $1}'
+    return
+  fi
+  sha256sum "${path}" | awk '{print $1}'
+}
+
+run_production_beta_manifest_rehearsal() {
+  need_cmd kubectl
+  need_cmd find
+  need_cmd sort
+  need_cmd wc
+
+  local service_list="${ARTIFACT_DIR}/production-beta-services.txt"
+  local render_file="${ARTIFACT_DIR}/production-beta-render.yaml"
+  local deploy_dry_run="${ARTIFACT_DIR}/production-beta-deploy-dry-run.txt"
+  local rollback_plan="${ARTIFACT_DIR}/production-beta-rollback-plan.sh"
+  local redeploy_dry_run="${ARTIFACT_DIR}/production-beta-redeploy-dry-run.txt"
+  local rehearsal_report="${ARTIFACT_DIR}/production-beta-manifest-rehearsal.md"
+
+  service_manifest_names >"${service_list}"
+  local service_count
+  service_count="$(wc -l <"${service_list}" | tr -d '[:space:]')"
+  if [ "${service_count}" != "15" ]; then
+    die "production-beta service manifest count = ${service_count}, want 15"
+  fi
+
+  log "Rendering production-beta kustomization"
+  run_repo kubectl kustomize backend >"${render_file}"
+
+  local service
+  while IFS= read -r service; do
+    [ -n "${service}" ] || continue
+    rendered_has_deployment "${render_file}" "${service}" \
+      || die "production-beta render is missing Deployment ${service}"
+  done <"${service_list}"
+
+  if rendered_has_deployment "${render_file}" "platform"; then
+    die "production-beta render contains all-in-one platform Deployment"
+  fi
+  if grep -q -- '-dev-' "${render_file}"; then
+    die "production-beta render contains dev secret references"
+  fi
+
+  log "Running production-beta deploy client dry-run"
+  run_repo kubectl apply --dry-run=client --validate=false -f "${render_file}" >"${deploy_dry_run}"
+
+  log "Writing production-beta rollback command plan"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'set -Eeuo pipefail\n\n'
+    while IFS= read -r service; do
+      [ -n "${service}" ] || continue
+      printf 'kubectl -n nexuspaas rollout undo deployment/%s\n' "${service}"
+    done <"${service_list}"
+  } >"${rollback_plan}"
+  chmod +x "${rollback_plan}"
+
+  log "Running production-beta re-deploy client dry-run"
+  run_repo kubectl apply --dry-run=client --validate=false -f "${render_file}" >"${redeploy_dry_run}"
+
+  {
+    printf '# Production Beta Manifest Rehearsal\n\n'
+    printf -- '- Service deployments: %s\n' "${service_count}"
+    printf -- '- Render artifact: `%s`\n' "${render_file}"
+    printf -- '- Render SHA-256: `%s`\n' "$(file_sha256 "${render_file}")"
+    printf -- '- Deploy dry-run artifact: `%s`\n' "${deploy_dry_run}"
+    printf -- '- Rollback command plan: `%s`\n' "${rollback_plan}"
+    printf -- '- Re-deploy dry-run artifact: `%s`\n' "${redeploy_dry_run}"
+    printf -- '- All-in-one platform deployment absent: yes\n'
+    printf -- '- Dev secret references absent: yes\n'
+  } >"${rehearsal_report}"
+}
+
 install_go_tool() {
   local binary="$1"
   local module="$2"
@@ -401,6 +513,52 @@ run_sonar_gate() {
     -Dsonar.token="${SONAR_TOKEN}"
 }
 
+write_beta_rc_report() {
+  local report="${ARTIFACT_DIR}/beta-rc-report.md"
+  local revision sonar_status
+  revision="$(run_repo git rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
+  sonar_status="passed"
+  if [ -f "${ARTIFACT_DIR}/sonar-skipped.txt" ]; then
+    sonar_status="skipped: missing SONAR_TOKEN or SONAR_HOST_URL under current policy"
+  fi
+
+  {
+    printf '# NexusPaas Production Beta RC Gate\n\n'
+    printf -- '- Commit: `%s`\n' "${revision}"
+    printf -- '- Generated: `%s`\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    printf -- '- Artifact directory: `%s`\n\n' "${ARTIFACT_DIR}"
+    printf '## Gate Results\n\n'
+    printf -- '- Quick gate: passed\n'
+    printf -- '- Production-beta manifest deploy dry-run: passed\n'
+    printf -- '- Production-beta rollback command rehearsal: passed\n'
+    printf -- '- Production-beta re-deploy dry-run: passed\n'
+    printf -- '- Docker-backed migrations, integration coverage, focused E2E, and full non-live E2E: passed\n'
+    printf -- '- Security gate: passed\n'
+    printf -- '- Sonar gate: %s\n\n' "${sonar_status}"
+    printf '## Key Artifacts\n\n'
+    printf -- '- Manifest rehearsal: `%s`\n' "${ARTIFACT_DIR}/production-beta-manifest-rehearsal.md"
+    printf -- '- Rendered manifest: `%s`\n' "${ARTIFACT_DIR}/production-beta-render.yaml"
+    printf -- '- Deploy dry-run: `%s`\n' "${ARTIFACT_DIR}/production-beta-deploy-dry-run.txt"
+    printf -- '- Rollback command plan: `%s`\n' "${ARTIFACT_DIR}/production-beta-rollback-plan.sh"
+    printf -- '- Re-deploy dry-run: `%s`\n' "${ARTIFACT_DIR}/production-beta-redeploy-dry-run.txt"
+    printf -- '- Integration log: `%s`\n' "${ARTIFACT_DIR}/integration.log"
+    printf -- '- Focused E2E log: `%s`\n' "${ARTIFACT_DIR}/focused-e2e.log"
+    printf -- '- Full E2E log: `%s`\n\n' "${ARTIFACT_DIR}/full-e2e.log"
+    printf '## Live Staging Caveat\n\n'
+    printf 'This gate is non-live by default. External Production Beta traffic still requires a live staging rehearsal with real secrets, ready pods, 15-service health/ready/metrics smoke, rollback, and re-deploy evidence.\n'
+  } >"${report}"
+  log "Beta RC report written to ${report}"
+}
+
+run_beta_rc_gate() {
+  run_quick
+  run_production_beta_manifest_rehearsal
+  run_docker_gate
+  run_security_gate
+  run_sonar_gate
+  write_beta_rc_report
+}
+
 main() {
   local command="${1:-all}"
   case "${command}" in
@@ -408,6 +566,7 @@ main() {
     docker) run_docker_gate ;;
     security) run_security_gate ;;
     sonar) run_sonar_gate ;;
+    beta-rc) run_beta_rc_gate ;;
     all)
       run_quick
       run_docker_gate

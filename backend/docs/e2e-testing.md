@@ -358,6 +358,26 @@ non-fork pull requests. Fork pull requests skip Sonar when secrets are
 unavailable; branch protection should require the non-fork/default-branch gate
 before merge.
 
+Run the non-live Production Beta release-candidate rehearsal when preparing a
+Beta RC:
+
+```sh
+bash backend/scripts/ci-security-gate.sh beta-rc
+```
+
+This command runs the quick gate, renders `kubectl kustomize backend`, verifies
+the production-beta render contains the 15 NexusPaas service deployments and no
+all-in-one `platform` deployment, rejects `-dev-` secret references, runs
+client-side deploy dry-run, writes rollback commands for every service
+deployment, runs re-deploy dry-run, then executes Docker-backed E2E, security,
+and Sonar gates. It writes `${ARTIFACT_DIR}/beta-rc-report.md` plus render,
+dry-run, rollback, and E2E artifacts.
+
+The `beta-rc` gate is non-live by default. External Production Beta traffic
+still requires a live staging rehearsal with real staging secrets, ready pods,
+15-service health/ready/metrics smoke, critical journey E2E, rollback, and
+re-deploy evidence. See `docs/beta-launch-readiness.md`.
+
 Existing manual gates remain:
 
 ```sh
