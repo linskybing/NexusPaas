@@ -2,6 +2,8 @@ package schedulerquota
 
 import (
 	"context"
+	"log/slog"
+	"strings"
 
 	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
@@ -30,6 +32,7 @@ type admissionRecord = contracts.Record[map[string]any]
 // and substitutable (e.g. by service-owned read clients once typed repos land).
 type admissionReader interface {
 	Project(ctx context.Context, projectID string) (admissionRecord, bool)
+	ListProjects(ctx context.Context) []admissionRecord
 	Plan(ctx context.Context, planID string) (admissionRecord, bool)
 	Queue(ctx context.Context, queueID string) (admissionRecord, bool)
 	ListQueues(ctx context.Context) []admissionRecord
@@ -41,19 +44,34 @@ type admissionReader interface {
 	ListWorkloadJobs(ctx context.Context) []admissionRecord
 }
 
-// storeAdmissionReader is the shared-store-backed implementation of
-// admissionReader. It is the only place that maps the typed reads to concrete
-// resource keys.
+// storeAdmissionReader is the co-hosted/local implementation of admissionReader.
+// It is the only place that maps the typed reads to concrete resource keys.
 type storeAdmissionReader struct {
 	store     platform.RecordStore
 	scheduler schedulerQuotaRepository
 }
 
-// newAdmissionReader wraps a shared store as an admissionReader. A nil store
-// yields a reader whose lookups all miss, matching the evaluator's
-// fail-closed "store not configured" handling.
+// newAdmissionReader wraps a local store as an admissionReader. A nil store
+// yields a reader whose lookups all miss, matching the evaluator's fail-closed
+// "store not configured" handling. Isolated production handlers should use
+// newAdmissionReaderForApp so foreign resources resolve through owner contracts.
 func newAdmissionReader(store platform.RecordStore) admissionReader {
 	return storeAdmissionReader{store: store, scheduler: schedulerQuotaRepositoryFromStore(store)}
+}
+
+func newAdmissionReaderForApp(app *platform.App) admissionReader {
+	if app == nil {
+		return newAdmissionReader(nil)
+	}
+	local := storeAdmissionReader{store: app.Store, scheduler: schedulerQuotaRepositoryForApp(app)}
+	if app.Config.ServiceName == "" || app.Config.ServiceName == "all" {
+		return local
+	}
+	return ownerReadAdmissionReader{
+		local: local,
+		cfg:   app.Config,
+		owner: platform.NewRemoteServiceReader(app.Config),
+	}
 }
 
 func (rdr storeAdmissionReader) get(ctx context.Context, resource, id string) (admissionRecord, bool) {
@@ -72,6 +90,10 @@ func (rdr storeAdmissionReader) list(ctx context.Context, resource string) []adm
 
 func (rdr storeAdmissionReader) Project(ctx context.Context, projectID string) (admissionRecord, bool) {
 	return rdr.get(ctx, projectsResource, projectID)
+}
+
+func (rdr storeAdmissionReader) ListProjects(ctx context.Context) []admissionRecord {
+	return rdr.list(ctx, projectsResource)
 }
 
 func (rdr storeAdmissionReader) Plan(ctx context.Context, planID string) (admissionRecord, bool) {
@@ -117,4 +139,89 @@ func (rdr storeAdmissionReader) ListUserQuotas(ctx context.Context) []admissionR
 
 func (rdr storeAdmissionReader) ListWorkloadJobs(ctx context.Context) []admissionRecord {
 	return rdr.list(ctx, workloadJobsResource)
+}
+
+type ownerReadAdmissionReader struct {
+	local storeAdmissionReader
+	cfg   platform.Config
+	owner platform.CrossServiceReader
+}
+
+func (rdr ownerReadAdmissionReader) Project(ctx context.Context, projectID string) (admissionRecord, bool) {
+	return rdr.getOwner(ctx, projectsResource, projectID)
+}
+
+func (rdr ownerReadAdmissionReader) ListProjects(ctx context.Context) []admissionRecord {
+	return rdr.listOwner(ctx, projectsResource)
+}
+
+func (rdr ownerReadAdmissionReader) Plan(ctx context.Context, planID string) (admissionRecord, bool) {
+	return rdr.local.Plan(ctx, planID)
+}
+
+func (rdr ownerReadAdmissionReader) Queue(ctx context.Context, queueID string) (admissionRecord, bool) {
+	return rdr.local.Queue(ctx, queueID)
+}
+
+func (rdr ownerReadAdmissionReader) ListQueues(ctx context.Context) []admissionRecord {
+	return rdr.local.ListQueues(ctx)
+}
+
+func (rdr ownerReadAdmissionReader) ProjectMember(ctx context.Context, key string) (admissionRecord, bool) {
+	return rdr.getOwner(ctx, projectMembersResource, key)
+}
+
+func (rdr ownerReadAdmissionReader) ListProjectMembers(ctx context.Context) []admissionRecord {
+	return rdr.listOwner(ctx, projectMembersResource)
+}
+
+func (rdr ownerReadAdmissionReader) ListUserGroups(ctx context.Context) []admissionRecord {
+	return rdr.listOwner(ctx, userGroupsResource)
+}
+
+func (rdr ownerReadAdmissionReader) UserQuota(ctx context.Context, key string) (admissionRecord, bool) {
+	return rdr.getOwner(ctx, userQuotasResource, key)
+}
+
+func (rdr ownerReadAdmissionReader) ListUserQuotas(ctx context.Context) []admissionRecord {
+	return rdr.listOwner(ctx, userQuotasResource)
+}
+
+func (rdr ownerReadAdmissionReader) ListWorkloadJobs(ctx context.Context) []admissionRecord {
+	return rdr.listOwner(ctx, workloadJobsResource)
+}
+
+func (rdr ownerReadAdmissionReader) getOwner(ctx context.Context, resource, id string) (admissionRecord, bool) {
+	if rdr.isLocalOwner(resource) {
+		return rdr.local.get(ctx, resource, id)
+	}
+	if rdr.owner == nil {
+		return admissionRecord{}, false
+	}
+	record, found, err := rdr.owner.Get(ctx, resource, id)
+	if err != nil {
+		slog.Error("scheduler quota owner read get failed", "resource", resource, "id", id, "error", err)
+		return admissionRecord{}, false
+	}
+	return record, found
+}
+
+func (rdr ownerReadAdmissionReader) listOwner(ctx context.Context, resource string) []admissionRecord {
+	if rdr.isLocalOwner(resource) {
+		return rdr.local.list(ctx, resource)
+	}
+	if rdr.owner == nil {
+		return nil
+	}
+	records, err := rdr.owner.List(ctx, resource)
+	if err != nil {
+		slog.Error("scheduler quota owner read list failed", "resource", resource, "error", err)
+		return nil
+	}
+	return records
+}
+
+func (rdr ownerReadAdmissionReader) isLocalOwner(resource string) bool {
+	owner, _, found := strings.Cut(resource, ":")
+	return !found || rdr.cfg.AllowsService(owner)
 }

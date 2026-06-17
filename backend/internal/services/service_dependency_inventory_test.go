@@ -24,7 +24,7 @@ type serviceResourceKey struct {
 var resourceLiteralPattern = regexp.MustCompile(`"([a-z0-9-]+-service:[^"]+)"`)
 
 func TestServiceResourceConstantsAreClassifiedForIsolation(t *testing.T) {
-	registered := registeredStoreDependencyKeys()
+	registered := registeredResourceDependencyKeys()
 	explicit := explicitResourceClassifications()
 	seenRegistered := map[serviceResourceKey]bool{}
 
@@ -38,7 +38,7 @@ func TestServiceResourceConstantsAreClassifiedForIsolation(t *testing.T) {
 
 	for key := range registered {
 		if !seenRegistered[key] {
-			t.Fatalf("registered store dependency %s -> %s is not backed by a source resource constant", key.service, key.resource)
+			t.Fatalf("registered resource dependency %s -> %s is not backed by a source resource constant", key.service, key.resource)
 		}
 	}
 }
@@ -119,9 +119,12 @@ func classifyResourceLiteral(
 	return filepath.ToSlash(path) + ": " + owner + " -> " + resource, true
 }
 
-func registeredStoreDependencyKeys() map[serviceResourceKey]bool {
+func registeredResourceDependencyKeys() map[serviceResourceKey]bool {
 	out := map[serviceResourceKey]bool{}
 	for _, dependency := range serviceStoreDependencies() {
+		out[serviceResourceKey{service: dependency.service, resource: dependency.resource}] = true
+	}
+	for _, dependency := range serviceOwnerReadDependencies() {
 		out[serviceResourceKey{service: dependency.service, resource: dependency.resource}] = true
 	}
 	return out
@@ -229,6 +232,22 @@ func TestServiceStoreDependencyResourcesAreUnique(t *testing.T) {
 	}
 	if !slices.IsSorted(keys) {
 		t.Fatalf("store dependencies must stay sorted for deterministic startup diagnostics: %v", keys)
+	}
+}
+
+func TestServiceOwnerReadDependencyResourcesAreUnique(t *testing.T) {
+	var keys []string
+	seen := map[string]bool{}
+	for _, dependency := range serviceOwnerReadDependencies() {
+		key := dependency.service + " -> " + dependency.resource
+		if seen[key] {
+			t.Fatalf("duplicate owner-read dependency %s", key)
+		}
+		seen[key] = true
+		keys = append(keys, key)
+	}
+	if !slices.IsSorted(keys) {
+		t.Fatalf("owner-read dependencies must stay sorted for deterministic startup diagnostics: %v", keys)
 	}
 }
 

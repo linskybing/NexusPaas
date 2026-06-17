@@ -23,11 +23,15 @@ const defaultQuotaPods = 20
 // and lands with Phase 1b/3; it is intentionally not part of this enforcement
 // pass. A nil cluster client (degraded mode) is a no-op.
 func reconcileResourceQuotas(ctx context.Context, cl *cluster.Client, store platform.RecordStore, _ time.Time) error {
+	return reconcileResourceQuotasWithReader(ctx, cl, store, newAdmissionReader(store))
+}
+
+func reconcileResourceQuotasWithReader(ctx context.Context, cl *cluster.Client, store platform.RecordStore, reader admissionReader) error {
 	repo := schedulerQuotaRepositoryFromStore(store)
-	if cl == nil || store == nil || repo == nil {
+	if cl == nil || store == nil || repo == nil || reader == nil {
 		return nil
 	}
-	for _, project := range store.List(ctx, projectsResource) {
+	for _, project := range reader.ListProjects(ctx) {
 		planID := shared.TextValue(project.Data, "plan_id", "planId", "resource_plan_id", "resourcePlanId")
 		if planID == "" {
 			continue // no bound plan: unlimited at the K8s level, as in the reference.
@@ -69,6 +73,6 @@ func quotaPodLimit(project map[string]any) int {
 // maintenance task. It runs only once StartMaintenance is called.
 func registerResourceQuotaReconciler(app *platform.App) {
 	app.RegisterMaintenanceTaskForService(serviceName, "resource-quota-reconciler", func(ctx context.Context) error {
-		return reconcileResourceQuotas(ctx, app.Cluster, app.Store, time.Now().UTC())
+		return reconcileResourceQuotasWithReader(ctx, app.Cluster, app.Store, newAdmissionReaderForApp(app))
 	})
 }

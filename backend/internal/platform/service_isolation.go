@@ -12,17 +12,29 @@ import (
 // can fail loudly instead of returning silently empty data or writing
 // split-brain records in isolated deployments.
 func (a *App) RegisterStoreDependencies(service string, resources ...string) {
+	registerServiceResources(a.storeDependencies, service, resources...)
+}
+
+// RegisterOwnerReadDependencies records resources this service reads through an
+// explicit owning-service contract. These are not shared-store allowances: in an
+// isolated deployment the owner must be reachable through SERVICE_URLS and
+// service-to-service auth, otherwise production startup fails closed.
+func (a *App) RegisterOwnerReadDependencies(service string, resources ...string) {
+	registerServiceResources(a.ownerReadDeps, service, resources...)
+}
+
+func registerServiceResources(target map[string]map[string]bool, service string, resources ...string) {
 	service = strings.TrimSpace(service)
 	if service == "" {
 		return
 	}
-	if a.storeDependencies[service] == nil {
-		a.storeDependencies[service] = map[string]bool{}
+	if target[service] == nil {
+		target[service] = map[string]bool{}
 	}
 	for _, resource := range resources {
 		resource = strings.TrimSpace(resource)
 		if resource != "" {
-			a.storeDependencies[service][resource] = true
+			target[service][resource] = true
 		}
 	}
 }
@@ -36,7 +48,7 @@ func (a *App) ValidateServiceIsolation() error {
 	if len(gaps) == 0 {
 		return nil
 	}
-	return fmt.Errorf("external in-process store dependencies for isolated service: %s", strings.Join(gaps, ", "))
+	return fmt.Errorf("service isolation dependencies are not configured for isolated service: %s", strings.Join(gaps, ", "))
 }
 
 func (a *App) serviceIsolationGaps() []string {
@@ -44,7 +56,15 @@ func (a *App) serviceIsolationGaps() []string {
 		return nil
 	}
 	var gaps []string
-	for service, resources := range a.storeDependencies {
+	gaps = append(gaps, a.dependencyGaps(a.storeDependencies, "store")...)
+	gaps = append(gaps, a.dependencyGaps(a.ownerReadDeps, "owner-read")...)
+	sort.Strings(gaps)
+	return gaps
+}
+
+func (a *App) dependencyGaps(dependencies map[string]map[string]bool, kind string) []string {
+	var gaps []string
+	for service, resources := range dependencies {
 		if !a.Config.AllowsService(service) {
 			continue
 		}
@@ -58,10 +78,9 @@ func (a *App) serviceIsolationGaps() []string {
 			if hasDomainReadContract(resource) && a.Config.ServiceURLs[resourceOwner(resource)] != "" && a.Config.ServiceAPIKey != "" {
 				continue
 			}
-			gaps = append(gaps, service+" -> "+resource)
+			gaps = append(gaps, service+" -> "+resource+" ("+kind+")")
 		}
 	}
-	sort.Strings(gaps)
 	return gaps
 }
 

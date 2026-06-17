@@ -40,6 +40,7 @@ type App struct {
 	routeIndexHash     uint64
 	jwtVerifier        *jwtVerifier
 	devTokenSigner     *devTokenSigner
+	ownerReadDeps      map[string]map[string]bool
 }
 
 func NewApp(cfg Config, opts ...Option) *App {
@@ -148,6 +149,7 @@ func newBaseApp(cfg Config) *App {
 		routeIndex:         map[string][]RouteSpec{},
 		jwtVerifier:        newJWTVerifier(cfg),
 		devTokenSigner:     newDevTokenSigner(cfg),
+		ownerReadDeps:      map[string]map[string]bool{},
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
+	"github.com/linskybing/nexuspaas/backend/internal/services/orgproject"
 	"github.com/linskybing/nexuspaas/backend/internal/services/schedulerquota"
 )
 
@@ -159,16 +160,32 @@ func TestSubmitJobRejectsMalformedJSONWithoutWrites(t *testing.T) {
 
 func TestSubmitJobUsesRemoteSchedulerAdmissionWhenIsolated(t *testing.T) {
 	serviceKey := "service-secret"
+	ownerApp := platform.NewApp(platform.Config{
+		ServiceName:   "all",
+		HTTPAddr:      ":0",
+		ServiceAPIKey: serviceKey,
+	})
+	orgproject.Register(ownerApp)
+	Register(ownerApp)
+	seedJobAdmissionOwnerData(t, ownerApp, map[string]any{})
+	ownerServer := httptest.NewServer(ownerApp)
+	defer ownerServer.Close()
+
 	schedulerApp := platform.NewApp(platform.Config{
 		ServiceName:      schedulerServiceName,
 		HTTPAddr:         ":0",
 		RequireAuth:      true,
 		APIKeys:          map[string]bool{serviceKey: true},
 		APIKeyPrincipals: map[string]platform.APIKeyPrincipal{serviceKey: {ID: serviceName, Role: "service"}},
+		ServiceURLs: map[string]string{
+			"org-project-service": ownerServer.URL,
+			serviceName:           ownerServer.URL,
+		},
+		ServiceAPIKey: serviceKey,
 	})
 	registerSchedulerAdmissionRoute(schedulerApp)
 	schedulerquota.Register(schedulerApp)
-	seedJobAdmissionProject(t, schedulerApp, map[string]any{})
+	seedSchedulerAdmissionPolicy(t, schedulerApp)
 	var received http.Header
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		received = r.Header.Clone()
@@ -258,6 +275,12 @@ func registerSchedulerAdmissionRoute(app *platform.App) {
 
 func seedJobAdmissionProject(t *testing.T, app *platform.App, projectOverrides map[string]any) {
 	t.Helper()
+	seedSchedulerAdmissionPolicy(t, app)
+	seedJobAdmissionOwnerData(t, app, projectOverrides)
+}
+
+func seedSchedulerAdmissionPolicy(t *testing.T, app *platform.App) {
+	t.Helper()
 	createWorkloadRecord(t, app, testSchedulerQueuesResource, map[string]any{"id": "q1", "name": "default-batch"})
 	createWorkloadRecord(t, app, testSchedulerPlansResource, map[string]any{
 		"id":                 "plan-1",
@@ -268,6 +291,10 @@ func seedJobAdmissionProject(t *testing.T, app *platform.App, projectOverrides m
 		"queue_ids":          []string{"q1"},
 		"allowed_gpu_models": []string{"gpu.nvidia.com"},
 	})
+}
+
+func seedJobAdmissionOwnerData(t *testing.T, app *platform.App, projectOverrides map[string]any) {
+	t.Helper()
 	project := map[string]any{
 		"id":                           "P1",
 		"plan_id":                      "plan-1",

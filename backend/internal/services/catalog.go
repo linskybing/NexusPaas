@@ -76,51 +76,47 @@ type serviceRegistration struct {
 type storeDependency struct {
 	service  string
 	resource string
-	access   []string
 }
 
-const (
-	storeAccessGet    = "Get"
-	storeAccessList   = "List"
-	storeAccessUpdate = "Update"
-)
+type ownerReadDependency struct {
+	service  string
+	resource string
+}
 
 func registerStoreDependencies(app *platform.App) {
 	for _, dependency := range serviceStoreDependencies() {
 		app.RegisterStoreDependencies(dependency.service, dependency.resource)
 	}
+	for _, dependency := range serviceOwnerReadDependencies() {
+		app.RegisterOwnerReadDependencies(dependency.service, dependency.resource)
+	}
 }
 
 func serviceStoreDependencies() []storeDependency {
-	return []storeDependency{
+	return nil
+}
+
+func serviceOwnerReadDependencies() []ownerReadDependency {
+	return []ownerReadDependency{
 		{
 			service:  serviceSchedulerQuota,
 			resource: serviceOrgProject + ":project_members",
-			access:   []string{storeAccessGet, storeAccessList},
 		},
 		{
-			// Read-only: project plan-binding writes now go through the
-			// org-project internal binding contract (problem.md #2), so
-			// scheduler-quota no longer needs Update on the project aggregate.
-			// The remaining Get/List back the out-of-scope plan/quota reads.
 			service:  serviceSchedulerQuota,
 			resource: serviceOrgProject + ":projects",
-			access:   []string{storeAccessGet, storeAccessList},
 		},
 		{
 			service:  serviceSchedulerQuota,
 			resource: serviceOrgProject + ":user_groups",
-			access:   []string{storeAccessList},
 		},
 		{
 			service:  serviceSchedulerQuota,
 			resource: serviceOrgProject + ":user_quotas",
-			access:   []string{storeAccessGet, storeAccessList},
 		},
 		{
 			service:  serviceSchedulerQuota,
 			resource: serviceWorkload + ":jobs",
-			access:   []string{storeAccessList},
 		},
 	}
 }

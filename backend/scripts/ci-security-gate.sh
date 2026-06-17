@@ -16,6 +16,7 @@ TEST_POSTGRES_PORT="${TEST_POSTGRES_PORT:-15432}"
 TEST_REDIS_PORT="${TEST_REDIS_PORT:-16379}"
 TEST_MINIO_PORT="${TEST_MINIO_PORT:-19000}"
 TEST_MINIO_CONSOLE_PORT="${TEST_MINIO_CONSOLE_PORT:-19001}"
+TEST_POSTGRES_PASSWORD="${TEST_POSTGRES_PASSWORD:-nexuspaas}"
 TEST_OBJECT_STORE_ACCESS_KEY="${TEST_OBJECT_STORE_ACCESS_KEY:-nexuspaas}"
 TEST_OBJECT_STORE_SECRET_KEY="${TEST_OBJECT_STORE_SECRET_KEY:-nexuspaas-secret}"
 TEST_OBJECT_STORE_BUCKET="${TEST_OBJECT_STORE_BUCKET:-media-e2e}"
@@ -145,7 +146,7 @@ start_backing_services() {
     --name "${POSTGRES_CONTAINER}" \
     -p "${TEST_POSTGRES_PORT}:5432" \
     -e POSTGRES_USER=nexuspaas \
-    -e POSTGRES_PASSWORD=nexuspaas \
+    -e "POSTGRES_PASSWORD=${TEST_POSTGRES_PASSWORD}" \
     -e POSTGRES_DB=nexuspaas \
     postgres:16-alpine >/dev/null
 
@@ -172,7 +173,9 @@ start_backing_services() {
 }
 
 export_test_env() {
-  export TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgres://nexuspaas:nexuspaas@localhost:${TEST_POSTGRES_PORT}/nexuspaas?sslmode=disable}"
+  local default_database_url
+  default_database_url="postgres://nexuspaas:${TEST_POSTGRES_PASSWORD}@localhost:${TEST_POSTGRES_PORT}/nexuspaas?sslmode=disable"
+  export TEST_DATABASE_URL="${TEST_DATABASE_URL:-${default_database_url}}"
   export TEST_REDIS_URL="${TEST_REDIS_URL:-redis://localhost:${TEST_REDIS_PORT}/0}"
   export TEST_EVENT_BUS_URL="${TEST_EVENT_BUS_URL:-${TEST_REDIS_URL}}"
   export TEST_OBJECT_STORE_URL="${TEST_OBJECT_STORE_URL:-http://localhost:${TEST_MINIO_PORT}}"
