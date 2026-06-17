@@ -26,9 +26,16 @@ The gate must pass these phases:
    - re-deploy client dry-run
 3. Docker-backed migrations, integration coverage, focused E2E, and full
    non-live E2E.
-4. govulncheck, OSV source scan, backend image build, and Trivy image scan.
-5. SonarScanner Quality Gate when configured or required.
-6. generated RC evidence report at `${ARTIFACT_DIR}/beta-rc-report.md`.
+4. non-live runtime smoke:
+   - `SERVICE_NAME=all` starts on `TEST_RUNTIME_PORT` (default `18080`)
+   - `/healthz`, `/readyz`, `/metrics`, `/openapi.json`, and
+     `/service-registry` return 200
+   - `/service-registry` lists all 15 services
+   - one read-only endpoint per service returns 2xx or expected 4xx; no service
+     returns 5xx
+5. govulncheck, OSV source scan, backend image build, and Trivy image scan.
+6. SonarScanner Quality Gate when configured or required.
+7. generated RC evidence report at `${ARTIFACT_DIR}/beta-rc-report.md`.
 
 The default artifact directory is under `/tmp/nexuspaas-quality-gate/<run-id>`.
 Override it with `CI_GATE_ARTIFACT_DIR` when a CI job needs to upload artifacts.

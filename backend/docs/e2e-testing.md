@@ -350,8 +350,12 @@ The Docker-backed gate uses isolated ports by default:
 The gate writes `backend/coverage.out` for Sonar and fails when integration
 coverage is below `CI_GATE_COVERAGE_THRESHOLD`, which defaults to `80.0`.
 Focused E2E must emit the required `PASS` lines and cannot pass by skipping.
-Full non-live E2E runs after the focused gate; live cluster tests remain guarded
-by their explicit opt-in environment variables.
+Full non-live E2E runs after the focused gate. The Docker-backed gate then
+starts `SERVICE_NAME=all` on `TEST_RUNTIME_PORT` (default `18080`) and checks
+`/healthz`, `/readyz`, `/metrics`, `/openapi.json`, `/service-registry`, and
+one read-only endpoint for each of the 15 registered services with no 5xx.
+Live cluster tests remain guarded by their explicit opt-in environment
+variables.
 
 In GitHub Actions, SonarScanner is required for pushes, workflow dispatches, and
 non-fork pull requests. Fork pull requests skip Sonar when secrets are
@@ -369,9 +373,9 @@ This command runs the quick gate, renders `kubectl kustomize backend`, verifies
 the production-beta render contains the 15 NexusPaas service deployments and no
 all-in-one `platform` deployment, rejects `-dev-` secret references, runs
 client-side deploy dry-run, writes rollback commands for every service
-deployment, runs re-deploy dry-run, then executes Docker-backed E2E, security,
-and Sonar gates. It writes `${ARTIFACT_DIR}/beta-rc-report.md` plus render,
-dry-run, rollback, and E2E artifacts.
+deployment, runs re-deploy dry-run, then executes Docker-backed E2E, runtime smoke,
+security, and Sonar gates. It writes `${ARTIFACT_DIR}/beta-rc-report.md` plus
+render, dry-run, rollback, E2E, and runtime-smoke artifacts.
 
 The `beta-rc` gate is non-live by default. External Production Beta traffic
 still requires a live staging rehearsal with real staging secrets, ready pods,

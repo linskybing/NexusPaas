@@ -1,3 +1,4 @@
 references/
 .scannerwork/
 backend/coverage.out
+backend/.e2e-gate/

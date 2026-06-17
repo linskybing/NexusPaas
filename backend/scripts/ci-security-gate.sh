@@ -16,10 +16,13 @@ TEST_POSTGRES_PORT="${TEST_POSTGRES_PORT:-15432}"
 TEST_REDIS_PORT="${TEST_REDIS_PORT:-16379}"
 TEST_MINIO_PORT="${TEST_MINIO_PORT:-19000}"
 TEST_MINIO_CONSOLE_PORT="${TEST_MINIO_CONSOLE_PORT:-19001}"
+TEST_RUNTIME_PORT="${TEST_RUNTIME_PORT:-18080}"
 TEST_POSTGRES_PASSWORD="${TEST_POSTGRES_PASSWORD:-nexuspaas}"
 TEST_OBJECT_STORE_ACCESS_KEY="${TEST_OBJECT_STORE_ACCESS_KEY:-nexuspaas}"
 TEST_OBJECT_STORE_SECRET_KEY="${TEST_OBJECT_STORE_SECRET_KEY:-nexuspaas-secret}"
 TEST_OBJECT_STORE_BUCKET="${TEST_OBJECT_STORE_BUCKET:-media-e2e}"
+TEST_RUNTIME_API_KEY="${TEST_RUNTIME_API_KEY:-smoke-api-key}"
+TEST_RUNTIME_SERVICE_KEY="${TEST_RUNTIME_SERVICE_KEY:-smoke-service-key}"
 
 CI_GATE_COVERAGE_THRESHOLD="${CI_GATE_COVERAGE_THRESHOLD:-80.0}"
 CI_GATE_CLEANUP="${CI_GATE_CLEANUP:-1}"
@@ -37,6 +40,7 @@ POSTGRES_CONTAINER="nexuspaas-ci-postgres-${RUN_SUFFIX}"
 REDIS_CONTAINER="nexuspaas-ci-redis-${RUN_SUFFIX}"
 MINIO_CONTAINER="nexuspaas-ci-minio-${RUN_SUFFIX}"
 BACKEND_IMAGE="${BACKEND_IMAGE:-nexuspaas-backend:ci-${RUN_SUFFIX}}"
+RUNTIME_PID=""
 
 FOCUSED_E2E_PATTERN='TestServiceRouteIsolationContract|TestServiceIsolationValidationE2E|TestIsolatedRuntimeRegistrationE2E|TestProviderConsumerContractMatrix|TestCriticalCrossServiceJourneys|TestSchedulerAdmissionOwnerReadContractsE2E|TestNonBlobIsolatedServiceIgnoresObjectStoreConfigE2E|TestStorageMountPlanContractE2E'
 FOCUSED_E2E_PASS_PATTERN='^--- PASS: Test(ServiceRouteIsolationContract|ServiceIsolationValidationE2E|IsolatedRuntimeRegistrationE2E|ProviderConsumerContractMatrix|CriticalCrossServiceJourneys|SchedulerAdmissionOwnerReadContractsE2E|NonBlobIsolatedServiceIgnoresObjectStoreConfigE2E|StorageMountPlanContractE2E)'
@@ -71,6 +75,14 @@ docker_cli() {
   DOCKER_CONFIG="${DOCKER_CONFIG_DIR}" docker "$@"
 }
 
+cleanup_runtime() {
+  if [ -n "${RUNTIME_PID}" ] && kill -0 "${RUNTIME_PID}" >/dev/null 2>&1; then
+    kill "${RUNTIME_PID}" >/dev/null 2>&1 || true
+    wait "${RUNTIME_PID}" >/dev/null 2>&1 || true
+  fi
+  RUNTIME_PID=""
+}
+
 cleanup_containers() {
   if [ "${CI_GATE_CLEANUP}" != "1" ]; then
     log "Leaving Docker containers for inspection: ${POSTGRES_CONTAINER} ${REDIS_CONTAINER} ${MINIO_CONTAINER}"
@@ -79,16 +91,21 @@ cleanup_containers() {
   docker_cli rm -f "${MINIO_CONTAINER}" "${REDIS_CONTAINER}" "${POSTGRES_CONTAINER}" >/dev/null 2>&1 || true
 }
 
+cleanup_gate() {
+  cleanup_runtime
+  cleanup_containers
+}
+
 usage() {
   cat <<'USAGE'
 Usage: backend/scripts/ci-security-gate.sh <quick|docker|security|sonar|beta-rc|all>
 
 Subcommands:
   quick     gofmt check, go vet, go test, go build from backend/
-  docker    Docker-backed migrations, integration coverage, focused E2E, full non-live E2E
+  docker    Docker-backed migrations, integration coverage, focused E2E, full non-live E2E, runtime smoke
   security  govulncheck, OSV source scan, backend image build, Trivy image scan
   sonar     SonarScanner with Quality Gate wait when configured or required
-  beta-rc   quick, production-beta render/dry-run/rollback rehearsal, docker, security, sonar, RC report
+  beta-rc   quick, production-beta render/dry-run/rollback rehearsal, docker/runtime smoke, security, sonar, RC report
   all       quick, docker, security, sonar
 USAGE
 }
@@ -140,7 +157,7 @@ wait_for() {
 start_backing_services() {
   need_cmd docker
   need_cmd curl
-  trap cleanup_containers EXIT
+  trap cleanup_gate EXIT
 
   log "Starting isolated Postgres on ${TEST_POSTGRES_PORT}"
   docker_cli run -d --rm \
@@ -258,6 +275,113 @@ run_full_non_live_e2e() {
   run_backend go test -tags e2e ./internal/e2e -count=1 -v 2>&1 | tee "${log_file}"
 }
 
+http_status_code() {
+  local code
+  code="$(curl -sS -o /dev/null -w '%{http_code}' "$@" || true)"
+  printf '%s' "${code:-000}"
+}
+
+wait_for_runtime() {
+  local runtime_url="$1"
+  local runtime_log="$2"
+  local attempt
+  for attempt in $(seq 1 90); do
+    if [ -n "${RUNTIME_PID}" ] && ! kill -0 "${RUNTIME_PID}" >/dev/null 2>&1; then
+      cat "${runtime_log}" >&2 || true
+      die "runtime exited before becoming healthy"
+    fi
+    if curl -fsS "${runtime_url}/healthz" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  cat "${runtime_log}" >&2 || true
+  die "runtime did not become healthy"
+}
+
+run_runtime_smoke() {
+  export_test_env
+  need_cmd curl
+
+  local runtime_url="http://127.0.0.1:${TEST_RUNTIME_PORT}"
+  local runtime_log="${ARTIFACT_DIR}/runtime.log"
+  local smoke_log="${ARTIFACT_DIR}/runtime-smoke.log"
+  local registry_file="${ARTIFACT_DIR}/service-registry.json"
+
+  log "Starting all-in-one runtime smoke on 127.0.0.1:${TEST_RUNTIME_PORT}"
+  cleanup_runtime
+  (
+    cd "${BACKEND_DIR}" && env \
+      SERVICE_NAME=all \
+      "HTTP_ADDR=127.0.0.1:${TEST_RUNTIME_PORT}" \
+      REQUIRE_AUTH=false \
+      DEV_HEADER_AUTH=true \
+      PRODUCTION=false \
+      "DATABASE_URL=${TEST_DATABASE_URL}" \
+      "REDIS_URL=${TEST_REDIS_URL}" \
+      "EVENT_BUS_URL=${TEST_EVENT_BUS_URL}" \
+      "OBJECT_STORE_URL=${TEST_OBJECT_STORE_URL}" \
+      "OBJECT_STORE_ACCESS_KEY=${TEST_OBJECT_STORE_ACCESS_KEY}" \
+      "OBJECT_STORE_SECRET_KEY=${TEST_OBJECT_STORE_SECRET_KEY}" \
+      "OBJECT_STORE_BUCKET=${TEST_OBJECT_STORE_BUCKET}" \
+      "SERVICE_API_KEY=${TEST_RUNTIME_SERVICE_KEY}" \
+      go run ./cmd/microservice
+  ) >"${runtime_log}" 2>&1 &
+  RUNTIME_PID="$!"
+
+  wait_for_runtime "${runtime_url}" "${runtime_log}"
+
+  : >"${smoke_log}"
+  log "Checking runtime core endpoints"
+  local endpoint code
+  for endpoint in /healthz /readyz /metrics /openapi.json /service-registry; do
+    code="$(http_status_code "${runtime_url}${endpoint}")"
+    printf '%s %s\n' "${code}" "${endpoint}" | tee -a "${smoke_log}"
+    [ "${code}" = "200" ] || die "${endpoint} returned ${code}, want 200"
+  done
+
+  curl -fsS "${runtime_url}/service-registry" >"${registry_file}"
+  local service_count
+  service_count="$(grep -o '"name":"' "${registry_file}" | wc -l | tr -d '[:space:]')"
+  printf 'service-registry services: %s\n' "${service_count}" | tee -a "${smoke_log}"
+  [ "${service_count}" = "15" ] || die "service-registry contains ${service_count} services, want 15"
+
+  log "Checking read-only smoke endpoint for each service"
+  while IFS='|' read -r service path; do
+    [ -n "${service}" ] || continue
+    code="$(
+      http_status_code \
+        -H 'X-User-ID: smoke-admin' \
+        -H 'X-Username: smoke-admin' \
+        -H 'X-User-Role: admin' \
+        -H "X-API-Key: ${TEST_RUNTIME_API_KEY}" \
+        -H "X-Service-Key: ${TEST_RUNTIME_SERVICE_KEY}" \
+        "${runtime_url}${path}"
+    )"
+    printf '%s %-34s %s\n' "${code}" "${service}" "${path}" | tee -a "${smoke_log}"
+    case "${code}" in
+      000|5*) die "${service} smoke endpoint returned ${code}" ;;
+    esac
+  done <<'EOF'
+audit-compliance-service|/api/v1/audit/logs
+authorization-policy-service|/api/v1/permissions/policies
+ide-service|/api/v1/ide
+identity-service|/api/v1/users
+image-registry-service|/api/v1/image-catalog
+integration-proxy-service|/api/v1/admin/vpn
+k8s-control-service|/api/v1/resources
+media-upload-service|/api/v1/uploads/images/nonexistent-smoke.png
+org-project-service|/api/v1/projects
+platform-gateway|/api/v1/gateway/health
+request-notification-service|/api/v1/forms
+scheduler-quota-service|/api/v1/plans
+storage-service|/api/v1/storage/options
+usage-observability-service|/api/v1/admin/usage
+workload-service|/api/v1/jobs
+EOF
+  cleanup_runtime
+}
+
 run_docker_gate() {
   need_cmd go
   start_backing_services
@@ -265,6 +389,7 @@ run_docker_gate() {
   run_integration_coverage
   run_focused_e2e
   run_full_non_live_e2e
+  run_runtime_smoke
 }
 
 service_manifest_names() {
@@ -532,7 +657,7 @@ write_beta_rc_report() {
     printf -- '- Production-beta manifest deploy dry-run: passed\n'
     printf -- '- Production-beta rollback command rehearsal: passed\n'
     printf -- '- Production-beta re-deploy dry-run: passed\n'
-    printf -- '- Docker-backed migrations, integration coverage, focused E2E, and full non-live E2E: passed\n'
+    printf -- '- Docker-backed migrations, integration coverage, focused E2E, full non-live E2E, and runtime smoke: passed\n'
     printf -- '- Security gate: passed\n'
     printf -- '- Sonar gate: %s\n\n' "${sonar_status}"
     printf '## Key Artifacts\n\n'
@@ -543,7 +668,9 @@ write_beta_rc_report() {
     printf -- '- Re-deploy dry-run: `%s`\n' "${ARTIFACT_DIR}/production-beta-redeploy-dry-run.txt"
     printf -- '- Integration log: `%s`\n' "${ARTIFACT_DIR}/integration.log"
     printf -- '- Focused E2E log: `%s`\n' "${ARTIFACT_DIR}/focused-e2e.log"
-    printf -- '- Full E2E log: `%s`\n\n' "${ARTIFACT_DIR}/full-e2e.log"
+    printf -- '- Full E2E log: `%s`\n' "${ARTIFACT_DIR}/full-e2e.log"
+    printf -- '- Runtime smoke log: `%s`\n' "${ARTIFACT_DIR}/runtime-smoke.log"
+    printf -- '- Runtime log: `%s`\n\n' "${ARTIFACT_DIR}/runtime.log"
     printf '## Live Staging Caveat\n\n'
     printf 'This gate is non-live by default. External Production Beta traffic still requires a live staging rehearsal with real secrets, ready pods, 15-service health/ready/metrics smoke, rollback, and re-deploy evidence.\n'
   } >"${report}"

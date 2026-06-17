@@ -16,7 +16,9 @@ strong quick, Docker-backed E2E, security, and Sonar gates, plus a 15-service
 production-beta kustomization. What is missing is a single operator-facing gate
 that proves those pieces were run together for a candidate and that the
 production-beta manifests can be rendered and applied with client-side dry-run
-without mutating a live cluster.
+without mutating a live cluster. The gate also needs the non-live runtime smoke
+required by the roadmap: health, readiness, metrics, OpenAPI, service registry,
+and one read-only endpoint per registered service without any 5xx response.
 
 This PR creates the non-live release-candidate gate and documents the remaining
 live staging rehearsal requirement. It does not declare Public GA or route real
@@ -59,8 +61,8 @@ traffic.
 - Do not change runtime APIs, event schemas, or database schemas.
 - Do not mark the product as Public GA or Enterprise Ready.
 - Do not remove unrelated blockers such as missing reference snapshot,
-  `function.md`, unignored `.e2e-gate` artifacts, per-package coverage gaps, or
-  remaining physical shared-Postgres transition debt.
+  `function.md`, per-package coverage gaps, or remaining physical
+  shared-Postgres transition debt.
 
 ## 6. Current Behavior
 
@@ -85,9 +87,12 @@ There is no single command that:
 2. production-beta manifest rehearsal,
 3. Docker-backed migrations, integration coverage, focused E2E, and full
    non-live E2E,
-4. govulncheck, OSV, image build, and Trivy scan,
-5. SonarScanner Quality Gate when configured or required, and
-6. a generated `beta-rc-report.md` artifact.
+4. non-live runtime smoke against `SERVICE_NAME=all` for `/healthz`, `/readyz`,
+   `/metrics`, `/openapi.json`, `/service-registry`, and one read-only endpoint
+   per service with no 5xx,
+5. govulncheck, OSV, image build, and Trivy scan,
+6. SonarScanner Quality Gate when configured or required, and
+7. a generated `beta-rc-report.md` artifact.
 
 The manifest rehearsal:
 
@@ -118,6 +123,7 @@ readiness, smoke, rollback, and re-deploy evidence.
 - `backend/docs/e2e-testing.md`
 - `backend/docs/beta-launch-readiness.md`
 - `backend/internal/platform/deployment_test.go`
+- `.gitignore`
 - `problem.md`
 - this plan file
 
@@ -169,16 +175,22 @@ No runtime telemetry changes are made.
    service deployments, excludes the all-in-one platform deployment and dev
    secret references, runs deploy/re-deploy client dry-runs, and writes rollback
    commands for every service.
-3. Generate `${ARTIFACT_DIR}/beta-rc-report.md` after all gate phases pass.
-4. Update `backend/docs/e2e-testing.md` with the new `beta-rc` gate, artifact
+3. Add a Docker-backed runtime smoke phase after full non-live E2E that starts
+   `SERVICE_NAME=all` on an alternate local port, checks core runtime endpoints,
+   verifies `/service-registry` lists 15 services, and records per-service
+   smoke status with no 5xx.
+4. Generate `${ARTIFACT_DIR}/beta-rc-report.md` after all gate phases pass.
+5. Update `backend/docs/e2e-testing.md` with the new `beta-rc` gate, artifact
    outputs, and live staging caveat.
-5. Add `backend/docs/beta-launch-readiness.md` with the Production Beta RC
+6. Add `backend/docs/beta-launch-readiness.md` with the Production Beta RC
    checklist, non-live gate evidence, live staging prerequisites, rollback
    expectations, and remaining issue policy.
-6. Add platform tests proving the script and docs include the Beta RC gate,
-   manifest rehearsal, migration/E2E/security/Sonar coverage, rollback,
-   re-deploy, and live staging caveat.
-7. Update `problem.md` to record that a non-live RC rehearsal gate exists while
+7. Add `.gitignore` coverage for `backend/.e2e-gate/` so local gate artifacts
+   cannot pollute commits.
+8. Add platform tests proving the script and docs include the Beta RC gate,
+   manifest rehearsal, migration/E2E/security/Sonar coverage, runtime smoke,
+   rollback, re-deploy, and live staging caveat.
+9. Update `problem.md` to record that a non-live RC rehearsal gate exists while
    live staging evidence remains a blocker before external Beta traffic.
 
 ## 16. Verification Plan
@@ -212,6 +224,9 @@ resources.
   and dry-runs production-beta manifests.
 - The rollback rehearsal writes command evidence and validates re-deploy dry-run;
   it does not execute `kubectl rollout undo` without live staging context.
+- Runtime smoke starts an all-in-one process, not 15 separate pods. It proves
+  application-level endpoints and registry coverage while live 15-service pod
+  readiness remains a staging requirement.
 - Keeping live staging as an explicit remaining blocker avoids falsely claiming
   external launch readiness before real secrets and cluster evidence exist.
 
@@ -221,6 +236,8 @@ resources.
 - The new gate is non-mutating by default and does not commit secrets.
 - Manifest rehearsal covers render, deploy dry-run, 15 services, rollback
   command plan, and re-deploy dry-run.
+- Runtime smoke covers health, readiness, metrics, OpenAPI, service registry,
+  and one read-only endpoint per service with no 5xx.
 - Existing quick/docker/security/Sonar gates remain intact.
 - Documentation distinguishes non-live RC evidence from live staging launch
   approval.
