@@ -43,6 +43,9 @@ func (a *App) registerCommonEndpoints() {
 	a.registerOperationalEndpoint(operationalRoute("/openapi.json", "openapi", "platform_runtime_openapi"), func(app *App, _ *http.Request, _ RouteSpec) (int, any, *Degraded) {
 		return http.StatusOK, app.OpenAPI(), nil
 	})
+	a.registerOperationalEndpoint(operationalRoute("/swagger/", "swagger", "platform_runtime_swagger"), func(app *App, _ *http.Request, _ RouteSpec) (int, any, *Degraded) {
+		return http.StatusOK, app.SwaggerHTML(), nil
+	})
 	a.registerOperationalEndpoint(operationalRoute("/service-registry", "service-registry", "platform_runtime_service_registry"), func(app *App, _ *http.Request, _ RouteSpec) (int, any, *Degraded) {
 		return http.StatusOK, app.ServiceRegistryView(), nil
 	})

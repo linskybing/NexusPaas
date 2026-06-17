@@ -112,6 +112,38 @@ func TestRouteCoverage(t *testing.T) {
 	}
 }
 
+func TestOpenAPICoversAllRegisteredServiceRoutes(t *testing.T) {
+	app := newTestApp()
+	doc := app.OpenAPI()
+	paths, ok := doc["paths"].(map[string]map[string]any)
+	if !ok {
+		t.Fatalf("openapi paths type = %T, want map[string]map[string]any", doc["paths"])
+	}
+
+	for _, route := range app.Routes {
+		pattern := openAPIRoutePattern(route.Pattern)
+		operations, ok := paths[pattern]
+		if !ok {
+			t.Fatalf("openapi missing path for registered route %s %s (expected %s)", route.Method, route.Pattern, pattern)
+		}
+		if _, ok := operations[strings.ToLower(route.Method)]; !ok {
+			t.Fatalf("openapi missing method for registered route %s %s", route.Method, route.Pattern)
+		}
+	}
+}
+
+func openAPIRoutePattern(pattern string) string {
+	segments := strings.Split(pattern, "/")
+	for i, segment := range segments {
+		if !strings.HasPrefix(segment, "{") || !strings.HasSuffix(segment, "...}") {
+			continue
+		}
+		name := strings.TrimSuffix(strings.TrimPrefix(segment, "{"), "...}")
+		segments[i] = "{" + name + "}"
+	}
+	return strings.Join(segments, "/")
+}
+
 func TestProxyRoutesWithoutAdaptersAreServiceOwned(t *testing.T) {
 	app := newTestApp()
 	for _, route := range app.Routes {
@@ -130,7 +162,7 @@ func TestProxyRoutesWithoutAdaptersAreServiceOwned(t *testing.T) {
 
 func TestCommonEndpoints(t *testing.T) {
 	app := newTestApp()
-	for _, path := range []string{"/healthz", "/readyz", "/metrics", "/openapi.json", "/service-registry"} {
+	for _, path := range []string{"/healthz", "/readyz", "/metrics", "/openapi.json", "/swagger/", "/service-registry"} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		app.ServeHTTP(rec, req)
@@ -147,6 +179,26 @@ func TestCommonEndpoints(t *testing.T) {
 		data := payload["data"].(map[string]any)
 		if data["status"] != "ok" {
 			t.Fatalf("%s status = %v, want ok", path, data["status"])
+		}
+	}
+}
+
+func TestSwaggerEndpointServesEmbeddedSpec(t *testing.T) {
+	app := newTestApp()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/swagger/", nil)
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/swagger/ returned %d: %s", rec.Code, rec.Body.String())
+	}
+	if contentType := rec.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "text/html") {
+		t.Fatalf("swagger content type = %q, want text/html", contentType)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"SwaggerUIBundle", `"openapi":"3.1.0"`, `"paths":`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("swagger body missing %q: %s", want, body)
 		}
 	}
 }
@@ -246,7 +298,7 @@ func TestOperationalEndpointsRequireAdminWhenAuthEnabled(t *testing.T) {
 		requestRaw(t, app, http.MethodGet, path, nil, http.StatusOK)
 	}
 
-	opsPaths := []string{"/metrics", "/openapi.json", "/service-registry", "/outbox"}
+	opsPaths := []string{"/metrics", "/openapi.json", "/swagger/", "/service-registry", "/outbox"}
 	apiKeyOnly := map[string]string{"X-API-Key": "ops-key"}
 	userSession := map[string]string{"Authorization": "Bearer user-session"}
 	adminSession := map[string]string{"Authorization": "Bearer admin-session"}
@@ -257,6 +309,9 @@ func TestOperationalEndpointsRequireAdminWhenAuthEnabled(t *testing.T) {
 		rec := requestRaw(t, app, http.MethodGet, path, adminSession, http.StatusOK)
 		if path == "/metrics" && !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/plain") {
 			t.Fatalf("metrics content type = %q, want text/plain", rec.Header().Get("Content-Type"))
+		}
+		if path == "/swagger/" && !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/html") {
+			t.Fatalf("swagger content type = %q, want text/html", rec.Header().Get("Content-Type"))
 		}
 	}
 
@@ -314,6 +369,7 @@ func newAuthCommonEndpointTestApp(t *testing.T) *platform.App {
 	})
 	allowRawPolicy(t, app, "ADMIN", "", "platform-runtime:metrics", "platform_runtime_metrics")
 	allowRawPolicy(t, app, "ADMIN", "", "platform-runtime:openapi", "platform_runtime_openapi")
+	allowRawPolicy(t, app, "ADMIN", "", "platform-runtime:swagger", "platform_runtime_swagger")
 	allowRawPolicy(t, app, "ADMIN", "", "platform-runtime:service-registry", "platform_runtime_service_registry")
 	allowRawPolicy(t, app, "ADMIN", "", "platform-runtime:outbox", "platform_runtime_outbox")
 	return app
