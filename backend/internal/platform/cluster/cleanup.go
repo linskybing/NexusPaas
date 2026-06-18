@@ -87,8 +87,10 @@ func deleteDeployments(ctx context.Context, cs kubernetes.Interface, namespace, 
 	for i := range items.Items {
 		names = append(names, items.Items[i].Name)
 	}
+	background := metav1.DeletePropagationBackground
+	options := metav1.DeleteOptions{PropagationPolicy: &background}
 	return deleteByName(names, func(name string) error {
-		return cs.AppsV1().Deployments(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+		return cs.AppsV1().Deployments(namespace).Delete(ctx, name, options)
 	})
 }
 

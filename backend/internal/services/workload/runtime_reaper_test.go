@@ -7,6 +7,7 @@ import (
 
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
 	"github.com/linskybing/nexuspaas/backend/internal/platform/cluster"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -87,6 +88,36 @@ func TestReapDeletesUnmanagedExpiredResourceDirectly(t *testing.T) {
 	}
 }
 
+func TestReapDeletesExpiredDeploymentControllerAndMarksJobFailed(t *testing.T) {
+	now := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	deployment := deploymentWithRuntimeLimit("proj-p1-alice", "train", "60", now.Add(-time.Hour), map[string]string{
+		cluster.LabelJobID: "j-deploy", cluster.LabelProjectID: "p1",
+	})
+	pod := podWithRuntimeLimit("proj-p1-alice", "train-pod", "60", now.Add(-time.Hour), map[string]string{
+		cluster.LabelJobID: "j-deploy", cluster.LabelProjectID: "p1",
+	})
+	cl := cluster.New(fake.NewSimpleClientset(deployment, pod), "proj")
+	app := platform.NewApp(platform.Config{ServiceName: serviceName}, platform.WithCluster(cl))
+	ctx := context.Background()
+	if _, err := app.Store.Create(ctx, jobsResource, map[string]any{"id": "j-deploy", "status": "running"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := reapExpiredRuntimeWorkloads(ctx, app.Cluster, app.Store, now); err != nil {
+		t.Fatal(err)
+	}
+
+	deployments, _ := cl.Clientset().AppsV1().Deployments("proj-p1-alice").List(ctx, metav1.ListOptions{})
+	pods, _ := cl.Clientset().CoreV1().Pods("proj-p1-alice").List(ctx, metav1.ListOptions{})
+	if len(deployments.Items) != 0 || len(pods.Items) != 0 {
+		t.Fatalf("remaining deployments=%d pods=%d, want expired deployment workload deleted", len(deployments.Items), len(pods.Items))
+	}
+	rec, _ := app.Store.Get(ctx, jobsResource, "j-deploy")
+	if rec.Data["status"] != "failed" {
+		t.Fatalf("deployment job status = %v, want failed", rec.Data["status"])
+	}
+}
+
 func TestReapDegradedWhenNoCluster(t *testing.T) {
 	app := platform.NewApp(platform.Config{ServiceName: serviceName})
 	if err := reapExpiredRuntimeWorkloads(context.Background(), app.Cluster, app.Store, time.Now()); err != nil {
@@ -100,6 +131,19 @@ func podWithRuntimeLimit(namespace, name, limitSeconds string, created time.Time
 		all[k] = v
 	}
 	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Namespace:         namespace,
+		Name:              name,
+		Labels:            all,
+		CreationTimestamp: metav1.NewTime(created),
+	}}
+}
+
+func deploymentWithRuntimeLimit(namespace, name, limitSeconds string, created time.Time, labels map[string]string) runtime.Object {
+	all := map[string]string{cluster.RuntimeLimitSecondsKey: limitSeconds}
+	for k, v := range labels {
+		all[k] = v
+	}
+	return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
 		Namespace:         namespace,
 		Name:              name,
 		Labels:            all,

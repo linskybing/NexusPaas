@@ -145,7 +145,7 @@ func policyEventData(event contracts.Event) map[string]any {
 	return maps.Clone(event.Data)
 }
 
-func upsertPolicyDataReadModel(ctx context.Context, repo authorizationPolicyProjectionRepository, resource string, data map[string]any) error {
+func upsertPolicyDataReadModel(ctx context.Context, repo *recordStoreAuthorizationPolicyProjectionRepository, resource string, data map[string]any) error {
 	switch resource {
 	case policyDataProjectsResource:
 		return repo.UpsertPolicyProject(ctx, data)
@@ -158,7 +158,7 @@ func upsertPolicyDataReadModel(ctx context.Context, repo authorizationPolicyProj
 	}
 }
 
-func deletePolicyDataReadModel(ctx context.Context, repo authorizationPolicyProjectionRepository, resource string, data map[string]any) bool {
+func deletePolicyDataReadModel(ctx context.Context, repo *recordStoreAuthorizationPolicyProjectionRepository, resource string, data map[string]any) bool {
 	switch resource {
 	case policyDataProjectsResource:
 		return repo.DeletePolicyProject(ctx, data)

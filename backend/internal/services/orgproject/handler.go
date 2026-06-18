@@ -168,7 +168,7 @@ func createGroup(app *platform.App, r *http.Request, _ platform.RouteSpec) (int,
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(msgInvalidRequestBody), nil
 	}
-	name := firstNonEmpty(shared.TextValue(payload, "group_name", "groupName"), shared.TextValue(payload, "name"))
+	name := shared.FirstNonBlank(shared.TextValue(payload, "group_name", "groupName"), shared.TextValue(payload, "name"))
 	if name == "" {
 		return http.StatusBadRequest, shared.ErrorData("group_name is required"), nil
 	}
@@ -180,7 +180,7 @@ func createGroup(app *platform.App, r *http.Request, _ platform.RouteSpec) (int,
 			return http.StatusBadRequest, shared.ErrorData("group already exists"), nil
 		}
 	}
-	id := firstNonEmpty(shared.TextValue(payload, "id", "gid", "g_id"), newGroupID(app, r))
+	id := shared.FirstNonBlank(shared.TextValue(payload, "id", "gid", "g_id"), newGroupID(app, r))
 	now := time.Now().UTC()
 	group := map[string]any{
 		"id":                 id,
@@ -224,7 +224,7 @@ func updateGroup(app *platform.App, r *http.Request, _ platform.RouteSpec) (int,
 		return http.StatusBadRequest, shared.ErrorData(err.Error()), nil
 	}
 	update := map[string]any{}
-	if name := firstNonEmpty(shared.TextValue(payload, "group_name", "groupName"), shared.TextValue(payload, "name")); name != "" {
+	if name := shared.FirstNonBlank(shared.TextValue(payload, "group_name", "groupName"), shared.TextValue(payload, "name")); name != "" {
 		update["group_name"] = name
 		update["name"] = name
 	}
@@ -297,8 +297,8 @@ func getUserGroup(app *platform.App, r *http.Request, _ platform.RouteSpec) (int
 	if !ok {
 		return status, data, nil
 	}
-	uid := firstNonEmpty(r.URL.Query().Get("u_id"), r.URL.Query().Get("uid"), r.URL.Query().Get("user_id"))
-	gid := firstNonEmpty(r.URL.Query().Get("g_id"), r.URL.Query().Get("gid"), r.URL.Query().Get("group_id"))
+	uid := shared.FirstNonBlank(r.URL.Query().Get("u_id"), r.URL.Query().Get("uid"), r.URL.Query().Get("user_id"))
+	gid := shared.FirstNonBlank(r.URL.Query().Get("g_id"), r.URL.Query().Get("gid"), r.URL.Query().Get("group_id"))
 	if uid == "" || gid == "" {
 		return http.StatusOK, []any{}, nil
 	}
@@ -317,9 +317,9 @@ func addUserToGroup(app *platform.App, r *http.Request, _ platform.RouteSpec) (i
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(msgInvalidRequestBody), nil
 	}
-	uid := firstNonEmpty(shared.TextValue(payload, "uid", "u_id"), shared.TextValue(payload, "user_id", "userId"))
-	gid := firstNonEmpty(shared.TextValue(payload, "gid", "g_id"), shared.TextValue(payload, "group_id", "groupId"))
-	role := normalizeRole(firstNonEmpty(shared.TextValue(payload, "role"), "user"))
+	uid := shared.FirstNonBlank(shared.TextValue(payload, "uid", "u_id"), shared.TextValue(payload, "user_id", "userId"))
+	gid := shared.FirstNonBlank(shared.TextValue(payload, "gid", "g_id"), shared.TextValue(payload, "group_id", "groupId"))
+	role := normalizeRole(shared.FirstNonBlank(shared.TextValue(payload, "role"), "user"))
 	return createMembership(app, r, uid, gid, role, false)
 }
 
@@ -328,8 +328,8 @@ func updateUserGroup(app *platform.App, r *http.Request, _ platform.RouteSpec) (
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(msgInvalidRequestBody), nil
 	}
-	uid := firstNonEmpty(shared.TextValue(payload, "uid", "u_id"), shared.TextValue(payload, "user_id", "userId"))
-	gid := firstNonEmpty(shared.TextValue(payload, "gid", "g_id"), shared.TextValue(payload, "group_id", "groupId"))
+	uid := shared.FirstNonBlank(shared.TextValue(payload, "uid", "u_id"), shared.TextValue(payload, "user_id", "userId"))
+	gid := shared.FirstNonBlank(shared.TextValue(payload, "gid", "g_id"), shared.TextValue(payload, "group_id", "groupId"))
 	role := normalizeRole(shared.TextValue(payload, "role"))
 	return createMembership(app, r, uid, gid, role, true)
 }
@@ -339,8 +339,8 @@ func removeUserFromGroup(app *platform.App, r *http.Request, _ platform.RouteSpe
 	if !ok {
 		return status, data, nil
 	}
-	uid := firstNonEmpty(r.URL.Query().Get("uid"), r.URL.Query().Get("u_id"), r.URL.Query().Get("user_id"))
-	gid := firstNonEmpty(r.URL.Query().Get("gid"), r.URL.Query().Get("g_id"), r.URL.Query().Get("group_id"))
+	uid := shared.FirstNonBlank(r.URL.Query().Get("uid"), r.URL.Query().Get("u_id"), r.URL.Query().Get("user_id"))
+	gid := shared.FirstNonBlank(r.URL.Query().Get("gid"), r.URL.Query().Get("g_id"), r.URL.Query().Get("group_id"))
 	if uid == "" || gid == "" {
 		return http.StatusBadRequest, shared.ErrorData("uid and gid are required"), nil
 	}
@@ -361,7 +361,7 @@ func batchAddMembers(app *platform.App, r *http.Request, _ platform.RouteSpec) (
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(msgInvalidRequestBody), nil
 	}
-	gid := firstNonEmpty(shared.TextValue(payload, "gid", "g_id"), shared.TextValue(payload, "group_id", "groupId"))
+	gid := shared.FirstNonBlank(shared.TextValue(payload, "gid", "g_id"), shared.TextValue(payload, "group_id", "groupId"))
 	role := normalizeRole(shared.TextValue(payload, "role"))
 	userIDs := shared.StringSlice(firstNonNil(payload["user_ids"], payload["userIds"]))
 	if gid == "" || role == "" || len(userIDs) == 0 {
@@ -385,7 +385,7 @@ func userGroupsByGroup(app *platform.App, r *http.Request, _ platform.RouteSpec)
 	if !ok {
 		return status, data, nil
 	}
-	gid := firstNonEmpty(r.URL.Query().Get("g_id"), r.URL.Query().Get("gid"), r.URL.Query().Get("group_id"))
+	gid := shared.FirstNonBlank(r.URL.Query().Get("g_id"), r.URL.Query().Get("gid"), r.URL.Query().Get("group_id"))
 	if gid == "" {
 		return http.StatusBadRequest, shared.ErrorData("Missing g_id"), nil
 	}
@@ -400,7 +400,7 @@ func userGroupsByUser(app *platform.App, r *http.Request, _ platform.RouteSpec) 
 	if !ok {
 		return status, data, nil
 	}
-	uid := firstNonEmpty(r.URL.Query().Get("u_id"), r.URL.Query().Get("uid"), r.URL.Query().Get("user_id"))
+	uid := shared.FirstNonBlank(r.URL.Query().Get("u_id"), r.URL.Query().Get("uid"), r.URL.Query().Get("user_id"))
 	if uid == "" {
 		return http.StatusBadRequest, shared.ErrorData("Missing u_id"), nil
 	}

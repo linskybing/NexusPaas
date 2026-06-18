@@ -31,8 +31,8 @@ func TestSubmitAdmissionAllowsPlanQueueAndResources(t *testing.T) {
 	if review["allowed"] != true || review["queue_name"] != "default-batch" {
 		t.Fatalf("admission review = %#v, want allowed default-batch", review)
 	}
-	if review["priority_value"] != 1000 || review["preemptible"] != true {
-		t.Fatalf("admission review = %#v, want trusted queue priority/preemptible metadata", review)
+	if review["priority_value"] != 1000 || review["preemptible"] != true || review["runtime_limit_seconds"] != 3600 {
+		t.Fatalf("admission review = %#v, want trusted queue priority/preemptible/runtime metadata", review)
 	}
 	if _, found := app.Store.Get(context.Background(), submitAdmissionsResource, "P1/U1/default-batch"); !found {
 		t.Fatal("allowed admission was not recorded")
@@ -96,8 +96,12 @@ func TestSubmitAdmissionRejectsProjectQuotaExceededByActiveUsage(t *testing.T) {
 	})), platform.RouteSpec{})
 
 	assertSchedulerStatus(t, code, data, http.StatusConflict)
-	if !strings.Contains(data.(map[string]any)["reason"].(string), "GPU quota exceeded") {
+	denial := data.(map[string]any)
+	if !strings.Contains(denial["reason"].(string), "GPU quota exceeded") {
 		t.Fatalf("quota denial = %#v, want GPU quota reason", data)
+	}
+	if denial["queue_name"] != "default-batch" || denial["priority_value"] != 1000 || denial["runtime_limit_seconds"] != 3600 {
+		t.Fatalf("quota denial = %#v, want queue admission metadata preserved", denial)
 	}
 }
 
@@ -478,7 +482,7 @@ func seedAdmissionProject(t *testing.T, app *platform.App, fixture admissionFixt
 	if fixture.weekWindows != nil {
 		plan["week_windows"] = fixture.weekWindows
 	}
-	createSchedulerRecord(t, app, queuesResource, map[string]any{"id": "q1", "name": "default-batch", "priority_value": 1000, "is_preemptible": true})
+	createSchedulerRecord(t, app, queuesResource, map[string]any{"id": "q1", "name": "default-batch", "priority_value": 1000, "is_preemptible": true, "max_runtime_seconds": 3600})
 	createSchedulerRecord(t, app, plansResource, plan)
 	project := map[string]any{
 		"id":                           "P1",

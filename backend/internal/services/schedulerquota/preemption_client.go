@@ -1,18 +1,12 @@
 package schedulerquota
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
-	"path"
 	"strings"
-	"time"
 
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
 )
@@ -21,13 +15,7 @@ const (
 	workloadServiceName            = "workload-service"
 	workloadPreemptionContextPath  = "/internal/workload/preemption-context"
 	workloadPreemptJobPathTemplate = "/internal/workload/jobs/{id}/preempt"
-	headerServiceKey               = "X-Service-Key"
 )
-
-type workloadPreemptionClient interface {
-	Context(context.Context, preemptionRequest) (workloadPreemptionContext, error)
-	Preempt(context.Context, string, workloadPreemptRequest) (workloadJobSnapshot, error)
-}
 
 type workloadPreemptionContext struct {
 	Requester  *workloadJobSnapshot  `json:"requester,omitempty"`
@@ -60,176 +48,63 @@ type workloadPreemptRequest struct {
 	Cleanup        map[string]any `json:"cleanup"`
 }
 
-type httpWorkloadPreemptionClient struct {
-	baseURL string
-	apiKey  string
-	client  *http.Client
+type internalWorkloadPreemptionClient struct {
+	client platform.InternalJSONClient
 }
 
-type localWorkloadPreemptionClient struct {
-	app *platform.App
+func newWorkloadPreemptionClient(app *platform.App) (internalWorkloadPreemptionClient, error) {
+	if app == nil {
+		return internalWorkloadPreemptionClient{}, fmt.Errorf("workload preemption client is not configured")
+	}
+	if !app.Config.AllowsService(workloadServiceName) {
+		if strings.TrimSpace(app.Config.ServiceURLs[workloadServiceName]) == "" {
+			return internalWorkloadPreemptionClient{}, fmt.Errorf("workload-service URL is not configured")
+		}
+		if strings.TrimSpace(app.Config.ServiceAPIKey) == "" {
+			return internalWorkloadPreemptionClient{}, fmt.Errorf("service API key is not configured")
+		}
+	}
+	return internalWorkloadPreemptionClient{client: platform.NewInternalJSONClient(app, workloadServiceName)}, nil
 }
 
-func newWorkloadPreemptionClient(app *platform.App) (workloadPreemptionClient, error) {
-	if app.Config.AllowsService(workloadServiceName) {
-		return localWorkloadPreemptionClient{app: app}, nil
-	}
-	baseURL := strings.TrimSpace(app.Config.ServiceURLs[workloadServiceName])
-	if baseURL == "" {
-		return nil, fmt.Errorf("workload-service URL is not configured")
-	}
-	if strings.TrimSpace(app.Config.ServiceAPIKey) == "" {
-		return nil, fmt.Errorf("service API key is not configured")
-	}
-	timeout := app.Config.AdapterTimeout
-	if timeout <= 0 {
-		timeout = 2 * time.Second
-	}
-	return httpWorkloadPreemptionClient{
-		baseURL: baseURL,
-		apiKey:  app.Config.ServiceAPIKey,
-		client:  &http.Client{Timeout: timeout},
-	}, nil
-}
-
-func (c httpWorkloadPreemptionClient) Context(ctx context.Context, req preemptionRequest) (workloadPreemptionContext, error) {
-	endpoint, err := c.endpoint(workloadPreemptionContextPath, req.contextQuery())
-	if err != nil {
-		return workloadPreemptionContext{}, err
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return workloadPreemptionContext{}, err
-	}
-	httpReq.Header.Set(headerServiceKey, c.apiKey)
-	raw, status, err := c.do(httpReq)
-	if err != nil {
-		return workloadPreemptionContext{}, err
-	}
-	if status != http.StatusOK {
-		return workloadPreemptionContext{}, fmt.Errorf("workload preemption context returned HTTP %d", status)
-	}
+func (c internalWorkloadPreemptionClient) Context(ctx context.Context, req preemptionRequest) (workloadPreemptionContext, error) {
 	var out workloadPreemptionContext
-	if err := decodePreemptionEnvelope(raw, &out); err != nil {
+	resp, err := c.client.Do(ctx, platform.InternalJSONRequest{
+		Method:   http.MethodGet,
+		Path:     workloadPreemptionContextPath,
+		Query:    req.contextQuery(),
+		Response: &out,
+	})
+	if err != nil {
 		return workloadPreemptionContext{}, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return workloadPreemptionContext{}, fmt.Errorf("workload preemption context returned HTTP %d", resp.StatusCode)
+	}
+	if resp.EnvelopeError != nil {
+		return workloadPreemptionContext{}, errors.New(resp.EnvelopeError.Message)
 	}
 	return out, nil
 }
 
-func (c httpWorkloadPreemptionClient) Preempt(ctx context.Context, id string, req workloadPreemptRequest) (workloadJobSnapshot, error) {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return workloadJobSnapshot{}, err
-	}
-	requestPath := strings.ReplaceAll(workloadPreemptJobPathTemplate, "{id}", url.PathEscape(id))
-	endpoint, err := c.endpoint(requestPath, url.Values{})
-	if err != nil {
-		return workloadJobSnapshot{}, err
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return workloadJobSnapshot{}, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set(headerServiceKey, c.apiKey)
-	raw, status, err := c.do(httpReq)
-	if err != nil {
-		return workloadJobSnapshot{}, err
-	}
-	if status != http.StatusOK {
-		return workloadJobSnapshot{}, fmt.Errorf("workload preempt status returned HTTP %d", status)
-	}
+func (c internalWorkloadPreemptionClient) Preempt(ctx context.Context, id string, req workloadPreemptRequest) (workloadJobSnapshot, error) {
 	var record struct {
 		Data map[string]any `json:"data"`
 	}
-	if err := decodePreemptionEnvelope(raw, &record); err != nil {
+	resp, err := c.client.Do(ctx, platform.InternalJSONRequest{
+		Method:   http.MethodPost,
+		Path:     strings.ReplaceAll(workloadPreemptJobPathTemplate, "{id}", url.PathEscape(id)),
+		Body:     req,
+		Response: &record,
+	})
+	if err != nil {
 		return workloadJobSnapshot{}, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return workloadJobSnapshot{}, fmt.Errorf("workload preempt status returned HTTP %d", resp.StatusCode)
+	}
+	if resp.EnvelopeError != nil {
+		return workloadJobSnapshot{}, errors.New(resp.EnvelopeError.Message)
 	}
 	return workloadSnapshotFromData(id, record.Data), nil
-}
-
-func (c httpWorkloadPreemptionClient) endpoint(requestPath string, query url.Values) (string, error) {
-	parsed, err := url.Parse(c.baseURL)
-	if err != nil {
-		return "", err
-	}
-	if !parsed.IsAbs() || parsed.Host == "" {
-		return "", fmt.Errorf("workload service URL must be absolute")
-	}
-	parsed.Path = path.Join(parsed.Path, requestPath)
-	parsed.RawQuery = query.Encode()
-	parsed.Fragment = ""
-	return parsed.String(), nil
-}
-
-func (c httpWorkloadPreemptionClient) do(req *http.Request) ([]byte, int, error) {
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return nil, resp.StatusCode, err
-	}
-	return raw, resp.StatusCode, nil
-}
-
-func (c localWorkloadPreemptionClient) Context(ctx context.Context, req preemptionRequest) (workloadPreemptionContext, error) {
-	target := workloadPreemptionContextPath
-	if query := req.contextQuery().Encode(); query != "" {
-		target += "?" + query
-	}
-	httpReq := httptest.NewRequest(http.MethodGet, target, nil).WithContext(ctx)
-	httpReq.Header.Set(headerServiceKey, c.app.Config.ServiceAPIKey)
-	rec := httptest.NewRecorder()
-	c.app.ServeHTTP(rec, httpReq)
-	if rec.Code != http.StatusOK {
-		return workloadPreemptionContext{}, fmt.Errorf("workload preemption context returned HTTP %d", rec.Code)
-	}
-	var out workloadPreemptionContext
-	if err := decodePreemptionEnvelope(rec.Body.Bytes(), &out); err != nil {
-		return workloadPreemptionContext{}, err
-	}
-	return out, nil
-}
-
-func (c localWorkloadPreemptionClient) Preempt(ctx context.Context, id string, req workloadPreemptRequest) (workloadJobSnapshot, error) {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return workloadJobSnapshot{}, err
-	}
-	target := strings.ReplaceAll(workloadPreemptJobPathTemplate, "{id}", url.PathEscape(id))
-	httpReq := httptest.NewRequest(http.MethodPost, target, bytes.NewReader(body)).WithContext(ctx)
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set(headerServiceKey, c.app.Config.ServiceAPIKey)
-	rec := httptest.NewRecorder()
-	c.app.ServeHTTP(rec, httpReq)
-	if rec.Code != http.StatusOK {
-		return workloadJobSnapshot{}, fmt.Errorf("workload preempt status returned HTTP %d", rec.Code)
-	}
-	var record struct {
-		Data map[string]any `json:"data"`
-	}
-	if err := decodePreemptionEnvelope(rec.Body.Bytes(), &record); err != nil {
-		return workloadJobSnapshot{}, err
-	}
-	return workloadSnapshotFromData(id, record.Data), nil
-}
-
-func decodePreemptionEnvelope(raw []byte, dest any) error {
-	var envelope struct {
-		Data  json.RawMessage     `json:"data"`
-		Error *platform.ErrorBody `json:"error"`
-	}
-	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return err
-	}
-	if envelope.Error != nil {
-		return errors.New(envelope.Error.Message)
-	}
-	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
-		return nil
-	}
-	return json.Unmarshal(envelope.Data, dest)
 }

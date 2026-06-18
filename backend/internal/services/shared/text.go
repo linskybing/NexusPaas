@@ -39,3 +39,13 @@ func FirstNonEmpty(values ...string) string {
 	}
 	return ""
 }
+
+// FirstNonBlank returns the first value whose trimmed form is not empty.
+func FirstNonBlank(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}

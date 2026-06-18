@@ -19,7 +19,7 @@ import (
 func TestStorageMountPlanClientRemoteSendsServiceKey(t *testing.T) {
 	var gotKey, gotPath string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotKey = r.Header.Get(storageMountPlanServiceHeader)
+		gotKey = r.Header.Get("X-Service-Key")
 		gotPath = r.URL.Path
 		platform.WriteJSON(w, r, http.StatusOK, storageMountPlan{
 			ProjectID: "P1",
@@ -43,7 +43,7 @@ func TestStorageMountPlanClientRemoteSendsServiceKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := client.Resolve(context.Background(), "P1", storageMountPlanRequest{
+	plan, err := client(context.Background(), "P1", storageMountPlanRequest{
 		UserID:    "U1",
 		Namespace: "proj-p1",
 		Mounts:    []storageMountPlanSelector{{PVCID: "datasets-pvc", MountPath: "/mnt/datasets", ReadOnly: true}},
@@ -64,7 +64,7 @@ func TestStorageMountPlanClientRemoteSendsServiceKey(t *testing.T) {
 
 func TestStorageMountPlanClientWrongKeyIsPermanentDispatchFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get(storageMountPlanServiceHeader) != "service-key" {
+		if r.Header.Get("X-Service-Key") != "service-key" {
 			platform.WriteError(w, r, http.StatusUnauthorized, "unauthorized", "service authentication is required")
 			return
 		}
@@ -80,7 +80,7 @@ func TestStorageMountPlanClientWrongKeyIsPermanentDispatchFailure(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.Resolve(context.Background(), "P1", storageMountPlanRequest{
+	_, err = client(context.Background(), "P1", storageMountPlanRequest{
 		UserID: "U1",
 		Mounts: []storageMountPlanSelector{{
 			PVCID: "datasets-pvc",
@@ -104,7 +104,7 @@ func TestStorageMountPlanClientCoHostedUsesLocalRouter(t *testing.T) {
 		}},
 	})
 	app.RegisterCustomHandler(http.MethodPost, storageMountPlanPathTemplate, func(_ *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
-		if r.Header.Get(storageMountPlanServiceHeader) != "service-key" {
+		if r.Header.Get("X-Service-Key") != "service-key" {
 			return http.StatusUnauthorized, map[string]any{"message": "service key missing"}, nil
 		}
 		var body storageMountPlanRequest
@@ -125,7 +125,7 @@ func TestStorageMountPlanClientCoHostedUsesLocalRouter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := client.Resolve(context.Background(), "P1", storageMountPlanRequest{
+	plan, err := client(context.Background(), "P1", storageMountPlanRequest{
 		UserID: "U1",
 		Mounts: []storageMountPlanSelector{{
 			PVCID: "scratch-pvc", MountPath: "/scratch",
@@ -161,37 +161,6 @@ func TestStorageMountPlanClientRequiresAppAndServiceKey(t *testing.T) {
 	}
 }
 
-func TestStorageMountPlanClientEndpointAndDecodeBranches(t *testing.T) {
-	remote := httpStorageMountPlanClient{baseURL: "https://storage.internal/root/"}
-	endpoint, err := remote.endpoint(storageMountPlanPath("P1"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if endpoint != "https://storage.internal/root/internal/storage/projects/P1/mount-plan" {
-		t.Fatalf("endpoint = %q, want joined mount-plan path", endpoint)
-	}
-	for _, baseURL := range []string{":", "/relative"} {
-		remote.baseURL = baseURL
-		if _, err := remote.endpoint("/path"); err == nil {
-			t.Fatalf("baseURL %q was accepted", baseURL)
-		}
-	}
-
-	if _, err := decodeStorageMountPlan([]byte(`{"error":{"message":"denied"}}`)); err == nil || !strings.Contains(err.Error(), "denied") {
-		t.Fatalf("error envelope err = %v, want denied", err)
-	}
-	empty, err := decodeStorageMountPlan([]byte(`{"data":null}`))
-	if err != nil || empty.ProjectID != "" {
-		t.Fatalf("empty plan = %#v err=%v, want zero plan", empty, err)
-	}
-	if _, err := decodeStorageMountPlan([]byte(`{bad-json`)); err == nil {
-		t.Fatal("malformed envelope was accepted")
-	}
-	if _, err := decodeStorageMountPlan([]byte(`{"data":{bad-json}}`)); err == nil {
-		t.Fatal("malformed plan data was accepted")
-	}
-}
-
 func TestStorageMountPlanClientHTTPStatusBranches(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -207,8 +176,15 @@ func TestStorageMountPlanClientHTTPStatusBranches(t *testing.T) {
 				w.WriteHeader(tt.status)
 			}))
 			defer server.Close()
-			client := httpStorageMountPlanClient{baseURL: server.URL, apiKey: "service-key", client: server.Client()}
-			_, err := client.Resolve(context.Background(), "P1", storageMountPlanRequest{UserID: "U1"})
+			client, err := newStorageMountPlanClient(platform.NewApp(platform.Config{
+				ServiceName:   serviceName,
+				ServiceAPIKey: "service-key",
+				ServiceURLs:   map[string]string{storageServiceName: server.URL},
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client(context.Background(), "P1", storageMountPlanRequest{UserID: "U1"})
 			if err == nil {
 				t.Fatal("err = nil, want HTTP status error")
 			}

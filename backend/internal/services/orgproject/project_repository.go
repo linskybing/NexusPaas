@@ -10,28 +10,6 @@ import (
 	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
 
-type orgProjectRepository interface {
-	ListProjects(ctx context.Context) []orgProjectRecord
-	FindProject(ctx context.Context, id string) (orgProjectRecord, bool)
-	CreateProject(ctx context.Context, project map[string]any) (orgProjectRecord, error)
-	UpdateProject(ctx context.Context, id string, update map[string]any) (orgProjectRecord, orgProjectRecord, bool)
-	UpdateWorkspaceSettings(ctx context.Context, projectID string, seconds int, now time.Time) (orgProjectRecord, orgProjectRecord, bool)
-	DeleteProjectCascade(ctx context.Context, projectID string) (orgProjectRecord, orgProjectDeleteResult, bool)
-	NextProjectID() string
-
-	FindDirectProjectMember(ctx context.Context, projectID, userID string) (orgProjectMemberRecord, bool)
-	CreateDirectProjectMember(ctx context.Context, member map[string]any) (orgProjectMemberRecord, error)
-	UpdateDirectProjectMemberRole(ctx context.Context, projectID, userID, role string, now time.Time) (orgProjectMemberRecord, orgProjectMemberRecord, bool)
-	DeleteDirectProjectMemberAndQuota(ctx context.Context, projectID, userID string) (orgProjectMemberRecord, bool)
-
-	GetProjectUserQuota(ctx context.Context, projectID, userID string) (orgProjectQuotaRecord, bool)
-	UpsertProjectUserQuota(ctx context.Context, quota map[string]any) (orgProjectQuotaRecord, error)
-	DeleteProjectUserQuota(ctx context.Context, projectID, userID string) bool
-
-	BindProjectPlan(ctx context.Context, projectID, planID string, now time.Time) (orgProjectRecord, orgProjectRecord, bool)
-	ClearProjectsPlan(ctx context.Context, planID string, now time.Time) []orgProjectPlanUpdate
-}
-
 type orgProjectRecord struct {
 	ID   string
 	Data map[string]any
@@ -60,14 +38,14 @@ type orgProjectPlanUpdate struct {
 
 type recordStoreOrgProjectRepository struct {
 	store    platform.RecordStore
-	groupGPU orgProjectGroupGPURepository
+	groupGPU *recordStoreOrgProjectGroupGPURepository
 }
 
-func projectRepository(app *platform.App) orgProjectRepository {
+func projectRepository(app *platform.App) *recordStoreOrgProjectRepository {
 	if app == nil {
-		return recordStoreOrgProjectRepository{}
+		return &recordStoreOrgProjectRepository{}
 	}
-	return recordStoreOrgProjectRepository{store: app.Store, groupGPU: groupGPURepository(app)}
+	return &recordStoreOrgProjectRepository{store: app.Store, groupGPU: groupGPURepository(app)}
 }
 
 func (r recordStoreOrgProjectRepository) ListProjects(ctx context.Context) []orgProjectRecord {

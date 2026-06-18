@@ -31,6 +31,9 @@ Postgres, Redis event streams, and MinIO.
   dispatch consumes storage-owned PVC source/target data through
   `SERVICE_URLS["storage-service"]`, and proves a wrong service key fails closed
   without storage materialization.
+- Core user-journey coverage includes ConfigFile lifecycle plus
+  `config_commit_id` job submit/readback guards, image request/build governance,
+  and IDE project-access lifecycle.
 - Optional later-slice E2E tests, such as GPU telemetry and scheduler
   preemption, live in the same package but are not part of the required
   cross-service gate below.
@@ -83,7 +86,8 @@ export TEST_OBJECT_STORE_URL='http://localhost:19000'
 ## Environment
 
 ```sh
-export TEST_DATABASE_URL='postgres://nexuspaas:nexuspaas@localhost:5432/nexuspaas?sslmode=disable'
+export TEST_POSTGRES_PASSWORD='<local dev password>'
+export TEST_DATABASE_URL="postgres://nexuspaas:${TEST_POSTGRES_PASSWORD}@localhost:5432/nexuspaas?sslmode=disable"
 export TEST_REDIS_URL='redis://localhost:6379/0'
 export TEST_EVENT_BUS_URL="$TEST_REDIS_URL"
 export TEST_OBJECT_STORE_URL='http://localhost:9000' # or http://localhost:19000 when using the fallback container
@@ -133,9 +137,9 @@ missing backing-service configuration:
 cd /Users/sky/workspaces/backend
 set -o pipefail
 go test -tags e2e ./internal/e2e \
-  -run 'TestServiceRouteIsolationContract|TestServiceIsolationValidationE2E|TestIsolatedRuntimeRegistrationE2E|TestProviderConsumerContractMatrix|TestCriticalCrossServiceJourneys|TestSchedulerAdmissionOwnerReadContractsE2E|TestNonBlobIsolatedServiceIgnoresObjectStoreConfigE2E|TestStorageMountPlanContractE2E' \
+  -run 'TestServiceRouteIsolationContract|TestServiceIsolationValidationE2E|TestIsolatedRuntimeRegistrationE2E|TestProviderConsumerContractMatrix|TestCriticalCrossServiceJourneys|TestSchedulerAdmissionOwnerReadContractsE2E|TestNonBlobIsolatedServiceIgnoresObjectStoreConfigE2E|TestStorageMountPlanContractE2E|TestImageBuildGovernanceE2E|TestIDELifecycleProjectAccessE2E|TestWorkloadConfigFileLifecycleE2E' \
   -count=1 -v | tee /tmp/cross-service-e2e.log
-rg '^--- PASS: Test(ServiceRouteIsolationContract|ServiceIsolationValidationE2E|IsolatedRuntimeRegistrationE2E|ProviderConsumerContractMatrix|CriticalCrossServiceJourneys|SchedulerAdmissionOwnerReadContractsE2E|NonBlobIsolatedServiceIgnoresObjectStoreConfigE2E|StorageMountPlanContractE2E)' /tmp/cross-service-e2e.log
+rg '^--- PASS: Test(ServiceRouteIsolationContract|ServiceIsolationValidationE2E|IsolatedRuntimeRegistrationE2E|ProviderConsumerContractMatrix|CriticalCrossServiceJourneys|SchedulerAdmissionOwnerReadContractsE2E|NonBlobIsolatedServiceIgnoresObjectStoreConfigE2E|StorageMountPlanContractE2E|ImageBuildGovernanceE2E|IDELifecycleProjectAccessE2E|WorkloadConfigFileLifecycleE2E)' /tmp/cross-service-e2e.log
 ! rg 'SKIP|skipping|Skipping' /tmp/cross-service-e2e.log
 ```
 
@@ -173,6 +177,17 @@ go test -tags e2e ./internal/e2e -run '^TestStorageMountPlanContractE2E$' -count
   | tee /tmp/storage-mount-plan-e2e.log
 rg '^--- PASS: TestStorageMountPlanContractE2E' /tmp/storage-mount-plan-e2e.log
 ! rg 'SKIP|skipping|Skipping' /tmp/storage-mount-plan-e2e.log
+```
+
+Run the focused core user-journey E2E while working on workload ConfigFiles,
+image build governance, or IDE lifecycle. These tests require local Postgres,
+Redis, and MinIO envs and must not skip:
+
+```sh
+cd /Users/sky/workspaces/backend
+go test -tags e2e ./internal/e2e \
+  -run 'TestImageBuildGovernanceE2E|TestIDELifecycleProjectAccessE2E|TestWorkloadConfigFileLifecycleE2E' \
+  -count=1 -v
 ```
 
 Run the focused GPU telemetry E2E while working on usage-observability workers:
@@ -305,6 +320,70 @@ TEST_LIVE_LDAP_IDENTITY=1 \
   | tee /tmp/identity-ldap-e2e.log
 rg '^--- PASS: TestIdentityLDAPStrategyMirrorSyncE2E' /tmp/identity-ldap-e2e.log
 ! rg 'SKIP|skipping|Skipping' /tmp/identity-ldap-e2e.log
+```
+
+Run the live LDAP + project plan + Kubernetes deploy E2E while working on the
+end-to-end user journey from identity registration through workload dispatch.
+This opt-in test needs local Postgres, Redis, MinIO, the OpenLDAP container
+above, and a mutable Docker Desktop/kubeadm Kubernetes context. When the flag is
+set, missing LDAP, backing-service, or Kubernetes dependencies fail the test.
+The test creates only E2E-marked records plus one unique `proj-<project>-<user>`
+namespace, submits a minimal `batch/v1 Job`, verifies the Job object and
+workload record, and deletes that namespace during cleanup:
+
+```sh
+cd /Users/sky/workspaces/backend
+set -o pipefail
+TEST_LIVE_K8S_USER_PROJECT_PLAN_DEPLOY=1 \
+  go test -tags e2e ./internal/e2e -run '^TestLiveLDAPUserProjectPlanConfigDeployE2E$' -count=1 -v \
+  | tee /tmp/live-user-project-plan-deploy-e2e.log
+rg '^--- PASS: TestLiveLDAPUserProjectPlanConfigDeployE2E' /tmp/live-user-project-plan-deploy-e2e.log
+! rg 'SKIP|skipping|Skipping' /tmp/live-user-project-plan-deploy-e2e.log
+```
+
+Run the live Kubernetes queue-duration, plan-window, and auto-preemption E2E
+independently from LDAP. This opt-in test uses the current kubeconfig, creates
+only unique `proj-<project>-<user>` namespaces/resources, verifies native
+`activeDeadlineSeconds` for Jobs, Deployment runtime labels plus controller
+deletion, plan-window eviction, and logical-quota auto-preemption:
+
+```sh
+cd /Users/sky/workspaces/backend
+set -o pipefail
+TEST_LIVE_K8S_PLAN_WINDOW_DURATION_PREEMPTION=1 \
+  go test -tags e2e ./internal/e2e -run '^TestLiveK8sPlanWindowDurationPreemptionE2E$' -count=1 -v \
+  | tee /tmp/live-plan-window-duration-preemption-e2e.log
+rg '^--- PASS: TestLiveK8sPlanWindowDurationPreemptionE2E' /tmp/live-plan-window-duration-preemption-e2e.log
+! rg 'SKIP|skipping|Skipping' /tmp/live-plan-window-duration-preemption-e2e.log
+```
+
+Run the live Kubernetes ConfigFile DRA dispatch E2E only when the current
+cluster exposes `resource.k8s.io/v1` ResourceClaimTemplate APIs and has a DRA
+DeviceClass/resource driver installed. This opt-in test creates one unique
+project namespace, submits a ConfigFile-backed DRA Pod job with
+`gpu_count`, `sm_percentage`, `pinned_memory_limit`, and `device_class_name`,
+verifies ResourceClaimTemplate and Pod DRA wiring, then deletes only that
+namespace:
+
+```sh
+cd /Users/sky/workspaces/backend
+set -o pipefail
+TEST_LIVE_K8S_CONFIGFILE_DRA=1 \
+  go test -tags e2e ./internal/e2e -run '^TestLiveK8sConfigFileDRADispatchE2E$' -count=1 -v \
+  | tee /tmp/live-configfile-dra-e2e.log
+rg '^--- PASS: TestLiveK8sConfigFileDRADispatchE2E' /tmp/live-configfile-dra-e2e.log
+```
+
+Run the optional live Harbor adapter boundary E2E only when `HARBOR_URL` points
+at a local or staging Harbor endpoint. This test verifies the existing Harbor
+adapter status path; image build queue/log/cancel behavior remains covered by
+the non-live governance E2E because the production code is currently
+record-backed:
+
+```sh
+cd /Users/sky/workspaces/backend
+TEST_LIVE_HARBOR_IMAGE_BUILD=1 HARBOR_URL=http://localhost:8080 \
+  go test -tags e2e ./internal/e2e -run '^TestLiveHarborImageBuildE2E$' -count=1 -v
 ```
 
 Run the live Kubernetes policy-data ConfigMap E2E while working on the

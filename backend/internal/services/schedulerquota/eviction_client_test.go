@@ -20,10 +20,7 @@ func TestWorkloadEvictionClientLocalAndRemote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new local eviction client: %v", err)
 	}
-	if _, ok := localClient.(localWorkloadEvictionClient); !ok {
-		t.Fatalf("local client = %T, want localWorkloadEvictionClient", localClient)
-	}
-	if err := localClient.Evict(ctx, "local-job", workloadEvictRequest{Reason: "plan window closed"}); err != nil {
+	if err := localClient(ctx, "local-job", workloadEvictRequest{Reason: "plan window closed"}); err != nil {
 		t.Fatalf("local Evict: %v", err)
 	}
 	assertEvictedJob(t, localOwner, "local-job", "plan window closed")
@@ -42,14 +39,11 @@ func TestWorkloadEvictionClientLocalAndRemote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new remote eviction client: %v", err)
 	}
-	if _, ok := remoteClient.(httpWorkloadEvictionClient); !ok {
-		t.Fatalf("remote client = %T, want httpWorkloadEvictionClient", remoteClient)
-	}
-	if err := remoteClient.Evict(ctx, "remote-job", workloadEvictRequest{Reason: "plan expired"}); err != nil {
+	if err := remoteClient(ctx, "remote-job", workloadEvictRequest{Reason: "plan expired"}); err != nil {
 		t.Fatalf("remote Evict: %v", err)
 	}
 	assertEvictedJob(t, remoteOwner, "remote-job", "plan expired")
-	if err := remoteClient.Evict(ctx, "missing", workloadEvictRequest{Reason: "missing"}); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
+	if err := remoteClient(ctx, "missing", workloadEvictRequest{Reason: "missing"}); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
 		t.Fatalf("remote missing Evict err = %v, want HTTP 404", err)
 	}
 }
@@ -63,17 +57,6 @@ func TestWorkloadEvictionClientConfigAndEndpointValidation(t *testing.T) {
 		ServiceURLs: map[string]string{workloadServiceName: "http://workload.local"},
 	})); err == nil {
 		t.Fatal("isolated eviction client without service key err = nil")
-	}
-	client := httpWorkloadEvictionClient{baseURL: "http://workload.local/base?stale=1#fragment"}
-	endpoint, err := client.endpoint("/internal/workload/jobs/j1/evict")
-	if err != nil {
-		t.Fatalf("endpoint: %v", err)
-	}
-	if endpoint != "http://workload.local/base/internal/workload/jobs/j1/evict" {
-		t.Fatalf("endpoint = %q, want joined absolute URL without query or fragment", endpoint)
-	}
-	if _, err := (httpWorkloadEvictionClient{baseURL: "workload.local"}).endpoint("/internal/workload/jobs/j1/evict"); err == nil {
-		t.Fatal("relative workload URL err = nil")
 	}
 }
 

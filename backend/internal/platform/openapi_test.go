@@ -22,6 +22,14 @@ func TestOpenAPIGeneratorGenerate(t *testing.T) {
 	if !ok {
 		t.Fatalf("paths type = %T, want map[string]map[string]any", doc["paths"])
 	}
+	assertWidgetPath(t, paths)
+	assertPublicPath(t, paths)
+	assertProxyPath(t, paths)
+	assertComponents(t, doc)
+}
+
+func assertWidgetPath(t *testing.T, paths map[string]map[string]any) {
+	t.Helper()
 	widgets, ok := paths["/api/v1/widgets/{id}"]
 	if !ok {
 		t.Fatalf("missing /api/v1/widgets path: %#v", paths)
@@ -54,7 +62,10 @@ func TestOpenAPIGeneratorGenerate(t *testing.T) {
 	}
 	assertOperationResponses(t, post)
 	assertOperationSecurity(t, post)
+}
 
+func assertPublicPath(t *testing.T, paths map[string]map[string]any) {
+	t.Helper()
 	publicPath, ok := paths["/api/v1/public"]
 	if !ok {
 		t.Fatalf("missing public path: %#v", paths)
@@ -67,7 +78,10 @@ func TestOpenAPIGeneratorGenerate(t *testing.T) {
 	if publicPost["operationId"] != "public_probe_2" {
 		t.Fatalf("duplicate operationId = %v, want public_probe_2", publicPost["operationId"])
 	}
+}
 
+func assertProxyPath(t *testing.T, paths map[string]map[string]any) {
+	t.Helper()
 	proxyPath, ok := paths["/api/v1/proxy/{path}"]
 	if !ok {
 		t.Fatalf("missing Swagger-safe catch-all path: %#v", paths)
@@ -80,7 +94,6 @@ func TestOpenAPIGeneratorGenerate(t *testing.T) {
 		t.Fatalf("x-catch-all = %v, want true", proxyGet["x-catch-all"])
 	}
 	assertPathParameter(t, proxyGet, "path", true)
-	assertComponents(t, doc)
 }
 
 func assertOperationResponses(t *testing.T, operation map[string]any) {

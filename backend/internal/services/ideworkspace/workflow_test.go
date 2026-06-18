@@ -162,9 +162,6 @@ func TestIDEHelperConversions(t *testing.T) {
 	if !boolValue(payload, "bool") || !recordGrantsAdminPanel(mapValue(payload, "map")) {
 		t.Fatalf("bool/map conversions failed for %#v", payload)
 	}
-	if clone := cloneMap(nil); len(clone) != 0 {
-		t.Fatalf("nil clone = %#v, want empty map", clone)
-	}
 }
 
 func newIDETestApp(t *testing.T) *platform.App {

@@ -356,7 +356,7 @@ func getProjectLiveQuota(app *platform.App, r *http.Request, _ platform.RouteSpe
 	return http.StatusOK, record, nil
 }
 
-func queuePayload(repo schedulerQuotaRepository, payload map[string]any) (map[string]any, error) {
+func queuePayload(repo *recordStoreSchedulerQuotaRepository, payload map[string]any) (map[string]any, error) {
 	name := shared.TextValue(payload, "name")
 	if name == "" {
 		return nil, fmt.Errorf("name is required")
@@ -370,7 +370,7 @@ func queuePayload(repo schedulerQuotaRepository, payload map[string]any) (map[st
 	return queue, nil
 }
 
-func planPayload(repo schedulerQuotaRepository, payload map[string]any) (map[string]any, error) {
+func planPayload(repo *recordStoreSchedulerQuotaRepository, payload map[string]any) (map[string]any, error) {
 	name := shared.TextValue(payload, "name")
 	if name == "" {
 		return nil, fmt.Errorf("name is required")

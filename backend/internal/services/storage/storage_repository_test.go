@@ -191,7 +191,7 @@ func TestStorageRepositoryFastTransferUserStorageAndNilStore(t *testing.T) {
 		t.Fatalf("user storage saved=%#v status=%#v", saved, repo.UserStorageStatus(ctx, "alice"))
 	}
 
-	var nilRepo storageRepository = recordStoreStorageRepository{}
+	var nilRepo recordStoreStorageRepository
 	if _, err := nilRepo.CreateGroupStorage(ctx, map[string]any{}); err == nil {
 		t.Fatal("nil store create group storage err = nil, want error")
 	}
@@ -284,7 +284,7 @@ func storageGuardMatches(path string, tokens []string) ([]string, error) {
 	return matches, nil
 }
 
-func mustUpsertStoragePermission(t *testing.T, repo storageRepository, data map[string]any) {
+func mustUpsertStoragePermission(t *testing.T, repo *recordStoreStorageRepository, data map[string]any) {
 	t.Helper()
 	if _, err := repo.UpsertStoragePermission(context.Background(), data); err != nil {
 		t.Fatalf("upsert storage permission: %v", err)

@@ -9,9 +9,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
+	"github.com/linskybing/nexuspaas/backend/internal/platform/cluster"
 	"github.com/linskybing/nexuspaas/backend/internal/services/orgproject"
 	"github.com/linskybing/nexuspaas/backend/internal/services/schedulerquota"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 const (
@@ -71,6 +76,77 @@ func TestSubmitJobDeniedAdmissionDoesNotCreateJob(t *testing.T) {
 	}
 	if after := len(app.Store.List(context.Background(), jobsResource)); after != before {
 		t.Fatalf("job count = %d, want unchanged %d after denied admission", after, before)
+	}
+}
+
+func TestSubmitJobAutoPreemptsQuotaVictimAndPersistsRequesterAfterRetry(t *testing.T) {
+	ctx := context.Background()
+	cl := cluster.New(fake.NewSimpleClientset(workloadPreemptionPod("proj-p1", "victim-pod", "victim")), "proj")
+	app := newJobSubmitTestAppWithCluster(cl)
+	seedJobAdmissionProject(t, app, map[string]any{})
+	app.Store.Update(ctx, testSchedulerQueuesResource, "q1", map[string]any{
+		"priority_value": 10000,
+		"is_preemptible": false,
+	})
+	app.Store.Update(ctx, testSchedulerPlansResource, "plan-1", map[string]any{
+		"cpu_limit_cores": 1.5,
+	})
+	createWorkloadRecord(t, app, jobsResource, map[string]any{
+		"id":             "victim",
+		"job_id":         "victim",
+		"project_id":     "P1",
+		"user_id":        "U2",
+		"status":         "running",
+		"namespace":      "proj-p1",
+		"queue_name":     "default-batch",
+		"priority_value": 1000,
+		"preemptible":    true,
+		"required_cpu":   1.0,
+	})
+
+	rec := serveSubmitJob(t, app, `{"project_id":"P1","user_id":"U1","queue_name":"default-batch","required_cpu":1,"required_memory":1024}`, "U1", http.StatusCreated)
+	job := responseRecordData(t, rec)
+
+	if job["status"] != "submitted" || job["admission_preemption_status"] != "completed" || job["priority_value"] != float64(10000) {
+		t.Fatalf("submitted job = %#v, want admitted requester with preemption metadata", job)
+	}
+	victim, _ := app.Store.Get(ctx, jobsResource, "victim")
+	if victim.Data["status"] != "preempted" || victim.Data["preemption_record_id"] == "" {
+		t.Fatalf("victim = %#v, want preempted before requester persisted", victim.Data)
+	}
+	pods, err := cl.Clientset().CoreV1().Pods("proj-p1").List(ctx, metav1.ListOptions{})
+	if err != nil || len(pods.Items) != 0 {
+		t.Fatalf("victim pods after preemption = %d err=%v, want deleted", len(pods.Items), err)
+	}
+	if got := len(app.Store.List(ctx, jobsResource)); got != 2 {
+		t.Fatalf("jobs after auto preemption = %d, want victim plus requester", got)
+	}
+}
+
+func TestSubmitJobAutoPreemptionFailureDoesNotPersistRequester(t *testing.T) {
+	ctx := context.Background()
+	app := newJobSubmitTestAppWithCluster(cluster.New(fake.NewSimpleClientset(), "proj"))
+	seedJobAdmissionProject(t, app, map[string]any{})
+	app.Store.Update(ctx, testSchedulerQueuesResource, "q1", map[string]any{
+		"priority_value": 10000,
+		"is_preemptible": false,
+	})
+	app.Store.Update(ctx, testSchedulerPlansResource, "plan-1", map[string]any{
+		"cpu_limit_cores": 1.5,
+	})
+	createWorkloadRecord(t, app, jobsResource, map[string]any{
+		"id": "active", "job_id": "active", "project_id": "P1", "user_id": "U2", "status": "running", "required_cpu": 1.0,
+		"namespace": "proj-p1", "queue_name": "default-batch", "priority_value": 9000, "preemptible": false,
+	})
+
+	rec := serveSubmitJob(t, app, `{"project_id":"P1","user_id":"U1","queue_name":"default-batch","required_cpu":1,"required_memory":1024}`, "U1", http.StatusConflict)
+	data := responseEnvelopeData(t, rec)
+
+	if data["auto_preemption"] == nil || !strings.Contains(data["reason"].(string), "CPU quota exceeded") {
+		t.Fatalf("denial = %#v, want quota denial with auto_preemption result", data)
+	}
+	if got := len(app.Store.List(ctx, jobsResource)); got != 1 {
+		t.Fatalf("jobs after failed auto preemption = %d, want only original active job", got)
 	}
 }
 
@@ -238,8 +314,130 @@ func TestSubmitJobUsesRemoteSchedulerAdmissionWhenIsolated(t *testing.T) {
 	}
 }
 
+func TestSubmitJobRequiresProjectMembershipWhenAuthRequired(t *testing.T) {
+	app := newAuthJobSubmitTestApp()
+	seedJobAdmissionProject(t, app, map[string]any{})
+
+	deniedReq := workloadAuthRequest(http.MethodPost, "/api/v1/jobs", `{"project_id":"P1","user_id":"U2","queue_name":"default-batch","required_cpu":1,"required_memory":1024}`, "U2", "user")
+	code, data, _ := submitJob(app, deniedReq, platform.RouteSpec{})
+	assertWorkloadStatus(t, code, data, http.StatusForbidden)
+	if got := len(app.Store.List(context.Background(), jobsResource)); got != 0 {
+		t.Fatalf("jobs after denied submit = %d, want 0", got)
+	}
+	if got := len(app.Store.List(context.Background(), testSchedulerAdmissionsResource)); got != 0 {
+		t.Fatalf("scheduler admissions after denied submit = %d, want 0", got)
+	}
+
+	allowedReq := workloadAuthRequest(http.MethodPost, "/api/v1/jobs", `{"project_id":"P1","user_id":"U1","queue_name":"default-batch","required_cpu":1,"required_memory":1024}`, "U1", "user")
+	code, data, _ = submitJob(app, allowedReq, platform.RouteSpec{})
+	assertWorkloadStatus(t, code, data, http.StatusCreated)
+	if got := len(app.Store.List(context.Background(), testSchedulerAdmissionsResource)); got != 1 {
+		t.Fatalf("scheduler admissions after allowed submit = %d, want 1", got)
+	}
+}
+
+func TestJobAccessHandlersFilterAndGuardProjectRoutes(t *testing.T) {
+	app := newAuthWorkloadTestApp()
+	seedWorkloadProject(t, app, "P1")
+	seedWorkloadProject(t, app, "P2")
+	seedWorkloadProjectMember(t, app, "P1", "U1")
+	createWorkloadRecord(t, app, jobsResource, map[string]any{"id": "j1", "job_id": "job-one", "project_id": "P1", "user_id": "U1", "status": "running"})
+	createWorkloadRecord(t, app, jobsResource, map[string]any{"id": "j2", "job_id": "job-two", "project_id": "P2", "user_id": "U2", "status": "running"})
+	createWorkloadRecord(t, app, jobLogsResource, map[string]any{"id": "log1", "job_id": "job-one", "line": "hello"})
+
+	code, data, _ := listJobs(app, workloadAuthRequest(http.MethodGet, "/api/v1/jobs", "", "U1", "user"), platform.RouteSpec{})
+	assertWorkloadStatus(t, code, data, http.StatusOK)
+	if records := data.([]contracts.Record[map[string]any]); len(records) != 1 || records[0].ID != "j1" {
+		t.Fatalf("member job list = %#v, want j1", data)
+	}
+
+	getDenied := workloadAuthRequest(http.MethodGet, "/api/v1/jobs/j2", "", "U1", "user")
+	getDenied.SetPathValue("id", "j2")
+	code, data, _ = getJob(app, getDenied, platform.RouteSpec{})
+	assertWorkloadStatus(t, code, data, http.StatusForbidden)
+
+	cancelReq := workloadAuthRequest(http.MethodPost, "/api/v1/jobs/job-one/cancel", `{}`, "U1", "user")
+	cancelReq.SetPathValue("id", "job-one")
+	code, data, _ = cancelJob(app, cancelReq, platform.RouteSpec{OperationID: "job_cancel"})
+	assertWorkloadStatus(t, code, data, http.StatusAccepted)
+	if commands := app.Store.List(context.Background(), jobCommandsResource); len(commands) != 1 {
+		t.Fatalf("job cancel commands = %#v, want one command", commands)
+	}
+
+	logsReq := workloadAuthRequest(http.MethodGet, "/api/v1/jobs/job-one/logs", "", "U1", "user")
+	logsReq.SetPathValue("id", "job-one")
+	code, data, _ = listJobLogs(app, logsReq, platform.RouteSpec{})
+	assertWorkloadStatus(t, code, data, http.StatusOK)
+	if logs := data.([]contracts.Record[map[string]any]); len(logs) != 1 || logs[0].ID != "log1" {
+		t.Fatalf("job logs = %#v, want log1", logs)
+	}
+}
+
+func TestJobAccessHandlersReadVariantsAndFailures(t *testing.T) {
+	app := newAuthWorkloadTestApp()
+	seedWorkloadProject(t, app, "P1")
+	seedWorkloadProjectMember(t, app, "P1", "U1")
+	createWorkloadRecord(t, app, jobsResource, map[string]any{"id": "j1", "job_id": "job-one", "project_id": "P1", "user_id": "U1", "status": "running"})
+	createWorkloadRecord(t, app, jobGPUUsageResource, map[string]any{"id": "gpu1", "job_record_id": "j1", "gpu_utilization": 42})
+
+	getReq := workloadAuthRequest(http.MethodGet, "/api/v1/jobs/j1", "", "U1", "user")
+	getReq.SetPathValue("id", "j1")
+	code, data, _ := getJob(app, getReq, platform.RouteSpec{})
+	assertWorkloadStatus(t, code, data, http.StatusOK)
+
+	gpuReq := workloadAuthRequest(http.MethodGet, "/api/v1/jobs/j1/gpu-summary", "", "U1", "user")
+	gpuReq.SetPathValue("id", "j1")
+	code, data, _ = listJobGPUUsage(app, gpuReq, platform.RouteSpec{})
+	assertWorkloadStatus(t, code, data, http.StatusOK)
+	if usage := data.([]contracts.Record[map[string]any]); len(usage) != 1 || usage[0].ID != "gpu1" {
+		t.Fatalf("gpu usage = %#v, want gpu1", usage)
+	}
+
+	noUserReq := workloadRequest(http.MethodGet, "/api/v1/jobs", "")
+	code, data, _ = listJobs(app, noUserReq, platform.RouteSpec{})
+	assertWorkloadStatus(t, code, data, http.StatusForbidden)
+
+	missingReq := workloadAuthRequest(http.MethodGet, "/api/v1/jobs/missing", "", "U1", "user")
+	missingReq.SetPathValue("id", "missing")
+	code, data, _ = getJob(app, missingReq, platform.RouteSpec{})
+	assertWorkloadStatus(t, code, data, http.StatusNotFound)
+
+	cancelBadBody := workloadAuthRequest(http.MethodPost, "/api/v1/jobs/j1/cancel", `{`, "U1", "user")
+	cancelBadBody.SetPathValue("id", "j1")
+	code, data, _ = cancelJob(app, cancelBadBody, platform.RouteSpec{})
+	assertWorkloadStatus(t, code, data, http.StatusBadRequest)
+	if commands := app.Store.List(context.Background(), jobCommandsResource); len(commands) != 0 {
+		t.Fatalf("job cancel commands = %#v, want none after malformed body", commands)
+	}
+}
+
 func newJobSubmitTestApp() *platform.App {
-	app := platform.NewApp(platform.Config{ServiceName: "all", HTTPAddr: ":0"})
+	return newJobSubmitTestAppWithCluster(nil)
+}
+
+func newJobSubmitTestAppWithCluster(cl *cluster.Client) *platform.App {
+	app := platform.NewApp(platform.Config{ServiceName: "all", HTTPAddr: ":0", ServiceAPIKey: "svc-key"}, platform.WithCluster(cl))
+	registerWorkloadJobRoute(app)
+	registerWorkloadPreemptionRoutes(app)
+	registerSchedulerAdmissionRoute(app)
+	registerSchedulerPreemptionRoute(app)
+	schedulerquota.Register(app)
+	Register(app)
+	return app
+}
+
+func newAuthJobSubmitTestApp() *platform.App {
+	serviceKey := "service-secret"
+	app := platform.NewApp(platform.Config{
+		ServiceName:   "all",
+		HTTPAddr:      ":0",
+		RequireAuth:   true,
+		ServiceAPIKey: serviceKey,
+		APIKeys:       map[string]bool{serviceKey: true},
+		APIKeyPrincipals: map[string]platform.APIKeyPrincipal{
+			serviceKey: {ID: serviceName, Role: "service"},
+		},
+	})
 	registerWorkloadJobRoute(app)
 	registerSchedulerAdmissionRoute(app)
 	schedulerquota.Register(app)
@@ -260,6 +458,16 @@ func registerWorkloadJobRoute(app *platform.App) {
 	})
 }
 
+func registerWorkloadPreemptionRoutes(app *platform.App) {
+	app.RegisterService(platform.ServiceSpec{
+		Name: serviceName,
+		Routes: []platform.RouteSpec{
+			{Method: http.MethodGet, Pattern: "/internal/workload/preemption-context", Resource: "preemption_context", Action: "internal_read", AuthRequired: false},
+			{Method: http.MethodPost, Pattern: "/internal/workload/jobs/{id}/preempt", Resource: "jobs", Action: "preempt", AuthRequired: false},
+		},
+	})
+}
+
 func registerSchedulerAdmissionRoute(app *platform.App) {
 	app.RegisterService(platform.ServiceSpec{
 		Name: schedulerServiceName,
@@ -273,6 +481,19 @@ func registerSchedulerAdmissionRoute(app *platform.App) {
 	})
 }
 
+func registerSchedulerPreemptionRoute(app *platform.App) {
+	app.RegisterService(platform.ServiceSpec{
+		Name: schedulerServiceName,
+		Routes: []platform.RouteSpec{{
+			Method:       http.MethodPost,
+			Pattern:      schedulerPreemptionsPath,
+			Resource:     "preemptions",
+			Action:       "command",
+			AuthRequired: true,
+		}},
+	})
+}
+
 func seedJobAdmissionProject(t *testing.T, app *platform.App, projectOverrides map[string]any) {
 	t.Helper()
 	seedSchedulerAdmissionPolicy(t, app)
@@ -281,7 +502,7 @@ func seedJobAdmissionProject(t *testing.T, app *platform.App, projectOverrides m
 
 func seedSchedulerAdmissionPolicy(t *testing.T, app *platform.App) {
 	t.Helper()
-	createWorkloadRecord(t, app, testSchedulerQueuesResource, map[string]any{"id": "q1", "name": "default-batch"})
+	createWorkloadRecord(t, app, testSchedulerQueuesResource, map[string]any{"id": "q1", "name": "default-batch", "priority_value": 1000, "is_preemptible": true, "max_runtime_seconds": 3600})
 	createWorkloadRecord(t, app, testSchedulerPlansResource, map[string]any{
 		"id":                 "plan-1",
 		"name":               "default",
@@ -291,6 +512,16 @@ func seedSchedulerAdmissionPolicy(t *testing.T, app *platform.App) {
 		"queue_ids":          []string{"q1"},
 		"allowed_gpu_models": []string{"gpu.nvidia.com"},
 	})
+}
+
+func workloadPreemptionPod(namespace, name, jobID string) *corev1.Pod {
+	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Namespace: namespace,
+		Name:      name,
+		Labels: map[string]string{
+			cluster.LabelJobID: jobID,
+		},
+	}}
 }
 
 func seedJobAdmissionOwnerData(t *testing.T, app *platform.App, projectOverrides map[string]any) {

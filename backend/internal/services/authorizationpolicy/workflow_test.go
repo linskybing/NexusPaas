@@ -227,7 +227,7 @@ func TestProxyPolicyMutationHandlers(t *testing.T) {
 	assertPolicyStatus(t, code, data, http.StatusNotFound)
 }
 
-func TestProxyPolicyBatchAndLegacyAssignmentHandlers(t *testing.T) {
+func TestProxyPolicyBatchAndAssignmentHandlers(t *testing.T) {
 	app := newPolicyTestApp(t)
 	policyID := createPolicyForTest(t, app)
 	roleID := createRoleForTest(t, app)
@@ -241,15 +241,22 @@ func TestProxyPolicyBatchAndLegacyAssignmentHandlers(t *testing.T) {
 		t.Fatalf("batch assignments = %#v, want two successes", result)
 	}
 
-	legacyReq := policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/assignments", `{"policy_id":"`+policyID+`","target_type":"user","target_id":"U2"}`, "ADMIN")
-	code, data, _ = assignPolicyLegacy(app, legacyReq, platform.RouteSpec{})
+	assignReq := policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/policies/"+policyID+"/assignments", `{"target_type":"user","target_id":"U2"}`, "ADMIN")
+	assignReq.SetPathValue("id", policyID)
+	code, data, _ = assignPolicy(app, assignReq, platform.RouteSpec{})
 	assertPolicyStatus(t, code, data, http.StatusCreated)
-	code, data, _ = assignPolicyLegacy(app, policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/assignments", `{"policy_id":"`+policyID+`","target_type":"user","target_id":"U2"}`, "ADMIN"), platform.RouteSpec{})
+	assignReq = policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/policies/"+policyID+"/assignments", `{"target_type":"user","target_id":"U2"}`, "ADMIN")
+	assignReq.SetPathValue("id", policyID)
+	code, data, _ = assignPolicy(app, assignReq, platform.RouteSpec{})
 	assertPolicyStatus(t, code, data, http.StatusOK)
 
-	code, data, _ = assignPolicyLegacy(app, policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/assignments", `{"target_type":"user","target_id":"U3"}`, "ADMIN"), platform.RouteSpec{})
+	badAssignReq := policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/policies/"+policyID+"/assignments", `{"target_type":"user"}`, "ADMIN")
+	badAssignReq.SetPathValue("id", policyID)
+	code, data, _ = assignPolicy(app, badAssignReq, platform.RouteSpec{})
 	assertPolicyStatus(t, code, data, http.StatusBadRequest)
-	code, data, _ = assignPolicyLegacy(app, policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/assignments", `{"policy_id":"PO_MISSING","target_type":"user","target_id":"U3"}`, "ADMIN"), platform.RouteSpec{})
+	missingPolicyReq := policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/policies/PO_MISSING/assignments", `{"target_type":"user","target_id":"U3"}`, "ADMIN")
+	missingPolicyReq.SetPathValue("id", "PO_MISSING")
+	code, data, _ = assignPolicy(app, missingPolicyReq, platform.RouteSpec{})
 	assertPolicyStatus(t, code, data, http.StatusNotFound)
 
 	invalidBatch := policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/policies/"+policyID+"/assignments/batch", `{"assignments":["bad"]}`, "ADMIN")
@@ -264,11 +271,11 @@ func TestProxyPolicyBatchAndLegacyAssignmentHandlers(t *testing.T) {
 	assertPolicyStatus(t, code, data, http.StatusBadRequest)
 }
 
-func TestProxyRoleLegacyAndFailureHandlers(t *testing.T) {
+func TestProxyRoleAndFailureHandlers(t *testing.T) {
 	app := newPolicyTestApp(t)
 	roleID := createRoleForTest(t, app)
 
-	code, data, _ := listPlatformRolesLegacy(app, policyRequest(http.MethodGet, "/api/v1/admin/proxy-rbac/roles", "", "ADMIN"), platform.RouteSpec{})
+	code, data, _ := listRoles(app, policyRequest(http.MethodGet, "/api/v1/admin/proxy-rbac/roles", "", "ADMIN"), platform.RouteSpec{})
 	assertPolicyStatus(t, code, data, http.StatusOK)
 
 	getReq := policyRequest(http.MethodGet, "/api/v1/admin/proxy-rbac/roles/"+roleID, "", "ADMIN")
@@ -286,15 +293,22 @@ func TestProxyRoleLegacyAndFailureHandlers(t *testing.T) {
 	code, data, _ = createRole(app, policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/roles", `{"name":"analytics","display_name":"Duplicate"}`, "ADMIN"), platform.RouteSpec{})
 	assertPolicyStatus(t, code, data, http.StatusBadRequest)
 
-	legacyReq := policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/role-users", `{"role_id":"`+roleID+`","user_id":"U2"}`, "ADMIN")
-	code, data, _ = assignRoleUserLegacy(app, legacyReq, platform.RouteSpec{})
+	roleUserReq := policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/roles/"+roleID+"/users", `{"user_id":"U2"}`, "ADMIN")
+	roleUserReq.SetPathValue("id", roleID)
+	code, data, _ = assignRoleUser(app, roleUserReq, platform.RouteSpec{})
 	assertPolicyStatus(t, code, data, http.StatusCreated)
-	code, data, _ = assignRoleUserLegacy(app, policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/role-users", `{"role_id":"`+roleID+`","user_id":"U2"}`, "ADMIN"), platform.RouteSpec{})
+	roleUserReq = policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/roles/"+roleID+"/users", `{"user_id":"U2"}`, "ADMIN")
+	roleUserReq.SetPathValue("id", roleID)
+	code, data, _ = assignRoleUser(app, roleUserReq, platform.RouteSpec{})
 	assertPolicyStatus(t, code, data, http.StatusOK)
 
-	code, data, _ = assignRoleUserLegacy(app, policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/role-users", `{"user_id":"U1"}`, "ADMIN"), platform.RouteSpec{})
+	badRoleUserReq := policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/roles/"+roleID+"/users", `{}`, "ADMIN")
+	badRoleUserReq.SetPathValue("id", roleID)
+	code, data, _ = assignRoleUser(app, badRoleUserReq, platform.RouteSpec{})
 	assertPolicyStatus(t, code, data, http.StatusBadRequest)
-	code, data, _ = assignRoleUserLegacy(app, policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/role-users", `{"role_id":"RL_MISSING","user_id":"U1"}`, "ADMIN"), platform.RouteSpec{})
+	missingRoleUserReq := policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/roles/RL_MISSING/users", `{"user_id":"U1"}`, "ADMIN")
+	missingRoleUserReq.SetPathValue("id", "RL_MISSING")
+	code, data, _ = assignRoleUser(app, missingRoleUserReq, platform.RouteSpec{})
 	assertPolicyStatus(t, code, data, http.StatusNotFound)
 
 	batchReq := policyRequest(http.MethodPost, "/api/v1/admin/proxy-rbac/roles/"+roleID+"/users/batch", `{"user_ids":["","U1"]}`, "ADMIN")

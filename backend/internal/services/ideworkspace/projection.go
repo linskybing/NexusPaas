@@ -6,6 +6,7 @@ import (
 
 	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
+	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
 
 const (
@@ -117,13 +118,13 @@ func ideGroupMembershipData(event contracts.Event) (map[string]any, bool) {
 func ideEventData(event contracts.Event) map[string]any {
 	for _, key := range []string{"new", "record", "project", "member", "user", "role"} {
 		if data, ok := event.Data[key].(map[string]any); ok {
-			return cloneMap(data)
+			return shared.CloneMap(data)
 		}
 	}
-	return cloneMap(event.Data)
+	return shared.CloneMap(event.Data)
 }
 
-func upsertIDEReadModel(repo ideProjectionRepository, r *http.Request, resource string, data map[string]any) error {
+func upsertIDEReadModel(repo *recordStoreIDEProjectionRepository, r *http.Request, resource string, data map[string]any) error {
 	switch resource {
 	case ideIdentityUsersResource:
 		return repo.UpsertIdentityUser(r.Context(), data)
@@ -142,7 +143,7 @@ func upsertIDEReadModel(repo ideProjectionRepository, r *http.Request, resource 
 	}
 }
 
-func deleteIDEReadModel(repo ideProjectionRepository, r *http.Request, resource string, data map[string]any) bool {
+func deleteIDEReadModel(repo *recordStoreIDEProjectionRepository, r *http.Request, resource string, data map[string]any) bool {
 	switch resource {
 	case ideIdentityUsersResource:
 		return repo.DeleteIdentityUser(r.Context(), data)

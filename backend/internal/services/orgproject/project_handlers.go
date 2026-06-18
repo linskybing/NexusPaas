@@ -36,15 +36,15 @@ func createProject(app *platform.App, r *http.Request, _ platform.RouteSpec) (in
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(msgInvalidRequestBody), nil
 	}
-	name := firstNonEmpty(shared.TextValue(payload, "project_name", "ProjectName"), shared.TextValue(payload, "name"))
-	ownerID := firstNonEmpty(shared.TextValue(payload, "g_id", "gid", "GID"), shared.TextValue(payload, "group_id", "owner_id", "ownerId"))
+	name := shared.FirstNonBlank(shared.TextValue(payload, "project_name", "ProjectName"), shared.TextValue(payload, "name"))
+	ownerID := shared.FirstNonBlank(shared.TextValue(payload, "g_id", "gid", "GID"), shared.TextValue(payload, "group_id", "owner_id", "ownerId"))
 	if name == "" || ownerID == "" {
 		return http.StatusBadRequest, shared.ErrorData("project_name and g_id are required"), nil
 	}
 	if _, found := findGroup(app, r, ownerID); !found {
 		return http.StatusNotFound, shared.ErrorData(msgGroupNotFound), nil
 	}
-	id := firstNonEmpty(shared.TextValue(payload, "id", "p_id", "PID"), newProjectID(app))
+	id := shared.FirstNonBlank(shared.TextValue(payload, "id", "p_id", "PID"), newProjectID(app))
 	now := time.Now().UTC()
 	project := map[string]any{
 		"id":           id,
@@ -59,7 +59,7 @@ func createProject(app *platform.App, r *http.Request, _ platform.RouteSpec) (in
 		"owner_id":     ownerID,
 		"GID":          ownerID,
 		"g_id":         ownerID,
-		"path":         firstNonEmpty(shared.TextValue(payload, "path"), id),
+		"path":         shared.FirstNonBlank(shared.TextValue(payload, "path"), id),
 		"created_at":   now,
 		"create_at":    now,
 		"created_by":   userID,
@@ -105,7 +105,7 @@ func updateProject(app *platform.App, r *http.Request, _ platform.RouteSpec) (in
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(msgInvalidRequestBody), nil
 	}
-	if ownerID := firstNonEmpty(shared.TextValue(payload, "g_id", "gid", "GID"), shared.TextValue(payload, "group_id", "owner_id", "ownerId")); ownerID != "" {
+	if ownerID := shared.FirstNonBlank(shared.TextValue(payload, "g_id", "gid", "GID"), shared.TextValue(payload, "group_id", "owner_id", "ownerId")); ownerID != "" {
 		if _, found := findGroup(app, r, ownerID); !found {
 			return http.StatusNotFound, shared.ErrorData(msgGroupNotFound), nil
 		}
@@ -507,7 +507,7 @@ func deleteGPUClaim(app *platform.App, r *http.Request, _ platform.RouteSpec) (i
 	if !ok {
 		return status, data, nil
 	}
-	name := firstNonEmpty(r.PathValue("requestId"), r.PathValue("name"))
+	name := shared.FirstNonBlank(r.PathValue("requestId"), r.PathValue("name"))
 	record, found := findGPUClaim(app, r, projectID, name, r.URL.Query().Get("namespace"))
 	if !found {
 		return http.StatusNotFound, shared.ErrorData("gpu claim not found"), nil

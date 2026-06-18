@@ -17,10 +17,6 @@ func listRoles(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, a
 	return http.StatusOK, roleRows(app, r), nil
 }
 
-func listPlatformRolesLegacy(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
-	return listRoles(app, r, platform.RouteSpec{})
-}
-
 func getRole(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
 	if status, data, ok := requireAdmin(app, r); !ok {
 		return status, data, nil
@@ -132,39 +128,6 @@ func assignRoleUser(app *platform.App, r *http.Request, _ platform.RouteSpec) (i
 	payload, _, err := decodePayload(r)
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(err.Error()), nil
-	}
-	userID := shared.TextValue(payload, "user_id", "userId")
-	if userID == "" {
-		return http.StatusBadRequest, shared.ErrorData(msgUserIDRequired), nil
-	}
-	member, created, err := createRoleUser(app, r, roleID, userID, r.Header.Get(headerUserID))
-	if err != nil {
-		if platform.IsCreateConflict(err) {
-			return http.StatusConflict, shared.ErrorData("role user already exists"), nil
-		}
-		return http.StatusInternalServerError, shared.ErrorData("role user could not be created"), nil
-	}
-	if created {
-		publishProxyPolicyChanged(app, r, "role_user_assign", member)
-		return http.StatusCreated, member, nil
-	}
-	return http.StatusOK, member, nil
-}
-
-func assignRoleUserLegacy(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
-	if status, data, ok := requireAdmin(app, r); !ok {
-		return status, data, nil
-	}
-	payload, _, err := decodePayload(r)
-	if err != nil {
-		return http.StatusBadRequest, shared.ErrorData(err.Error()), nil
-	}
-	roleID := shared.TextValue(payload, "role_id", "roleId")
-	if roleID == "" {
-		return http.StatusBadRequest, shared.ErrorData("role_id is required"), nil
-	}
-	if _, found := findPlatformRole(app, r, roleID); !found {
-		return http.StatusNotFound, shared.ErrorData(msgRoleNotFound), nil
 	}
 	userID := shared.TextValue(payload, "user_id", "userId")
 	if userID == "" {

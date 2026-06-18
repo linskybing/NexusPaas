@@ -58,6 +58,7 @@ type admissionReview struct {
 	QueueName        string
 	QueuePriority    int
 	QueuePreemptible bool
+	RuntimeLimit     int
 	DeviceClassName  string
 	RequiredGPU      float64
 	RequiredCPU      float64
@@ -114,7 +115,7 @@ func reviewSubmitAdmission(app *platform.App, r *http.Request, _ platform.RouteS
 		if errors.As(err, &denied) {
 			status = denied.status
 		}
-		return status, admissionDenied(req, err.Error()), nil
+		return status, admissionDeniedReview(req, review, err.Error()), nil
 	}
 	persistAdmissionReview(r.Context(), repo, review)
 	publish(app, r, "SubmitAdmissionReviewed", "allowed", admissionReviewData(review))
@@ -160,6 +161,7 @@ func evaluateSubmitAdmission(ctx context.Context, reader admissionReader, req su
 	if queue, found := admissionQueueByName(ctx, reader, queueName); found {
 		review.QueuePriority = shared.IntValue(queue.Data, "priority_value", "priorityValue", "priority")
 		review.QueuePreemptible = shared.BoolValue(queue.Data, "is_preemptible", "isPreemptible", "preemptible")
+		review.RuntimeLimit = shared.IntValue(queue.Data, "max_runtime_seconds", "maxRuntimeSeconds", "runtime_limit_seconds", "runtimeLimitSeconds")
 	}
 
 	if err := enforceAdmissionDeviceClass(plan, &req); err != nil {

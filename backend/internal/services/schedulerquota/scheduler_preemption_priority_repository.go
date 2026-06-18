@@ -18,35 +18,22 @@ const (
 	errPriorityClassSummaryUpdateMsg = "priority class sync summary update failed"
 )
 
-type schedulerPreemptionPriorityRepository interface {
-	FindPreemptionRecord(ctx context.Context, id string) (contracts.Record[map[string]any], bool)
-	CreatePreemptionRecord(ctx context.Context, data map[string]any) (contracts.Record[map[string]any], error)
-	FinishPreemptionRecord(ctx context.Context, id, status string, updates map[string]any, completedAt time.Time) map[string]any
-	AppendPreemptionVictim(ctx context.Context, id string, victim map[string]any)
-	PreemptionRecordVictims(ctx context.Context, id string) []map[string]any
-
-	ListPriorityClassRecords(ctx context.Context) []contracts.Record[map[string]any]
-	PriorityClassSourceResource() string
-	PriorityClassSyncSummaryResource() string
-	UpsertPriorityClassSyncSummary(ctx context.Context, data map[string]any) error
-}
-
 type recordStoreSchedulerPreemptionPriorityRepository struct {
 	store platform.RecordStore
 }
 
-func schedulerPreemptionPriorityRepositoryForApp(app *platform.App) schedulerPreemptionPriorityRepository {
+func schedulerPreemptionPriorityRepositoryForApp(app *platform.App) *recordStoreSchedulerPreemptionPriorityRepository {
 	if app == nil {
 		return nil
 	}
 	return schedulerPreemptionPriorityRepositoryFromStore(app.Store)
 }
 
-func schedulerPreemptionPriorityRepositoryFromStore(store platform.RecordStore) schedulerPreemptionPriorityRepository {
+func schedulerPreemptionPriorityRepositoryFromStore(store platform.RecordStore) *recordStoreSchedulerPreemptionPriorityRepository {
 	if store == nil {
 		return nil
 	}
-	return recordStoreSchedulerPreemptionPriorityRepository{store: store}
+	return &recordStoreSchedulerPreemptionPriorityRepository{store: store}
 }
 
 func (repo recordStoreSchedulerPreemptionPriorityRepository) FindPreemptionRecord(

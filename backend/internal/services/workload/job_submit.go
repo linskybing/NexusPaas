@@ -41,17 +41,18 @@ func submitJob(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, a
 		}
 		return submitErr.status, shared.ErrorData(submitErr.message), nil
 	}
-	status, review, err := reviewJobAdmission(app, r, admissionPayload)
+	if status, data, ok := requireProjectAccess(app, r, shared.TextValue(job, "project_id", "projectId")); !ok {
+		return status, data, nil
+	}
+	status, review, preemption, denial, err := admitSubmittedJob(app, r, job, admissionPayload)
 	if err != nil {
 		return http.StatusServiceUnavailable, shared.ErrorData("scheduler admission unavailable"), nil
 	}
-	if status >= http.StatusBadRequest || !admissionAllowed(review) {
-		if status < http.StatusBadRequest {
-			status = http.StatusForbidden
-		}
-		return status, admissionDenialData(review, "submit rejected by scheduler admission"), nil
+	if denial != nil {
+		return status, denial, nil
 	}
 	applyAdmissionReview(job, review)
+	applyAutoPreemptionResult(job, preemption)
 	record, err := jobs.CreateSubmittedJob(r.Context(), job)
 	if err != nil {
 		return createStatus(err), shared.ErrorData("job could not be submitted"), nil
@@ -60,7 +61,29 @@ func submitJob(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, a
 	return http.StatusCreated, record, nil
 }
 
-func buildSubmittedJob(app *platform.App, r *http.Request, payload map[string]any, jobs workloadJobRepository) (map[string]any, map[string]any, error) {
+func admitSubmittedJob(app *platform.App, r *http.Request, job, admissionPayload map[string]any) (int, map[string]any, map[string]any, map[string]any, error) {
+	status, review, err := reviewJobAdmission(app, r, admissionPayload)
+	if err != nil {
+		return 0, nil, nil, nil, err
+	}
+	var preemption map[string]any
+	if status >= http.StatusBadRequest || !admissionAllowed(review) {
+		status, review, preemption, err = autoPreemptAndRetryAdmission(app, r, job, admissionPayload, status, review)
+		if err != nil {
+			return 0, nil, nil, nil, err
+		}
+	}
+	if status < http.StatusBadRequest && admissionAllowed(review) {
+		return status, review, preemption, nil, nil
+	}
+	if status < http.StatusBadRequest {
+		status = http.StatusForbidden
+	}
+	denial := admissionDenialWithPreemptionData(review, preemption, "submit rejected by scheduler admission")
+	return status, review, preemption, denial, nil
+}
+
+func buildSubmittedJob(app *platform.App, r *http.Request, payload map[string]any, jobs *recordStoreWorkloadJobRepository) (map[string]any, map[string]any, error) {
 	submitType := shared.FirstNonEmpty(shared.TextValue(payload, "submit_type", "submitType"), "job")
 	if !strings.EqualFold(submitType, "job") {
 		return nil, nil, jobSubmitError{status: http.StatusBadRequest, message: "submit_type must be job"}
@@ -110,7 +133,7 @@ type jobSubmitContext struct {
 	configCommitID string
 }
 
-func resolveJobSubmitContext(configs workloadConfigRepository, r *http.Request, payload map[string]any) (jobSubmitContext, error) {
+func resolveJobSubmitContext(configs *recordStoreWorkloadConfigRepository, r *http.Request, payload map[string]any) (jobSubmitContext, error) {
 	jobCtx := jobSubmitContext{
 		projectID:      shared.FirstNonEmpty(shared.TextValue(payload, "project_id", "projectId", "ProjectID"), strings.TrimSpace(r.URL.Query().Get("project_id"))),
 		configID:       shared.TextValue(payload, "config_id", "configId"),
@@ -160,7 +183,18 @@ func jobAdmissionPayload(job, payload map[string]any) map[string]any {
 }
 
 func applyAdmissionReview(job, review map[string]any) {
-	for _, key := range []string{"queue_name", "device_class_name", "required_gpu", "required_cpu", "required_memory"} {
+	for _, key := range []string{
+		"queue_name",
+		"priority_value",
+		"preemptible",
+		"is_preemptible",
+		"runtime_limit_seconds",
+		"max_runtime_seconds",
+		"device_class_name",
+		"required_gpu",
+		"required_cpu",
+		"required_memory",
+	} {
 		if value, ok := review[key]; ok {
 			job[key] = value
 		}
@@ -179,6 +213,101 @@ func reviewJobAdmission(app *platform.App, r *http.Request, payload map[string]a
 	return result.StatusCode, result.Data, err
 }
 
+func autoPreemptAndRetryAdmission(
+	app *platform.App,
+	r *http.Request,
+	job, admissionPayload map[string]any,
+	status int,
+	review map[string]any,
+) (int, map[string]any, map[string]any, error) {
+	if !shouldAutoPreemptAdmissionDenial(status, review) {
+		return status, review, nil, nil
+	}
+	payload, ok := schedulerPreemptionPayload(job, admissionPayload, review)
+	if !ok {
+		return status, review, nil, nil
+	}
+	client, err := newSchedulerPreemptionClient(app)
+	if err != nil {
+		return status, review, map[string]any{"status": "unavailable", "reason": err.Error()}, nil
+	}
+	headers := autoPreemptionHeaders(r, job)
+	result, err := client.Preempt(r.Context(), headers, payload)
+	if err != nil {
+		return status, review, map[string]any{"status": "unavailable", "reason": err.Error()}, nil
+	}
+	preemption := shared.CloneMap(result.Data)
+	preemption["http_status"] = result.StatusCode
+	if result.StatusCode != http.StatusOK || !shared.BoolValue(preemption, "accepted") || shared.TextValue(preemption, "status") != "completed" {
+		return status, admissionDenialWithPreemptionData(review, preemption, "submit rejected by scheduler admission"), preemption, nil
+	}
+	retryStatus, retryReview, err := reviewJobAdmission(app, r, admissionPayload)
+	if err != nil {
+		return retryStatus, retryReview, preemption, err
+	}
+	return retryStatus, retryReview, preemption, nil
+}
+
+func shouldAutoPreemptAdmissionDenial(status int, review map[string]any) bool {
+	if status != http.StatusConflict {
+		return false
+	}
+	reason := strings.ToLower(shared.TextValue(review, "reason"))
+	return strings.Contains(reason, "quota exceeded") ||
+		strings.Contains(reason, "resource shortage") ||
+		strings.Contains(reason, "insufficient resource")
+}
+
+func schedulerPreemptionPayload(job, admissionPayload, review map[string]any) (map[string]any, bool) {
+	priority := shared.IntValue(review, "priority_value", "priorityValue", "priority")
+	requiredGPU := shared.NumberValue(review, "required_gpu", "requiredGpu", "RequiredGPU")
+	requiredCPU := shared.NumberValue(review, "required_cpu", "requiredCPU", "required_cpu_cores", "RequiredCPU")
+	if priority <= 0 || (requiredGPU <= 0 && requiredCPU <= 0) {
+		return nil, false
+	}
+	jobID := shared.TextValue(job, "job_id", "jobId", "id")
+	payload := map[string]any{
+		"requester_job_id":  jobID,
+		"project_id":        shared.TextValue(review, "project_id", "projectId"),
+		"queue_name":        shared.FirstNonEmpty(shared.TextValue(review, "queue_name", "queueName"), shared.TextValue(admissionPayload, "queue_name", "queueName")),
+		"priority_value":    priority,
+		"required_gpu":      requiredGPU,
+		"required_cpu":      requiredCPU,
+		"device_class_name": shared.FirstNonEmpty(shared.TextValue(review, "device_class_name", "deviceClassName"), shared.TextValue(admissionPayload, "device_class_name", "deviceClassName")),
+		"gpu_model":         shared.TextValue(admissionPayload, "gpu_model", "gpuModel", "dra_gpu_model", "draGPUModel"),
+	}
+	for key, value := range payload {
+		if text, ok := value.(string); ok && text == "" {
+			delete(payload, key)
+		}
+	}
+	return payload, jobID != ""
+}
+
+func autoPreemptionHeaders(r *http.Request, job map[string]any) http.Header {
+	headers := r.Header.Clone()
+	jobID := shared.TextValue(job, "job_id", "jobId", "id")
+	key := strings.TrimSpace(headers.Get("Idempotency-Key"))
+	if key == "" {
+		key = jobID
+	}
+	headers.Set("Idempotency-Key", "auto-preempt:"+jobID+":"+key)
+	return headers
+}
+
+func applyAutoPreemptionResult(job, preemption map[string]any) {
+	if len(preemption) == 0 {
+		return
+	}
+	job["admission_preemption"] = shared.CloneMap(preemption)
+	if id := shared.TextValue(preemption, "preemption_id", "id"); id != "" {
+		job["admission_preemption_id"] = id
+	}
+	if status := shared.TextValue(preemption, "status"); status != "" {
+		job["admission_preemption_status"] = status
+	}
+}
+
 func admissionAllowed(review map[string]any) bool {
 	allowed, ok := review["allowed"].(bool)
 	return ok && allowed
@@ -191,6 +320,14 @@ func admissionDenialData(review map[string]any, fallback string) map[string]any 
 	}
 	if _, ok := data["allowed"]; !ok {
 		data["allowed"] = false
+	}
+	return data
+}
+
+func admissionDenialWithPreemptionData(review, preemption map[string]any, fallback string) map[string]any {
+	data := admissionDenialData(review, fallback)
+	if len(preemption) > 0 {
+		data["auto_preemption"] = shared.CloneMap(preemption)
 	}
 	return data
 }

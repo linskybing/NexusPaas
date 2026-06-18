@@ -57,21 +57,6 @@ func oidcRevoke(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, 
 	return oidcProviderUnavailable(app, r, platform.RouteSpec{})
 }
 
-func oidcDeviceAuthorization(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
-	if strings.TrimSpace(oidcFields(r)["client_id"]) == "" {
-		return http.StatusBadRequest, map[string]any{"message": "client_id is required"}, nil
-	}
-	return oidcProviderUnavailable(app, r, platform.RouteSpec{})
-}
-
-func oidcWellKnown(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
-	path := strings.Trim(strings.TrimSpace(r.PathValue("path")), "/")
-	if path != "openid-configuration" {
-		return http.StatusNotFound, map[string]any{"message": "OIDC discovery path not found"}, nil
-	}
-	return oidcProviderUnavailable(app, r, platform.RouteSpec{})
-}
-
 func oidcAuthorize(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
 	fields := oidcFields(r)
 	if strings.TrimSpace(fields["client_id"]) == "" || strings.TrimSpace(fields["response_type"]) == "" || strings.TrimSpace(fields["redirect_uri"]) == "" {

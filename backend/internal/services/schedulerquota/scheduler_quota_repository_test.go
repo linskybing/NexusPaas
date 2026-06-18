@@ -190,14 +190,14 @@ func TestSchedulerQuotaRepositorySourceGuardOwnsSchedulerResources(t *testing.T)
 	}
 }
 
-func mustCreateQueue(t *testing.T, repo schedulerQuotaRepository, ctx context.Context, data map[string]any) {
+func mustCreateQueue(t *testing.T, repo *recordStoreSchedulerQuotaRepository, ctx context.Context, data map[string]any) {
 	t.Helper()
 	if _, err := repo.CreateQueue(ctx, data); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func mustCreatePlan(t *testing.T, repo schedulerQuotaRepository, ctx context.Context, data map[string]any) {
+func mustCreatePlan(t *testing.T, repo *recordStoreSchedulerQuotaRepository, ctx context.Context, data map[string]any) {
 	t.Helper()
 	if _, err := repo.CreatePlan(ctx, data); err != nil {
 		t.Fatal(err)

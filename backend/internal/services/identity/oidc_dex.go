@@ -12,13 +12,13 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
-// dexClient forwards OIDC compatibility requests to the configured Dex provider.
+// dexClient forwards canonical OIDC requests to the configured Dex provider.
 var dexClient = &http.Client{Timeout: 10 * time.Second, Transport: otelhttp.NewTransport(http.DefaultTransport)}
 
-// registerDexProxies replaces the fail-closed OIDC compatibility handlers with
-// reverse proxies to a real Dex provider when DEX_URL is configured (findings 6,
-// 30). Tokens issued by Dex are verified across every service via JWKS, so this
-// turns the previously fabricated endpoints into a real provider-backed surface.
+// registerDexProxies replaces the fail-closed OIDC handlers with reverse proxies
+// to a real Dex provider when DEX_URL is configured. Tokens issued by Dex are
+// verified across every service via JWKS, so this turns the local endpoints into
+// a real provider-backed surface.
 // When DEX_URL is unset the fail-closed handlers registered earlier remain.
 func registerDexProxies(app *platform.App) {
 	if strings.TrimSpace(app.Config.DexURL) == "" {
@@ -33,20 +33,15 @@ func registerDexProxies(app *platform.App) {
 		{http.MethodGet, "/api/v1/oidc/jwks", "/keys"},
 		{http.MethodGet, "/api/v1/oidc/authorize", "/auth"},
 		{http.MethodPost, "/api/v1/oidc/token", "/token"},
-		{http.MethodPost, "/oauth/token", "/token"},
 		{http.MethodGet, "/api/v1/oidc/userinfo", "/userinfo"},
 		{http.MethodPost, "/api/v1/oidc/userinfo", "/userinfo"},
 	}
 	for _, route := range routes {
 		app.RegisterCustomHandler(route.method, route.pattern, dexProxy(route.dexPath))
 	}
-	// Device authorization proxies to Dex's device endpoint (/device/code);
-	// polling uses the already-proxied /token endpoint with the device grant.
-	app.RegisterCustomHandler(http.MethodPost, "/device_authorization", dexProxy("/device/code"))
 	// Dex exposes no RFC 7009 revocation endpoint, so token revocation is handled
 	// locally by denylisting the JWT's jti across replicas (findings 6, 30, 1).
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/oidc/revoke", oidcRevokeViaDenylist)
-	app.RegisterCustomHandler(http.MethodPost, "/revoke", oidcRevokeViaDenylist)
 }
 
 // oidcRevokeViaDenylist implements OAuth 2.0 token revocation (RFC 7009) by adding

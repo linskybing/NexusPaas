@@ -7,6 +7,7 @@ import (
 
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
 	"github.com/linskybing/nexuspaas/backend/internal/platform/cluster"
+	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
 
 const dockerCleanupTaskName = cluster.DockerCleanupCronJobName
@@ -20,7 +21,7 @@ func registerDockerCleanup(app *platform.App) {
 		logDockerCleanupResult(result)
 		switch result.Action {
 		case cluster.DockerCleanupActionFailed, cluster.DockerCleanupActionInvalid, cluster.DockerCleanupActionConflict:
-			return fmt.Errorf("docker cleanup CronJob reconciliation %s: %s", result.Action, firstNonEmpty(result.Error, result.Reason))
+			return fmt.Errorf("docker cleanup CronJob reconciliation %s: %s", result.Action, shared.FirstNonEmpty(result.Error, result.Reason))
 		default:
 			return nil
 		}
@@ -30,7 +31,7 @@ func registerDockerCleanup(app *platform.App) {
 func reconcileDockerCleanupCronJob(ctx context.Context, app *platform.App) cluster.DockerCleanupCronJobResult {
 	if app == nil || app.Cluster == nil {
 		return cluster.DockerCleanupCronJobResult{
-			Namespace: firstNonEmpty(appDockerCleanupNamespace(app), cluster.DockerCleanupDefaultNamespace),
+			Namespace: shared.FirstNonEmpty(appDockerCleanupNamespace(app), cluster.DockerCleanupDefaultNamespace),
 			Name:      cluster.DockerCleanupCronJobName,
 			Action:    cluster.DockerCleanupActionDegraded,
 			Reason:    "cluster client unavailable",
@@ -57,13 +58,4 @@ func logDockerCleanupResult(result cluster.DockerCleanupCronJobResult) {
 		"reason", result.Reason,
 		"error", result.Error,
 	)
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }

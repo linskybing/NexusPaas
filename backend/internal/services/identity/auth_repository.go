@@ -10,25 +10,6 @@ import (
 	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
 
-type identityAuthRepository interface {
-	FindActiveUserByID(ctx context.Context, id string) (identityUser, bool)
-	FindActiveUserByUsername(ctx context.Context, username string) (identityUser, bool)
-	SetUserStatus(ctx context.Context, id, status string) bool
-	IssueSessionPair(ctx context.Context, userID string, now time.Time, accessTTL, refreshTTL time.Duration) (identitySessionPair, error)
-	FindValidSession(ctx context.Context, token string, now time.Time) (identitySession, bool)
-	ConsumeRefreshToken(ctx context.Context, token string, now time.Time) (identityRefreshToken, bool)
-	RevokeSession(ctx context.Context, token string, now time.Time) (identitySession, bool)
-	DeleteRefreshToken(ctx context.Context, token string) bool
-	ListActiveAPITokens(ctx context.Context, userID string, now time.Time) []identityAPIToken
-	CountActiveAPITokens(ctx context.Context, userID string, now time.Time) int
-	CreateAPIToken(ctx context.Context, userID, name string, now time.Time, ttl time.Duration) (identityCreatedAPIToken, error)
-	FindActiveAPITokenByRaw(ctx context.Context, rawToken string, now time.Time) (identityAPIToken, identityUser, bool)
-	TouchAPITokenLastUsed(ctx context.Context, tokenID string, at time.Time) bool
-	RevokeAPIToken(ctx context.Context, userID, tokenID string, now time.Time) (identityAPIToken, bool)
-	RevokeAPITokensForUser(ctx context.Context, userID string, now time.Time) []identityAPIToken
-	CleanupExpiredAuthRecords(ctx context.Context, now time.Time) int
-}
-
 type identityUser struct {
 	ID       string
 	Username string
@@ -104,21 +85,21 @@ func (t identityCreatedAPIToken) Response() map[string]any {
 
 type recordStoreIdentityAuthRepository struct {
 	store                 platform.RecordStore
-	principals            identityPrincipalRepository
+	principals            *recordStoreIdentityPrincipalRepository
 	accessTokenGenerator  func(userID string) string
 	refreshTokenGenerator func() string
 	apiTokenGenerator     func() string
 	now                   func() time.Time
 }
 
-func authRepository(app *platform.App) identityAuthRepository {
+func authRepository(app *platform.App) *recordStoreIdentityAuthRepository {
 	if app == nil {
 		return newRecordStoreIdentityAuthRepository(nil)
 	}
 	return newRecordStoreIdentityAuthRepository(app.Store, principalRepository(app))
 }
 
-func newRecordStoreIdentityAuthRepository(store platform.RecordStore, principals ...identityPrincipalRepository) *recordStoreIdentityAuthRepository {
+func newRecordStoreIdentityAuthRepository(store platform.RecordStore, principals ...*recordStoreIdentityPrincipalRepository) *recordStoreIdentityAuthRepository {
 	principalRepo := principalRepositoryFromStore(store)
 	if len(principals) > 0 && principals[0] != nil {
 		principalRepo = principals[0]

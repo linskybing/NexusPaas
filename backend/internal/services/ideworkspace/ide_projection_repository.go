@@ -8,45 +8,25 @@ import (
 
 	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
+	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
 
 var errIDEProjectionRepositoryUnavailable = errors.New("ide projection repository unavailable")
-
-type ideProjectionRepository interface {
-	UpsertIdentityUser(context.Context, map[string]any) error
-	UpsertIdentityRole(context.Context, map[string]any) error
-	UpsertPolicyRole(context.Context, map[string]any) error
-	UpsertProject(context.Context, map[string]any) error
-	UpsertProjectMember(context.Context, map[string]any) error
-	UpsertUserGroup(context.Context, map[string]any) error
-	DeleteIdentityUser(context.Context, map[string]any) bool
-	DeleteIdentityRole(context.Context, map[string]any) bool
-	DeletePolicyRole(context.Context, map[string]any) bool
-	DeleteProject(context.Context, map[string]any) bool
-	DeleteProjectMember(context.Context, map[string]any) bool
-	DeleteUserGroup(context.Context, map[string]any) bool
-	ListIdentityUsers(context.Context) []contracts.Record[map[string]any]
-	ListIdentityRoles(context.Context) []contracts.Record[map[string]any]
-	ListPolicyRoles(context.Context) []contracts.Record[map[string]any]
-	ListProjects(context.Context) []contracts.Record[map[string]any]
-	ListProjectMembers(context.Context) []contracts.Record[map[string]any]
-	ListUserGroups(context.Context) []contracts.Record[map[string]any]
-}
 
 type recordStoreIDEProjectionRepository struct {
 	store  platform.RecordStore
 	config platform.Config
 }
 
-func ideProjectionRepo(app *platform.App) ideProjectionRepository {
+func ideProjectionRepo(app *platform.App) *recordStoreIDEProjectionRepository {
 	if app == nil {
-		return recordStoreIDEProjectionRepository{}
+		return &recordStoreIDEProjectionRepository{}
 	}
-	return recordStoreIDEProjectionRepository{store: app.Store, config: app.Config}
+	return &recordStoreIDEProjectionRepository{store: app.Store, config: app.Config}
 }
 
-func ideProjectionRepoFromStore(store platform.RecordStore, config platform.Config) ideProjectionRepository {
-	return recordStoreIDEProjectionRepository{store: store, config: config}
+func ideProjectionRepoFromStore(store platform.RecordStore, config platform.Config) *recordStoreIDEProjectionRepository {
+	return &recordStoreIDEProjectionRepository{store: store, config: config}
 }
 
 func (r recordStoreIDEProjectionRepository) UpsertIdentityUser(ctx context.Context, data map[string]any) error {
@@ -129,7 +109,7 @@ func (r recordStoreIDEProjectionRepository) upsertReadModel(ctx context.Context,
 	if r.store == nil {
 		return errIDEProjectionRepositoryUnavailable
 	}
-	next := cloneMap(data)
+	next := shared.CloneMap(data)
 	next[ideKeyID] = id
 	if _, ok := r.store.Update(ctx, resource, id, next); ok {
 		return nil
@@ -195,21 +175,21 @@ func ideReadModelID(resource string, data map[string]any) string {
 	userID := textValue(data, ideKeyUserID, ideKeyUserIDC, "UserID")
 	switch resource {
 	case ideIdentityUsersResource:
-		return firstNonEmpty(id, userID)
+		return shared.FirstNonBlank(id, userID)
 	case ideIdentityRolesResource, idePolicyRolesResource:
-		return firstNonEmpty(id, roleID, name, userID)
+		return shared.FirstNonBlank(id, roleID, name, userID)
 	case ideProjectMembersResource:
 		if id == "" && projectID != "" && userID != "" {
 			return projectID + ":" + userID
 		}
 	case ideProjectsResource:
-		return firstNonEmpty(id, projectID)
+		return shared.FirstNonBlank(id, projectID)
 	case ideUserGroupsResource:
 		if id == "" && userID != "" && groupID != "" {
 			return userID + ":" + groupID
 		}
 	}
-	return firstNonEmpty(id, projectID, userID, groupID, roleID, name)
+	return shared.FirstNonBlank(id, projectID, userID, groupID, roleID, name)
 }
 
 func mergeIDERecords(resource string, source, local []contracts.Record[map[string]any]) []contracts.Record[map[string]any] {
@@ -232,6 +212,6 @@ func mergeIDERecords(resource string, source, local []contracts.Record[map[strin
 }
 
 func cloneIDERecord(record contracts.Record[map[string]any]) contracts.Record[map[string]any] {
-	record.Data = cloneMap(record.Data)
+	record.Data = shared.CloneMap(record.Data)
 	return record
 }

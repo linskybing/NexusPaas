@@ -192,7 +192,7 @@ func TestGPUHelperConversionsAndBounds(t *testing.T) {
 	if timePointerValue(payload, nil, "time") == nil || !derefTime(nil).IsZero() {
 		t.Fatalf("time conversions failed for %#v", payload)
 	}
-	if firstNonEmpty(" ", "value") != "value" || intKey(3) != "3" {
+	if intKey(3) != "3" {
 		t.Fatal("basic helper conversions failed")
 	}
 }

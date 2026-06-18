@@ -46,10 +46,6 @@ func TestOrgProjectBindingClientLocal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
-	if _, ok := client.(localOrgProjectBindingClient); !ok {
-		t.Fatalf("co-hosted client = %T, want local", client)
-	}
-
 	if err := client.BindPlan(ctx, "proj-1", "p1"); err != nil {
 		t.Fatalf("BindPlan: %v", err)
 	}
@@ -91,10 +87,6 @@ func TestOrgProjectBindingClientRemote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new remote client: %v", err)
 	}
-	if _, ok := client.(httpOrgProjectBindingClient); !ok {
-		t.Fatalf("isolated client = %T, want http", client)
-	}
-
 	if err := client.BindPlan(context.Background(), "proj-1", "p9"); err != nil {
 		t.Fatalf("remote BindPlan: %v", err)
 	}

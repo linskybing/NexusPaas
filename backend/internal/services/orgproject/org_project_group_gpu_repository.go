@@ -19,28 +19,6 @@ const (
 
 var errOrgProjectGroupGPUStoreUnavailable = errors.New("org-project group/gpu repository unavailable")
 
-type orgProjectGroupGPURepository interface {
-	ListGroups(ctx context.Context) []orgProjectGroupRecord
-	FindGroup(ctx context.Context, id string) (orgProjectGroupRecord, bool)
-	CreateGroup(ctx context.Context, group map[string]any) (orgProjectGroupRecord, error)
-	UpdateGroup(ctx context.Context, id string, update map[string]any) (orgProjectGroupRecord, orgProjectGroupRecord, bool)
-	DeleteGroupCascade(ctx context.Context, id string) (orgProjectGroupRecord, int, bool)
-	NextGroupID() string
-
-	ListMemberships(ctx context.Context) []orgProjectMembershipRecord
-	FindMembership(ctx context.Context, userID, groupID string) (orgProjectMembershipRecord, bool)
-	CreateMembership(ctx context.Context, membership map[string]any) (orgProjectMembershipRecord, error)
-	UpdateMembershipRole(ctx context.Context, userID, groupID, role string, now time.Time) (orgProjectMembershipRecord, orgProjectMembershipRecord, bool)
-	DeleteMembership(ctx context.Context, userID, groupID string) (orgProjectMembershipRecord, bool)
-	DeleteMembershipsByGroup(ctx context.Context, groupID string) int
-
-	ListGPUClaimsByProject(ctx context.Context, projectID string) []orgProjectGPUClaimRecord
-	FindGPUClaim(ctx context.Context, projectID, name, namespace string) (orgProjectGPUClaimRecord, bool)
-	CreateGPUClaim(ctx context.Context, claim map[string]any) (orgProjectGPUClaimRecord, error)
-	DeleteGPUClaim(ctx context.Context, id string) (orgProjectGPUClaimRecord, bool)
-	DeleteGPUClaimsByProject(ctx context.Context, projectID string) int
-}
-
 type orgProjectGroupRecord struct {
 	ID   string
 	Data map[string]any
@@ -60,15 +38,15 @@ type recordStoreOrgProjectGroupGPURepository struct {
 	store platform.RecordStore
 }
 
-func groupGPURepository(app *platform.App) orgProjectGroupGPURepository {
+func groupGPURepository(app *platform.App) *recordStoreOrgProjectGroupGPURepository {
 	if app == nil {
-		return recordStoreOrgProjectGroupGPURepository{}
+		return &recordStoreOrgProjectGroupGPURepository{}
 	}
 	return groupGPURepositoryFromStore(app.Store)
 }
 
-func groupGPURepositoryFromStore(store platform.RecordStore) orgProjectGroupGPURepository {
-	return recordStoreOrgProjectGroupGPURepository{store: store}
+func groupGPURepositoryFromStore(store platform.RecordStore) *recordStoreOrgProjectGroupGPURepository {
+	return &recordStoreOrgProjectGroupGPURepository{store: store}
 }
 
 func registerGroupGPUReadContracts(app *platform.App) {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
+	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
 
 const (
@@ -117,8 +118,8 @@ func normalizePodGPUUsage(data map[string]any, jobs map[string]map[string]any) (
 	metrics := gpuSnapshotMetrics(data, gpuUUID)
 	return normalizedPodGPUUsage{
 		jobID:          jobID,
-		userID:         firstNonEmpty(textValue(data, "user_id", "userId", "UserID"), textValue(job, "user_id", "userId", "UserID")),
-		projectID:      firstNonEmpty(textValue(data, "project_id", "projectId", "ProjectID"), textValue(job, "project_id", "projectId", "ProjectID")),
+		userID:         shared.FirstNonBlank(textValue(data, "user_id", "userId", "UserID"), textValue(job, "user_id", "userId", "UserID")),
+		projectID:      shared.FirstNonBlank(textValue(data, "project_id", "projectId", "ProjectID"), textValue(job, "project_id", "projectId", "ProjectID")),
 		namespace:      namespace,
 		podName:        podName,
 		node:           textValue(data, "node", "Node", "nodeName", "NodeName"),
@@ -133,7 +134,7 @@ func normalizePodGPUUsage(data map[string]any, jobs map[string]map[string]any) (
 
 func gpuSnapshotMetrics(data map[string]any, gpuUUID string) map[string]any {
 	metrics := mapValue(data, "metrics", "Metrics")
-	out := cloneMap(metrics)
+	out := shared.CloneMap(metrics)
 	if gpuUUID != "" {
 		out["gpu_uuid"] = gpuUUID
 	}
@@ -299,7 +300,7 @@ func snapshotsForJob(ctx context.Context, store platform.RecordStore, jobID stri
 			userID:     textValue(data, "user_id", "userId", "UserID"),
 			projectID:  textValue(data, "project_id", "projectId", "ProjectID"),
 			gpuIndex:   intValue(data, "gpu_index", "gpuIndex", "GPUIndex"),
-			gpuUUID:    firstNonEmpty(textValue(data, "gpu_uuid", "gpuUUID", "GPUUUID"), textValue(metrics, "gpu_uuid", "gpuUUID", "GPUUUID")),
+			gpuUUID:    shared.FirstNonBlank(textValue(data, "gpu_uuid", "gpuUUID", "GPUUUID"), textValue(metrics, "gpu_uuid", "gpuUUID", "GPUUUID")),
 			podName:    textValue(data, "pod_name", "podName", "PodName"),
 			namespace:  textValue(data, "pod_namespace", "podNamespace", "PodNamespace"),
 			mpsUnits:   intValue(data, "mps_virtual_units", "mpsVirtualUnits", "MPSVirtualUnits"),
@@ -341,8 +342,8 @@ func gpuSummaryData(jobID string, job map[string]any, snapshots []snapshotRow, n
 	data := map[string]any{
 		"id":          jobID,
 		"job_id":      jobID,
-		"user_id":     firstNonEmpty(textValue(job, "user_id", "userId", "UserID"), snapshots[0].userID),
-		"project_id":  firstNonEmpty(textValue(job, "project_id", "projectId", "ProjectID"), snapshots[0].projectID),
+		"user_id":     shared.FirstNonBlank(textValue(job, "user_id", "userId", "UserID"), snapshots[0].userID),
+		"project_id":  shared.FirstNonBlank(textValue(job, "project_id", "projectId", "ProjectID"), snapshots[0].projectID),
 		"computed_at": now,
 		"metrics":     metrics,
 		"breakdowns":  breakdowns,

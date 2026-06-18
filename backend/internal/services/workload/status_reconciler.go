@@ -41,7 +41,7 @@ func reconcileNativeWorkloadStatuses(ctx context.Context, cl *cluster.Client, st
 func reconcileNativeWorkloadRecord(
 	ctx context.Context,
 	cl *cluster.Client,
-	jobs workloadJobRepository,
+	jobs *recordStoreWorkloadJobRepository,
 	record contracts.Record[map[string]any],
 	now time.Time,
 ) error {

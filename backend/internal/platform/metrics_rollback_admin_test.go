@@ -1,7 +1,6 @@
 package platform
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -163,67 +162,6 @@ func TestMetricsCountersAndErrorRatePercent(t *testing.T) {
 	metrics.Observe("/error", http.MethodGet, http.StatusInternalServerError, time.Millisecond)
 	if metrics.ErrorRatePercent() != 50 {
 		t.Fatalf("error rate = %d, want 50", metrics.ErrorRatePercent())
-	}
-}
-
-func TestRollbackGateAllowsAndBlocks(t *testing.T) {
-	gate := RollbackGate{MaxOutboxLag: 10, MaxErrorRatePercent: 5, MaxDegradedAdapters: 0}
-	if !gate.Allows(RollbackMetrics{OutboxLag: 10, ErrorRatePercent: 5, DegradedAdapters: 0}) {
-		t.Fatal("gate rejected boundary-safe metrics")
-	}
-	for _, metrics := range []RollbackMetrics{
-		{OutboxLag: 11, ErrorRatePercent: 5, DegradedAdapters: 0},
-		{OutboxLag: 10, ErrorRatePercent: 6, DegradedAdapters: 0},
-		{OutboxLag: 10, ErrorRatePercent: 5, DegradedAdapters: 1},
-	} {
-		if gate.Allows(metrics) {
-			t.Fatalf("gate allowed unsafe metrics: %#v", metrics)
-		}
-	}
-}
-
-func TestRollbackMetricsFromApp(t *testing.T) {
-	app := NewApp(Config{})
-	app.Events.Checkpoint("rollback-gate")
-	if err := app.Events.Publish(context.Background(), testEvent(1)); err != nil {
-		t.Fatal(err)
-	}
-	if err := app.Events.Publish(context.Background(), testEvent(2)); err != nil {
-		t.Fatal(err)
-	}
-	app.Metrics.Observe("/ok", http.MethodGet, http.StatusOK, time.Millisecond)
-	app.Metrics.Observe("/error", http.MethodGet, http.StatusInternalServerError, time.Millisecond)
-	app.Metrics.Inc("k8s_degraded")
-
-	metrics := app.RollbackMetrics()
-	if metrics.OutboxLag != 2 || metrics.ErrorRatePercent != 50 || metrics.DegradedAdapters != 1 {
-		t.Fatalf("rollback metrics = %#v, want lag 2 error 50 degraded 1", metrics)
-	}
-	if app.CanRollback(DefaultRollbackGate()) {
-		t.Fatal("CanRollback(default gate) = true, want false for error/degraded metrics")
-	}
-	if !app.CanRollback(RollbackGate{MaxOutboxLag: 2, MaxErrorRatePercent: 50, MaxDegradedAdapters: 1}) {
-		t.Fatal("CanRollback(custom boundary gate) = false, want true")
-	}
-}
-
-func TestRollbackTargetSwitches(t *testing.T) {
-	app := NewApp(Config{})
-	route := RouteSpec{Pattern: "/api/v1/workloads/{id}"}
-	if got := app.RollbackTargetFor(route); got != "service" {
-		t.Fatalf("default rollback target = %q, want service", got)
-	}
-	monolithRoute := RouteSpec{Pattern: "/api/v1/legacy/{path...}", ExternalAdapter: "monolith"}
-	if got := app.RollbackTargetFor(monolithRoute); got != "monolith" {
-		t.Fatalf("monolith route target = %q, want monolith", got)
-	}
-	app.Switches.Enable(route.Pattern, "workload-service")
-	if got := app.RollbackTargetFor(route); got != "workload-service" {
-		t.Fatalf("enabled route target = %q, want workload-service", got)
-	}
-	app.Switches.Rollback(route.Pattern)
-	if got := app.RollbackTargetFor(route); got != "monolith" {
-		t.Fatalf("rolled back route target = %q, want monolith", got)
 	}
 }
 

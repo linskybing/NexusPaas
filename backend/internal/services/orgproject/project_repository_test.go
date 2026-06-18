@@ -57,7 +57,7 @@ func TestOrgProjectRepositoryDirectMemberAndQuotaLifecycle(t *testing.T) {
 	assertDirectMemberDeleteRemovesQuotaForRepoTest(t, ctx, repo)
 }
 
-func createDirectMemberForRepoTest(t *testing.T, ctx context.Context, repo orgProjectRepository) {
+func createDirectMemberForRepoTest(t *testing.T, ctx context.Context, repo *recordStoreOrgProjectRepository) {
 	t.Helper()
 	member, err := repo.CreateDirectProjectMember(ctx, map[string]any{
 		"id":         projectMemberID("P1", "U1"),
@@ -76,7 +76,7 @@ func createDirectMemberForRepoTest(t *testing.T, ctx context.Context, repo orgPr
 	}
 }
 
-func assertDirectMemberRoleUpdateForRepoTest(t *testing.T, ctx context.Context, repo orgProjectRepository) {
+func assertDirectMemberRoleUpdateForRepoTest(t *testing.T, ctx context.Context, repo *recordStoreOrgProjectRepository) {
 	t.Helper()
 	old, updated, ok := repo.UpdateDirectProjectMemberRole(ctx, "P1", "U1", "manager", time.Now().UTC())
 	if !ok || old.Data["role"] != "user" || updated.Data["role"] != "manager" {
@@ -84,7 +84,7 @@ func assertDirectMemberRoleUpdateForRepoTest(t *testing.T, ctx context.Context, 
 	}
 }
 
-func upsertQuotaForRepoTest(t *testing.T, ctx context.Context, repo orgProjectRepository) {
+func upsertQuotaForRepoTest(t *testing.T, ctx context.Context, repo *recordStoreOrgProjectRepository) {
 	t.Helper()
 	quota, err := repo.UpsertProjectUserQuota(ctx, map[string]any{
 		"id":              projectQuotaID("P1", "U1"),
@@ -117,7 +117,7 @@ func upsertQuotaForRepoTest(t *testing.T, ctx context.Context, repo orgProjectRe
 	}
 }
 
-func assertDirectMemberDeleteRemovesQuotaForRepoTest(t *testing.T, ctx context.Context, repo orgProjectRepository) {
+func assertDirectMemberDeleteRemovesQuotaForRepoTest(t *testing.T, ctx context.Context, repo *recordStoreOrgProjectRepository) {
 	t.Helper()
 	deleted, ok := repo.DeleteDirectProjectMemberAndQuota(ctx, "P1", "U1")
 	if !ok || deleted.Data["role"] != "manager" {

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"maps"
 	"math"
 	"net/http"
 	"regexp"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
+	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
 
 const (
@@ -100,7 +100,7 @@ func listIDEs(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, an
 
 	out := []map[string]any{}
 	for _, record := range app.Store.List(r.Context(), sessionsResource) {
-		session := cloneMap(record.Data)
+		session := shared.CloneMap(record.Data)
 		if projectID != "" && textValue(session, "project_id", "projectId", "ProjectID") != projectID {
 			continue
 		}
@@ -302,15 +302,15 @@ func parseStartRequest(r *http.Request) (startRequest, int, any, bool) {
 
 func buildStartRequest(r *http.Request, payload map[string]any) startRequest {
 	req := startRequest{
-		projectID:         firstNonEmpty(textValue(payload, "project_id", "projectId"), r.URL.Query().Get("project_id")),
-		ideType:           firstNonEmpty(textValue(payload, "ide_type", "ideType"), r.URL.Query().Get("type"), "jupyter"),
-		imageKey:          firstNonEmpty(textValue(payload, "image_key", "imageKey"), r.URL.Query().Get("image_key")),
-		executorType:      firstNonEmpty(textValue(payload, "executor_type", "executorType"), r.URL.Query().Get("executor_type")),
+		projectID:         shared.FirstNonBlank(textValue(payload, "project_id", "projectId"), r.URL.Query().Get("project_id")),
+		ideType:           shared.FirstNonBlank(textValue(payload, "ide_type", "ideType"), r.URL.Query().Get("type"), "jupyter"),
+		imageKey:          shared.FirstNonBlank(textValue(payload, "image_key", "imageKey"), r.URL.Query().Get("image_key")),
+		executorType:      shared.FirstNonBlank(textValue(payload, "executor_type", "executorType"), r.URL.Query().Get("executor_type")),
 		storageIDs:        stringSlice(payload["storage_ids"]),
 		queueName:         textValue(payload, "queue_name", "queueName"),
 		smPercentage:      payload["sm_percentage"],
 		pinnedMemoryLimit: payload["pinned_memory_limit"],
-		deviceClassName:   firstNonEmpty(textValue(payload, "device_class_name", "deviceClassName"), r.URL.Query().Get("device_class_name")),
+		deviceClassName:   shared.FirstNonBlank(textValue(payload, "device_class_name", "deviceClassName"), r.URL.Query().Get("device_class_name")),
 		blocking:          true,
 	}
 	if req.imageKey == "" {
@@ -395,8 +395,8 @@ func parseLifecycleRequest(r *http.Request) (lifecycleRequest, int, any, bool) {
 		return lifecycleRequest{}, status, data, false
 	}
 	req := lifecycleRequest{
-		projectID: firstNonEmpty(textValue(payload, "project_id", "projectId"), r.URL.Query().Get("project_id")),
-		ideType:   firstNonEmpty(textValue(payload, "ide_type", "ideType"), r.URL.Query().Get("type"), "jupyter"),
+		projectID: shared.FirstNonBlank(textValue(payload, "project_id", "projectId"), r.URL.Query().Get("project_id")),
+		ideType:   shared.FirstNonBlank(textValue(payload, "ide_type", "ideType"), r.URL.Query().Get("type"), "jupyter"),
 	}
 	if req.projectID == "" {
 		return req, http.StatusBadRequest, map[string]any{"message": "project_id is required"}, false
@@ -649,21 +649,5 @@ func mapValue(data map[string]any, keys ...string) map[string]any {
 }
 
 func recordID(record contracts.Record[map[string]any]) string {
-	return firstNonEmpty(record.ID, textValue(record.Data, "id", "ID", "p_id", "pID", "PID", "project_id", "projectId", "ProjectID"))
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
-}
-
-func cloneMap(in map[string]any) map[string]any {
-	if in == nil {
-		return map[string]any{}
-	}
-	return maps.Clone(in)
+	return shared.FirstNonBlank(record.ID, textValue(record.Data, "id", "ID", "p_id", "pID", "PID", "project_id", "projectId", "ProjectID"))
 }

@@ -67,7 +67,6 @@ func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodPost, pathProxyPolicyAssign, assignPolicy)
 	app.RegisterCustomHandler(http.MethodPost, pathProxyPolicyAssign+"/batch", batchAssignPolicy)
 	app.RegisterCustomHandler(http.MethodDelete, pathProxyPolicyAssign, unassignPolicy)
-	app.RegisterCustomHandler(http.MethodPost, "/api/v1/admin/proxy-rbac/assignments", assignPolicyLegacy)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/admin/proxy-rbac/targets/{type}/{id}/assignments", listTargetAssignments)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/admin/proxy-rbac/roles", listRoles)
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/admin/proxy-rbac/roles", createRole)
@@ -78,8 +77,6 @@ func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodPost, pathProxyRBACRoleID+"/users", assignRoleUser)
 	app.RegisterCustomHandler(http.MethodPost, pathProxyRBACRoleID+"/users/batch", batchAssignRoleUsers)
 	app.RegisterCustomHandler(http.MethodDelete, pathProxyRBACRoleID+"/users/{user_id}", unassignRoleUser)
-	app.RegisterCustomHandler(http.MethodGet, "/api/v1/admin/proxy-rbac/platform-roles", listPlatformRolesLegacy)
-	app.RegisterCustomHandler(http.MethodPost, "/api/v1/admin/proxy-rbac/role-users", assignRoleUserLegacy)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/admin/proxy-rbac/system-roles", listSystemRoles)
 	registerPolicyDataSync(app)
 }

@@ -48,7 +48,7 @@ type admissionReader interface {
 // It is the only place that maps the typed reads to concrete resource keys.
 type storeAdmissionReader struct {
 	store     platform.RecordStore
-	scheduler schedulerQuotaRepository
+	scheduler *recordStoreSchedulerQuotaRepository
 }
 
 // newAdmissionReader wraps a local store as an admissionReader. A nil store

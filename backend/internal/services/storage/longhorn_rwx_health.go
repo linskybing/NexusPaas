@@ -64,7 +64,7 @@ func longhornRWXSummaryData(cfg platform.Config, summary cluster.LonghornRWXSumm
 	return map[string]any{
 		"id":                         longhornRWXHealthRecord,
 		"checked_at":                 checkedAt,
-		"longhorn_namespace":         firstNonEmpty(summary.Namespace, cfg.LonghornNamespace),
+		"longhorn_namespace":         shared.FirstNonBlank(summary.Namespace, cfg.LonghornNamespace),
 		"auto_repair_enabled":        cfg.LonghornRWXAutoRepair,
 		"repair_cooldown_seconds":    int(cfg.LonghornRWXRepairCooldown.Seconds()),
 		"snapshot_warn_limit":        cfg.LonghornRWXSnapshotWarn,

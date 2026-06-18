@@ -336,7 +336,7 @@ func TestDexProxyForwardsConfiguredOIDCEndpoint(t *testing.T) {
 	defer dex.Close()
 
 	app := platform.NewApp(platform.Config{DexURL: dex.URL})
-	req := httptest.NewRequest(http.MethodPost, "/oauth/token?foo=bar", strings.NewReader("grant_type=password"))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/oidc/token?foo=bar", strings.NewReader("grant_type=password"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	status, data, degraded := dexProxy("/token")(app, req, platform.RouteSpec{})
@@ -357,7 +357,7 @@ func TestDexProxyForwardsConfiguredOIDCEndpoint(t *testing.T) {
 
 func TestDexProxyFallsBackWhenDexURLUnset(t *testing.T) {
 	app := platform.NewApp(platform.Config{})
-	status, data, degraded := dexProxy("/token")(app, httptest.NewRequest(http.MethodPost, "/oauth/token", nil), platform.RouteSpec{})
+	status, data, degraded := dexProxy("/token")(app, httptest.NewRequest(http.MethodPost, "/api/v1/oidc/token", nil), platform.RouteSpec{})
 	if degraded != nil {
 		t.Fatalf("degraded = %#v, want nil", degraded)
 	}

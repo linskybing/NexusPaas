@@ -20,14 +20,12 @@ func (f *fakeAdapter) Call(_ context.Context, _ string, _ bool) (contracts.Adapt
 func TestOptionsOverrideDefaults(t *testing.T) {
 	metrics := NewMetrics()
 	limiter := NewRateLimiter(7, time.Minute)
-	switches := NewRouteSwitches()
 	adapter := &fakeAdapter{}
 	checker := &recordingBackingChecker{}
 
 	app := NewApp(Config{ServiceName: "all", HTTPAddr: ":0"},
 		WithMetrics(metrics),
 		WithRateLimiter(limiter),
-		WithSwitches(switches),
 		WithAdapters(map[string]contracts.ExternalAdapter{"harbor": adapter}),
 		WithBackingChecker(checker),
 	)
@@ -37,9 +35,6 @@ func TestOptionsOverrideDefaults(t *testing.T) {
 	}
 	if app.Rate != limiter {
 		t.Error("WithRateLimiter did not override default")
-	}
-	if app.Switches != switches {
-		t.Error("WithSwitches did not override default")
 	}
 	if app.Adapters["harbor"] != adapter {
 		t.Error("WithAdapters did not override injected adapter")

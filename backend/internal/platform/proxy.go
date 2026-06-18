@@ -44,9 +44,6 @@ func degradedFromAdapterResult(result contracts.AdapterResult) *Degraded {
 }
 
 func (a *App) handleProxy(r *httpRequest, route RouteSpec) (int, any) {
-	if forwarded, ok := a.forwardToService(r, route); ok {
-		return forwarded.status, forwarded.data
-	}
 	adapterName := a.proxyAdapterName(route)
 	if adapterName == "" {
 		result := contracts.AdapterResult{
@@ -101,15 +98,7 @@ func (a *App) handleProxy(r *httpRequest, route RouteSpec) (int, any) {
 }
 
 func (a *App) proxyAdapterName(route RouteSpec) string {
-	target := a.Switches.Target(route.Pattern)
-	switch target {
-	case "monolith":
-		return "monolith"
-	case "service", "":
-		return route.ExternalAdapter
-	default:
-		return ""
-	}
+	return route.ExternalAdapter
 }
 
 func adapterProxyRequest(r *httpRequest, route RouteSpec) (contracts.AdapterProxyRequest, error) {
@@ -151,38 +140,4 @@ func rawResponseFromAdapter(response contracts.AdapterProxyResponse) RawResponse
 
 func shouldPublishRouteAudit(route RouteSpec, status int) bool {
 	return route.StateChanging && !(route.Action == "event_ingest" && status >= 400)
-}
-
-type forwardResult struct {
-	status int
-	data   any
-}
-
-func (a *App) forwardToService(r *httpRequest, current RouteSpec) (forwardResult, bool) {
-	target := a.Switches.Target(current.Pattern)
-	if target == "service" || target == "monolith" || target == "" {
-		return forwardResult{}, false
-	}
-	for _, candidate := range a.CatalogRoutes {
-		if !strings.HasPrefix(candidate.Resource, target+":") {
-			continue
-		}
-		if candidate.Method != r.Method || candidate.Pattern == current.Pattern {
-			continue
-		}
-		params, matched := extractPathParams(candidate.Pattern, r.URL.Path)
-		if !matched {
-			continue
-		}
-		for key, value := range params {
-			r.SetPathValue(key, value)
-		}
-		status, data, degraded := a.handleRoute(r, candidate)
-		response := map[string]any{"target": target, "forwarded": true, "response": data}
-		if degraded != nil {
-			response["degraded"] = degraded
-		}
-		return forwardResult{status: status, data: response}, true
-	}
-	return forwardResult{status: http.StatusBadGateway, data: map[string]any{"target": target, "forwarded": false, "reason": "no matching target service route"}}, true
 }

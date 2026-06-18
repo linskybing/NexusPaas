@@ -274,19 +274,42 @@ func TestPreemptionRejectsUnauthorizedPriorityOverride(t *testing.T) {
 	}
 }
 
+func TestPreemptionAllowsServicePriorityOverride(t *testing.T) {
+	app := newPreemptionTestApp(t, cluster.New(fake.NewSimpleClientset(preemptionPod("proj-p1", "victim-pod", "victim")), "proj"))
+	seedPreemptionQueue(t, app, "q-low", "batch-low", true, 1000)
+	seedPreemptionJob(t, app, map[string]any{
+		"id": "victim", "job_id": "victim", "project_id": "P1", "user_id": "U1", "namespace": "proj-p1", "status": "running",
+		"queue_name": "batch-low", "priority_value": 1000, "preemptible": true, "required_gpu": 1.0,
+	})
+
+	rec := postPreemptionWithHeaders(t, app, "service-override", `{"requester_job_id":"requester-new","project_id":"P1","priority_value":10000,"required_gpu":1}`, map[string]string{
+		"X-Service-Key": "svc-key",
+	}, http.StatusOK)
+	data := preemptionResponseData(t, rec)
+	if data["status"] != "completed" || data["accepted"] != true {
+		t.Fatalf("service override preemption = %#v, want completed accepted", data)
+	}
+	victim, _ := app.Store.Get(context.Background(), workloadJobsResource, "victim")
+	if victim.Data["status"] != "preempted" {
+		t.Fatalf("victim = %#v, want preempted", victim.Data)
+	}
+}
+
 func TestPreemptionSelectionFiltersGPUModelAndMaxPreemptions(t *testing.T) {
 	app := newPreemptionTestApp(t, cluster.New(fake.NewSimpleClientset(), "proj"))
 	req := preemptionRequest{
 		RequesterJobID: "requester",
+		ProjectID:      "P1",
 		PriorityValue:  10000,
 		RequiredGPU:    2,
 		GPUModel:       "a100",
 		MaxPreemptions: 1,
 	}
 	candidates := []workloadJobSnapshot{
-		{ID: "v-b", JobID: "v-b", Status: "running", PriorityValue: 100, Preemptible: true, RequiredGPU: 1, GPUModel: "h100", CreatedAt: "2026-06-15T08:00:00Z"},
-		{ID: "v-new", JobID: "v-new", Status: "running", PriorityValue: 100, Preemptible: true, RequiredGPU: 1, GPUModel: "a100", CreatedAt: "2026-06-15T09:00:00Z"},
-		{ID: "v-old", JobID: "v-old", Status: "running", PriorityValue: 100, Preemptible: true, RequiredGPU: 1, GPUModel: "a100", CreatedAt: "2026-06-15T07:00:00Z"},
+		{ID: "v-b", JobID: "v-b", ProjectID: "P1", Status: "running", PriorityValue: 100, Preemptible: true, RequiredGPU: 1, GPUModel: "h100", CreatedAt: "2026-06-15T08:00:00Z"},
+		{ID: "v-new", JobID: "v-new", ProjectID: "P1", Status: "running", PriorityValue: 100, Preemptible: true, RequiredGPU: 1, GPUModel: "a100", CreatedAt: "2026-06-15T09:00:00Z"},
+		{ID: "v-old", JobID: "v-old", ProjectID: "P1", Status: "running", PriorityValue: 100, Preemptible: true, RequiredGPU: 1, GPUModel: "a100", CreatedAt: "2026-06-15T07:00:00Z"},
+		{ID: "v-other-project", JobID: "v-other-project", ProjectID: "P2", Status: "running", PriorityValue: 1, Preemptible: true, RequiredGPU: 2, GPUModel: "a100", CreatedAt: "2026-06-15T10:00:00Z"},
 	}
 	victims, _, _ := selectPreemptionVictims(app, req, candidates)
 	if len(victims) != 0 {
@@ -294,8 +317,24 @@ func TestPreemptionSelectionFiltersGPUModelAndMaxPreemptions(t *testing.T) {
 	}
 	req.MaxPreemptions = 2
 	victims, freedGPU, _ := selectPreemptionVictims(app, req, candidates)
-	if len(victims) != 2 || victims[0].JobID != "v-old" || victims[1].JobID != "v-new" || freedGPU != 2 {
-		t.Fatalf("victims = %#v freedGPU=%v, want old/new a100 only", victims, freedGPU)
+	if len(victims) != 2 || victims[0].JobID != "v-new" || victims[1].JobID != "v-old" || freedGPU != 2 {
+		t.Fatalf("victims = %#v freedGPU=%v, want newest/oldest same-project a100 only", victims, freedGPU)
+	}
+}
+
+func TestPreemptionSelectionMinimizesVictimCount(t *testing.T) {
+	app := newPreemptionTestApp(t, cluster.New(fake.NewSimpleClientset(), "proj"))
+	req := preemptionRequest{RequesterJobID: "requester", ProjectID: "P1", PriorityValue: 10000, RequiredGPU: 2, MaxPreemptions: 3}
+	candidates := []workloadJobSnapshot{
+		{ID: "small-a", JobID: "small-a", ProjectID: "P1", Status: "running", PriorityValue: 100, Preemptible: true, RequiredGPU: 1, CreatedAt: "2026-06-15T09:00:00Z"},
+		{ID: "small-b", JobID: "small-b", ProjectID: "P1", Status: "running", PriorityValue: 100, Preemptible: true, RequiredGPU: 1, CreatedAt: "2026-06-15T08:00:00Z"},
+		{ID: "single", JobID: "single", ProjectID: "P1", Status: "running", PriorityValue: 500, Preemptible: true, RequiredGPU: 2, CreatedAt: "2026-06-15T07:00:00Z"},
+	}
+
+	victims, freedGPU, _ := selectPreemptionVictims(app, req, candidates)
+
+	if len(victims) != 1 || victims[0].JobID != "single" || freedGPU != 2 {
+		t.Fatalf("victims = %#v freedGPU=%v, want one sufficient victim", victims, freedGPU)
 	}
 }
 
@@ -346,11 +385,18 @@ func seedPreemptionJob(t *testing.T, app *platform.App, data map[string]any) {
 }
 
 func postPreemption(t *testing.T, app http.Handler, key, body string, want int) *httptest.ResponseRecorder {
+	return postPreemptionWithHeaders(t, app, key, body, nil, want)
+}
+
+func postPreemptionWithHeaders(t *testing.T, app http.Handler, key, body string, headers map[string]string, want int) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/internal/scheduler/preemptions", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", key)
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
 	app.ServeHTTP(rec, req)
 	if rec.Code != want {
 		t.Fatalf("POST preemptions returned %d, want %d: %s", rec.Code, want, rec.Body.String())

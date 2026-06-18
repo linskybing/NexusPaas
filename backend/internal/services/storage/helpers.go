@@ -19,7 +19,7 @@ func publishEvent(app *platform.App, r *http.Request, name string, data map[stri
 		Name:          name,
 		Source:        serviceName,
 		OccurredAt:    time.Now().UTC(),
-		TraceID:       firstNonEmpty(r.Header.Get("X-Trace-ID"), r.Header.Get("X-Request-ID"), platform.NewUUID()),
+		TraceID:       shared.FirstNonBlank(r.Header.Get("X-Trace-ID"), r.Header.Get("X-Request-ID"), platform.NewUUID()),
 		SchemaVersion: 1,
 		Data:          data,
 	}); err != nil {
@@ -223,7 +223,7 @@ func batchStoragePermissions(app *platform.App, r *http.Request, delete bool) (i
 	}
 	result := batchResult()
 	for _, item := range payloadItems(payload) {
-		item["group_id"] = firstNonEmpty(shared.TextValue(item, "group_id", "groupId"), groupID)
+		item["group_id"] = shared.FirstNonBlank(shared.TextValue(item, "group_id", "groupId"), groupID)
 		if delete {
 			storageRepo(app).DeleteStoragePermission(
 				r.Context(),
@@ -341,7 +341,7 @@ func userStorageCommand(app *platform.App, r *http.Request, _ platform.RouteSpec
 		return http.StatusForbidden, shared.ErrorData(msgAdminRequired), nil
 	}
 	payload := platform.DecodeMap(r)
-	size := firstNonEmpty(shared.TextValue(payload, "size"), shared.TextValue(payload, "quota"), "10Gi")
+	size := shared.FirstNonBlank(shared.TextValue(payload, "size"), shared.TextValue(payload, "quota"), "10Gi")
 	record := map[string]any{"id": username, "username": username, "size": size, "status": statusValue, "updated_at": time.Now().UTC()}
 	updated, err := storageRepo(app).UpsertUserStorage(r.Context(), username, record)
 	if err != nil {
@@ -456,11 +456,11 @@ func projectPathID(r *http.Request) string {
 }
 
 func groupPathID(r *http.Request) string {
-	return strings.TrimSpace(firstNonEmpty(r.PathValue("id"), r.PathValue("group_id")))
+	return strings.TrimSpace(shared.FirstNonBlank(r.PathValue("id"), r.PathValue("group_id")))
 }
 
 func pvcPathID(r *http.Request) string {
-	return strings.TrimSpace(firstNonEmpty(r.PathValue("pvcId"), r.PathValue("pvc_id")))
+	return strings.TrimSpace(shared.FirstNonBlank(r.PathValue("pvcId"), r.PathValue("pvc_id")))
 }
 
 func groupStorageID(groupID, pvcID string) string {
@@ -489,13 +489,4 @@ func fastTransferID(projectID, namespace, name string) string {
 
 func text(data map[string]any, keys ...string) string {
 	return shared.TextValue(data, keys...)
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }

@@ -23,14 +23,6 @@ type EventBus interface {
 	Outbox() []Event
 }
 
-type Repository[T any] interface {
-	Create(ctx context.Context, resource string, data T) (Record[T], error)
-	Get(ctx context.Context, resource, id string) (Record[T], bool)
-	List(ctx context.Context, resource string) []Record[T]
-	Update(ctx context.Context, resource, id string, data T) (Record[T], bool)
-	Delete(ctx context.Context, resource, id string) bool
-}
-
 type Record[T any] struct {
 	ID        string    `json:"id"`
 	Data      T         `json:"data"`

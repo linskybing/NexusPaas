@@ -209,7 +209,7 @@ func optionRows(options []string) []map[string]any {
 
 func pagedRows(r *http.Request, rows []map[string]any) map[string]any {
 	page := positiveInt(r.URL.Query().Get("page"), 1)
-	limit := positiveInt(firstNonEmpty(r.URL.Query().Get("limit"), r.URL.Query().Get("page_size")), 20)
+	limit := positiveInt(shared.FirstNonBlank(r.URL.Query().Get("limit"), r.URL.Query().Get("page_size")), 20)
 	start := (page - 1) * limit
 	if start > len(rows) {
 		start = len(rows)
@@ -289,7 +289,7 @@ func eventFor(r *http.Request, name string, data map[string]any) contracts.Event
 		Name:           name,
 		Source:         "org-project-service",
 		OccurredAt:     time.Now().UTC(),
-		TraceID:        firstNonEmpty(r.Header.Get("X-Trace-ID"), r.Header.Get("X-Request-ID"), platform.NewUUID()),
+		TraceID:        shared.FirstNonBlank(r.Header.Get("X-Trace-ID"), r.Header.Get("X-Request-ID"), platform.NewUUID()),
 		SchemaVersion:  1,
 		IdempotencyKey: r.Header.Get("Idempotency-Key"),
 		Data:           data,
@@ -333,13 +333,4 @@ func normalizeOptional(value any) string {
 		return ""
 	}
 	return strings.TrimSpace(fmt.Sprint(value))
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }

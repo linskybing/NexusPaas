@@ -114,10 +114,6 @@ func TestClusterSummaryHelpersAndCoHostedFallbacks(t *testing.T) {
 	if got := anySlice(map[string]any{"bad": "value"}, "bad"); got != nil {
 		t.Fatalf("anySlice = %#v, want nil for non-slice", got)
 	}
-	if clone := cloneMap(nil); len(clone) != 0 {
-		t.Fatalf("cloneMap(nil) = %#v, want empty map", clone)
-	}
-
 	visible := map[string]struct{}{"PARENT": {}}
 	if !projectDescendsFromVisibleProject(map[string]any{"parent_id": "PARENT"}, visible) {
 		t.Fatal("project should descend from visible parent_id")
