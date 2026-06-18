@@ -24,9 +24,6 @@ func (a *App) maybeHandleStreamingProxy(w http.ResponseWriter, r *httpRequest, r
 	if !shouldStreamProxy(r.Request, route) {
 		return 0, false
 	}
-	if target := a.Switches.Target(route.Pattern); target != "" && target != "service" && target != "monolith" {
-		return 0, false
-	}
 	adapterName := a.proxyAdapterName(route)
 	if adapterName == "" {
 		result := contracts.AdapterResult{

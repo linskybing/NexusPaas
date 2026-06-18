@@ -21,11 +21,15 @@ const (
 )
 
 func Register(app *platform.App) {
+	app.RegisterCustomHandler(http.MethodGet, "/api/v1/configfiles", listConfigFiles)
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/configfiles", createConfigFile)
 	app.RegisterCustomHandler(http.MethodGet, pathConfigFileID, getConfigFile)
 	app.RegisterCustomHandler(http.MethodPut, pathConfigFileID, updateConfigFile)
 	app.RegisterCustomHandler(http.MethodPatch, pathConfigFileID, updateConfigFile)
 	app.RegisterCustomHandler(http.MethodDelete, pathConfigFileID, deleteConfigFile)
+	app.RegisterCustomHandler(http.MethodPost, pathConfigFileID+"/versions", commitConfigFileVersion)
+	app.RegisterCustomHandler(http.MethodGet, pathConfigFileID+"/versions", listConfigFileVersions)
+	app.RegisterCustomHandler(http.MethodGet, "/api/v1/configfiles/tree", listConfigFileTree)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/configfiles/project/{project_id}", listConfigFilesByProject)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/projects/{id}/config-files", listProjectConfigFiles)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/configfiles/project/{project_id}/tree", configFileTree)
@@ -37,6 +41,7 @@ func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodGet, "/internal/workload/preemption-context", workloadPreemptionContext)
 	app.RegisterCustomHandler(http.MethodPost, "/internal/workload/jobs/{id}/preempt", workloadPreemptJob)
 	app.RegisterCustomHandler(http.MethodPost, "/internal/workload/jobs/{id}/evict", workloadEvictJob)
+	registerJobAccessHandlers(app)
 	// Service-key-gated read contract: scheduler-quota submit-admission lists jobs to
 	// count running/queued usage (problem.md #3). List-only — admission never fetches a
 	// single job cross-service.
@@ -57,6 +62,9 @@ func createConfigFile(app *platform.App, r *http.Request, _ platform.RouteSpec) 
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(err.Error()), nil
 	}
+	if status, data, ok := requireProjectAccess(app, r, shared.TextValue(config, "project_id", "projectId")); !ok {
+		return status, data, nil
+	}
 	record, err := configs.CreateConfig(r.Context(), config)
 	if err != nil {
 		return createStatus(err), shared.ErrorData("config file could not be created"), nil
@@ -71,6 +79,9 @@ func getConfigFile(app *platform.App, r *http.Request, _ platform.RouteSpec) (in
 	if !found {
 		return http.StatusNotFound, shared.ErrorData(msgConfigNotFound), nil
 	}
+	if status, data, ok := requireProjectAccess(app, r, configProjectID(record)); !ok {
+		return status, data, nil
+	}
 	return http.StatusOK, record, nil
 }
 
@@ -81,10 +92,18 @@ func updateConfigFile(app *platform.App, r *http.Request, _ platform.RouteSpec) 
 	}
 	id := pathValue(r, "id")
 	configs := configRepository(app)
-	if _, found := configs.GetConfig(r.Context(), id); !found {
+	existing, found := configs.GetConfig(r.Context(), id)
+	if !found {
 		return http.StatusNotFound, shared.ErrorData(msgConfigNotFound), nil
 	}
 	update := normalizeConfigUpdate(payload)
+	currentProjectID := configProjectID(existing)
+	if targetProjectID := shared.TextValue(update, "project_id", "projectId"); targetProjectID != "" && targetProjectID != currentProjectID {
+		return http.StatusBadRequest, shared.ErrorData("project_id is immutable"), nil
+	}
+	if status, data, ok := requireProjectAccess(app, r, currentProjectID); !ok {
+		return status, data, nil
+	}
 	record, ok := configs.UpdateConfig(r.Context(), id, update)
 	if !ok {
 		return http.StatusInternalServerError, shared.ErrorData("config file update failed"), nil
@@ -96,23 +115,48 @@ func updateConfigFile(app *platform.App, r *http.Request, _ platform.RouteSpec) 
 
 func deleteConfigFile(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
 	id := pathValue(r, "id")
-	if !configRepository(app).DeleteConfig(r.Context(), id) {
+	configs := configRepository(app)
+	record, found := configs.GetConfig(r.Context(), id)
+	if !found {
 		return http.StatusNotFound, shared.ErrorData(msgConfigNotFound), nil
 	}
+	if status, data, ok := requireProjectAccess(app, r, configProjectID(record)); !ok {
+		return status, data, nil
+	}
+	configs.DeleteConfig(r.Context(), id)
 	publish(app, r, "ConfigFileChanged", "deleted", map[string]any{"id": id})
 	return http.StatusOK, map[string]any{"id": id, "deleted": true}, nil
 }
 
+func listConfigFiles(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
+	projects, all, status, data, ok := authorizedWorkloadProjects(app, r)
+	if !ok {
+		return status, data, nil
+	}
+	return http.StatusOK, filterRecordsForAuthorizedProjects(configRepository(app).ListConfigs(r.Context()), projects, all), nil
+}
+
 func listConfigFilesByProject(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
-	return http.StatusOK, configFilesForProject(app, r, pathValue(r, "project_id")), nil
+	projectID := pathValue(r, "project_id")
+	if status, data, ok := requireProjectAccess(app, r, projectID); !ok {
+		return status, data, nil
+	}
+	return http.StatusOK, configFilesForProject(app, r, projectID), nil
 }
 
 func listProjectConfigFiles(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
-	return http.StatusOK, configFilesForProject(app, r, pathValue(r, "id")), nil
+	projectID := pathValue(r, "id")
+	if status, data, ok := requireProjectAccess(app, r, projectID); !ok {
+		return status, data, nil
+	}
+	return http.StatusOK, configFilesForProject(app, r, projectID), nil
 }
 
 func configFileTree(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
 	projectID := pathValue(r, "project_id")
+	if status, data, ok := requireProjectAccess(app, r, projectID); !ok {
+		return status, data, nil
+	}
 	nodes := make([]map[string]any, 0)
 	for _, record := range configFilesForProject(app, r, projectID) {
 		path := shared.FirstNonEmpty(shared.TextValue(record.Data, "path"), shared.TextValue(record.Data, "name"), record.ID)
@@ -122,14 +166,68 @@ func configFileTree(app *platform.App, r *http.Request, _ platform.RouteSpec) (i
 	return http.StatusOK, map[string]any{"project_id": projectID, "nodes": nodes}, nil
 }
 
+func listConfigFileTree(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
+	projects, all, status, data, ok := authorizedWorkloadProjects(app, r)
+	if !ok {
+		return status, data, nil
+	}
+	nodes := make([]map[string]any, 0)
+	for _, record := range filterRecordsForAuthorizedProjects(configRepository(app).ListConfigs(r.Context()), projects, all) {
+		path := shared.FirstNonEmpty(shared.TextValue(record.Data, "path"), shared.TextValue(record.Data, "name"), record.ID)
+		nodes = append(nodes, map[string]any{"id": record.ID, "project_id": configProjectID(record), "path": path, "name": shared.TextValue(record.Data, "name")})
+	}
+	sort.SliceStable(nodes, func(i, j int) bool {
+		return fmt.Sprint(nodes[i]["project_id"], "/", nodes[i]["path"]) < fmt.Sprint(nodes[j]["project_id"], "/", nodes[j]["path"])
+	})
+	return http.StatusOK, map[string]any{"nodes": nodes}, nil
+}
+
 func projectConfigHistory(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
 	projectID := pathValue(r, "project_id")
+	if status, data, ok := requireProjectAccess(app, r, projectID); !ok {
+		return status, data, nil
+	}
 	configs := configRepository(app)
 	configIDs := map[string]bool{}
 	for _, config := range configFilesForProject(app, r, projectID) {
 		configIDs[config.ID] = true
 	}
 	return http.StatusOK, configs.ListVersionsForConfigs(r.Context(), configIDs), nil
+}
+
+func commitConfigFileVersion(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
+	configID := pathValue(r, "id")
+	if workloadProjectAccessEnforced(app) {
+		record, found := configRepository(app).GetConfig(r.Context(), configID)
+		if !found {
+			return http.StatusNotFound, shared.ErrorData(msgConfigNotFound), nil
+		}
+		if status, data, ok := requireProjectAccess(app, r, configProjectID(record)); !ok {
+			return status, data, nil
+		}
+	}
+	payload, err := platform.DecodeMapWithError(r)
+	if err != nil {
+		return http.StatusBadRequest, shared.ErrorData(msgInvalidBody), nil
+	}
+	record, err := configRepository(app).CommitVersion(r.Context(), configID, payload, time.Now().UTC())
+	if err != nil {
+		return createStatus(err), shared.ErrorData("config version could not be created"), nil
+	}
+	publish(app, r, "ConfigCommitted", "committed", record.Data)
+	return http.StatusCreated, record, nil
+}
+
+func listConfigFileVersions(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
+	configID := pathValue(r, "id")
+	record, found := configRepository(app).GetConfig(r.Context(), configID)
+	if !found {
+		return http.StatusNotFound, shared.ErrorData(msgConfigNotFound), nil
+	}
+	if status, data, ok := requireProjectAccess(app, r, configProjectID(record)); !ok {
+		return status, data, nil
+	}
+	return http.StatusOK, configRepository(app).ListVersionsForConfigs(r.Context(), map[string]bool{configID: true}), nil
 }
 
 func startConfigInstance(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
@@ -142,28 +240,39 @@ func stopConfigInstance(app *platform.App, r *http.Request, _ platform.RouteSpec
 
 func listConfigInstancePods(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
 	id := pathValue(r, "id")
+	record, found := configRepository(app).GetConfig(r.Context(), id)
+	if !found {
+		return http.StatusNotFound, shared.ErrorData(msgConfigNotFound), nil
+	}
+	if status, data, ok := requireProjectAccess(app, r, configProjectID(record)); !ok {
+		return status, data, nil
+	}
 	return http.StatusOK, configRepository(app).ListInstancesByConfig(r.Context(), id), nil
 }
 
 func configInstanceCommand(app *platform.App, r *http.Request, action string) (int, any, *platform.Degraded) {
 	id := pathValue(r, "id")
 	configs := configRepository(app)
-	if _, found := configs.GetConfig(r.Context(), id); !found {
+	record, found := configs.GetConfig(r.Context(), id)
+	if !found {
 		return http.StatusNotFound, shared.ErrorData(msgConfigNotFound), nil
+	}
+	if status, data, ok := requireProjectAccess(app, r, configProjectID(record)); !ok {
+		return status, data, nil
 	}
 	payload, err := platform.DecodeMapWithError(r)
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(msgInvalidBody), nil
 	}
-	record, err := configs.CreateInstanceCommand(r.Context(), id, action, payload, time.Now().UTC())
+	command, err := configs.CreateInstanceCommand(r.Context(), id, action, payload, time.Now().UTC())
 	if err != nil {
 		return createStatus(err), shared.ErrorData("instance command could not be created"), nil
 	}
-	publish(app, r, "ConfigInstanceCommanded", action, record.Data)
-	return http.StatusAccepted, record, nil
+	publish(app, r, "ConfigInstanceCommanded", action, command.Data)
+	return http.StatusAccepted, command, nil
 }
 
-func configPayload(configs workloadConfigRepository, r *http.Request, payload map[string]any) (map[string]any, error) {
+func configPayload(configs *recordStoreWorkloadConfigRepository, r *http.Request, payload map[string]any) (map[string]any, error) {
 	projectID := shared.FirstNonEmpty(shared.TextValue(payload, "project_id", "projectId"), strings.TrimSpace(r.URL.Query().Get("project_id")))
 	if projectID == "" {
 		return nil, fmt.Errorf("project_id is required")
@@ -195,7 +304,11 @@ func configFilesForProject(app *platform.App, r *http.Request, projectID string)
 	return configRepository(app).ListConfigsByProject(r.Context(), projectID)
 }
 
-func createVersion(configs workloadConfigRepository, r *http.Request, configID string, data map[string]any, reason string) {
+func configProjectID(record contracts.Record[map[string]any]) string {
+	return shared.TextValue(record.Data, "project_id", "projectId")
+}
+
+func createVersion(configs *recordStoreWorkloadConfigRepository, r *http.Request, configID string, data map[string]any, reason string) {
 	if _, err := configs.CreateVersion(r.Context(), configID, data, reason, time.Now().UTC()); err != nil && !platform.IsCreateConflict(err) {
 		slog.Warn("config version create failed", "config_id", configID, "error", err)
 	}

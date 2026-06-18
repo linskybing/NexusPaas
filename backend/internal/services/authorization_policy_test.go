@@ -238,17 +238,35 @@ func TestAuthorizationPolicyProxyServices(t *testing.T) {
 	requestJSON(t, app, http.MethodGet, "/api/v1/admin/proxy-rbac/services/MISSING", "", adminHeaders("ADMIN"), http.StatusNotFound)
 }
 
-func TestAuthorizationPolicyLegacyProxyRBACRoutesHaveCustomHandlers(t *testing.T) {
+func TestAuthorizationPolicyLegacyProxyRBACRoutesAreRemoved(t *testing.T) {
 	app := newTestApp()
+	if app.CustomHandlers["POST /api/v1/admin/proxy-rbac/services"] == nil {
+		t.Fatal("canonical proxy-rbac service create handler missing")
+	}
 	for _, key := range []string{
-		"POST /api/v1/admin/proxy-rbac/services",
 		"POST /api/v1/admin/proxy-rbac/assignments",
 		"GET /api/v1/admin/proxy-rbac/platform-roles",
 		"POST /api/v1/admin/proxy-rbac/role-users",
 	} {
-		if app.CustomHandlers[key] == nil {
-			t.Fatalf("%s is missing a custom handler and would fall through to generic CRUD", key)
+		if app.CustomHandlers[key] != nil {
+			t.Fatalf("%s still has a legacy custom handler", key)
 		}
+	}
+}
+
+func requestRemovedRoute(t *testing.T, app http.Handler, method, path, body string, headers map[string]string) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	app.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("%s %s returned %d, want removed route status: %s", method, path, rec.Code, rec.Body.String())
 	}
 }
 
@@ -371,14 +389,10 @@ func assertDuplicateProxyAssignmentNoSideEffects(t *testing.T, app *platform.App
 func assertLegacyProxyAssignmentDoesNotSplitBrain(t *testing.T, app *platform.App, policyID string) {
 	t.Helper()
 
-	requestJSON(t, app, http.MethodPost, "/api/v1/admin/proxy-rbac/assignments", `{"policy_id":"`+policyID+`","target_type":"user","target_id":"U2"}`, userHeaders("U1"), http.StatusForbidden)
-	requestJSON(t, app, http.MethodPost, "/api/v1/admin/proxy-rbac/assignments", `{"target_type":"user","target_id":"U2"}`, adminHeaders("ADMIN"), http.StatusBadRequest)
-	legacyAssigned := responseMap(t, requestJSON(t, app, http.MethodPost, "/api/v1/admin/proxy-rbac/assignments", `{"policy_id":"`+policyID+`","target_type":"user","target_id":"U2"}`, adminHeaders("ADMIN"), http.StatusCreated))
-	if legacyAssigned["policy_id"] != policyID || legacyAssigned["target_type"] != "user" || legacyAssigned["target_id"] != "U2" {
-		t.Fatalf("legacy assignment = %#v", legacyAssigned)
-	}
+	requestRemovedRoute(t, app, http.MethodPost, "/api/v1/admin/proxy-rbac/assignments", `{"policy_id":"`+policyID+`","target_type":"user","target_id":"U2"}`, userHeaders("U1"))
+	requestRemovedRoute(t, app, http.MethodPost, "/api/v1/admin/proxy-rbac/assignments", `{"policy_id":"`+policyID+`","target_type":"user","target_id":"U2"}`, adminHeaders("ADMIN"))
 	if len(app.Store.List(t.Context(), "authorization-policy-service:proxy_assignments")) != 0 {
-		t.Fatal("legacy assignment route wrote split-brain proxy_assignments resource")
+		t.Fatal("removed legacy assignment route wrote split-brain proxy_assignments resource")
 	}
 }
 
@@ -406,8 +420,16 @@ func assertBatchProxyAssignmentsAndCascade(t *testing.T, app *platform.App, poli
 		t.Fatalf("batch assignment result = %#v", batch)
 	}
 	policyAssignments := responseSlice(t, requestJSON(t, app, http.MethodGet, "/api/v1/admin/proxy-rbac/policies/"+policyID+"/assignments", "", adminHeaders("ADMIN"), http.StatusOK))
-	if len(policyAssignments) != 3 {
+	if len(policyAssignments) != 2 {
 		t.Fatalf("policy assignments = %#v", policyAssignments)
+	}
+	assignedTargets := map[string]bool{}
+	for _, assignment := range policyAssignments {
+		item := assignment.(map[string]any)
+		assignedTargets[item["target_type"].(string)+":"+item["target_id"].(string)] = true
+	}
+	if !assignedTargets["role:RL2600001"] || !assignedTargets["user:U1"] {
+		t.Fatalf("policy assignments = %#v, want role and user batch targets", policyAssignments)
 	}
 	requestJSON(t, app, http.MethodDelete, "/api/v1/admin/proxy-rbac/policies/"+policyID, "", adminHeaders("ADMIN"), http.StatusOK)
 	if len(app.Store.List(t.Context(), "authorization-policy-service:proxy_policy_assignments")) != 2 {
@@ -456,12 +478,9 @@ func assertProxyRoleCatalog(t *testing.T, app *platform.App) {
 	if len(roles) != 2 || roles[0].(map[string]any)["id"] != "RL2600001" {
 		t.Fatalf("roles = %#v, want seeded proxy roles sorted by name", roles)
 	}
-	legacyRoles := responseSlice(t, requestJSON(t, app, http.MethodGet, "/api/v1/admin/proxy-rbac/platform-roles", "", adminHeaders("ADMIN"), http.StatusOK))
-	if len(legacyRoles) != len(roles) || legacyRoles[0].(map[string]any)["id"] != roles[0].(map[string]any)["id"] {
-		t.Fatalf("legacy platform roles = %#v, canonical = %#v", legacyRoles, roles)
-	}
+	requestRemovedRoute(t, app, http.MethodGet, "/api/v1/admin/proxy-rbac/platform-roles", "", adminHeaders("ADMIN"))
 	if len(app.Store.List(t.Context(), "authorization-policy-service:platform_roles")) != 0 {
-		t.Fatal("legacy platform-roles route read split-brain platform_roles resource")
+		t.Fatal("removed legacy platform-roles route read split-brain platform_roles resource")
 	}
 	role := responseMap(t, requestJSON(t, app, http.MethodGet, "/api/v1/admin/proxy-rbac/roles/RL2600001", "", adminHeaders("ADMIN"), http.StatusOK))
 	if role["display_name"] != "Proxy Operator" {
@@ -507,7 +526,7 @@ func assertProxyRoleUserAssignments(t *testing.T, app *platform.App, roleID stri
 		t.Fatalf("assigned role user = %#v", assigned)
 	}
 	assertDuplicateProxyRoleUserNoSideEffects(t, app, roleID, assigned)
-	assertLegacyProxyRoleUserDoesNotSplitBrain(t, app, roleID)
+	assertLegacyProxyRoleUserRouteRemoved(t, app, roleID)
 	assertProxyRoleUserBatchAndRemoval(t, app, roleID)
 }
 
@@ -528,17 +547,13 @@ func assertDuplicateProxyRoleUserNoSideEffects(t *testing.T, app *platform.App, 
 	}
 }
 
-func assertLegacyProxyRoleUserDoesNotSplitBrain(t *testing.T, app *platform.App, roleID string) {
+func assertLegacyProxyRoleUserRouteRemoved(t *testing.T, app *platform.App, roleID string) {
 	t.Helper()
 
-	requestJSON(t, app, http.MethodPost, "/api/v1/admin/proxy-rbac/role-users", `{"role_id":"`+roleID+`","user_id":"U2"}`, userHeaders("U1"), http.StatusForbidden)
-	requestJSON(t, app, http.MethodPost, "/api/v1/admin/proxy-rbac/role-users", `{"user_id":"U2"}`, adminHeaders("ADMIN"), http.StatusBadRequest)
-	legacyRoleUser := responseMap(t, requestJSON(t, app, http.MethodPost, "/api/v1/admin/proxy-rbac/role-users", `{"role_id":"`+roleID+`","user_id":"U2"}`, adminHeaders("ADMIN"), http.StatusCreated))
-	if legacyRoleUser["user_id"] != "U2" || legacyRoleUser["role_id"] != roleID {
-		t.Fatalf("legacy role user = %#v", legacyRoleUser)
-	}
+	requestRemovedRoute(t, app, http.MethodPost, "/api/v1/admin/proxy-rbac/role-users", `{"role_id":"`+roleID+`","user_id":"U2"}`, userHeaders("U1"))
+	requestRemovedRoute(t, app, http.MethodPost, "/api/v1/admin/proxy-rbac/role-users", `{"role_id":"`+roleID+`","user_id":"U2"}`, adminHeaders("ADMIN"))
 	if len(app.Store.List(t.Context(), "authorization-policy-service:role_users")) != 0 {
-		t.Fatal("legacy role-users route wrote split-brain role_users resource")
+		t.Fatal("removed legacy role-users route wrote split-brain role_users resource")
 	}
 }
 

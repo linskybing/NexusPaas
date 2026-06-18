@@ -1,0 +1,75 @@
+package storage
+
+import (
+	"net/http"
+
+	"github.com/linskybing/nexuspaas/backend/internal/platform"
+	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
+)
+
+func Spec() platform.ServiceSpec {
+	route, id, admin, adapter, serviceInternal := shared.Route, shared.ID, shared.Admin, shared.Adapter, shared.ServiceInternal
+	return platform.ServiceSpec{
+		Name:            "storage-service",
+		Category:        "data",
+		Phase:           "2",
+		RequiresCluster: true,
+		Description:     "User/group storage, PVC lifecycle, FileBrowser, permissions, project bindings, fast-stage transfer, and Longhorn RWX health.",
+		Tables:          []string{"storages", "group_storage_permissions", "access_policies", "project_storage_bindings", "fast_transfer_records", "longhorn_rwx_health", "outbox", "inbox"},
+		Events:          []string{"PVCProvisioned", "StorageBound", "StoragePermissionChanged", "FastTransferCompleted", "LonghornRWXHealthChecked"},
+		Routes: []platform.RouteSpec{
+			route(http.MethodPost, "/internal/storage/projects/{project_id}/mount-plan", "mount_plans", "resolve", serviceInternal()),
+			route(http.MethodGet, "/api/v1/storage/options", "storage_options", "list"),
+			route(http.MethodGet, "/api/v1/admin/user-storage", "user_storage", "list", admin(), adapter("minio")),
+			route(http.MethodPost, "/api/v1/admin/user-storage/batch-init", "user_storage", "command", admin(), adapter("minio")),
+			route(http.MethodPost, "/api/v1/admin/user-storage/batch-status", "user_storage", "command", admin(), adapter("minio")),
+			route(http.MethodGet, "/api/v1/admin/user-storage/{username}/status", "user_storage", "get", id("username"), admin(), adapter("minio")),
+			route(http.MethodPost, "/api/v1/admin/user-storage/{username}/init", "user_storage", "command", id("username"), admin(), adapter("minio")),
+			route(http.MethodPut, "/api/v1/admin/user-storage/{username}/expand", "user_storage", "command", id("username"), admin(), adapter("minio")),
+			route(http.MethodDelete, "/api/v1/admin/user-storage/{username}", "user_storage", "command", id("username"), admin(), adapter("minio")),
+			route(http.MethodPost, "/api/v1/admin/user-storage/{id}/init", "user_storage", "command", id("id"), admin(), adapter("minio")),
+			route(http.MethodPost, "/api/v1/admin/user-storage/{id}/expand", "user_storage", "command", id("id"), admin(), adapter("minio")),
+			route(http.MethodDelete, "/api/v1/admin/user-storage/{id}", "user_storage", "command", id("id"), admin(), adapter("minio")),
+			route(http.MethodGet, "/api/v1/k8s/user-storage/{id}", "user_storage", "get", id("id"), adapter("minio")),
+			route(http.MethodGet, "/api/v1/storage/group/{id}", "group_storage", "list", id("id")),
+			route(http.MethodGet, "/api/v1/storage/my-storages", "group_storage", "list_my"),
+			route(http.MethodPost, "/api/v1/storage/{id}/storage", "group_storage", "create", id("id"), admin(), adapter("minio")),
+			route(http.MethodDelete, "/api/v1/storage/{id}/storage/{pvcId}", "group_storage", "delete", id("pvcId"), admin(), adapter("minio")),
+			route(http.MethodPost, "/api/v1/storage/{id}/storage/{pvcId}/start", "filebrowser", "command", id("pvcId"), adapter("minio")),
+			route(http.MethodDelete, "/api/v1/storage/{id}/storage/{pvcId}/stop", "filebrowser", "command", id("pvcId"), adapter("minio")),
+			route(http.MethodPost, "/api/v1/storage/filebrowser/{id}/open", "filebrowser", "command", id("id"), adapter("minio")),
+			route(http.MethodPost, "/api/v1/storage/filebrowser/{id}/stop", "filebrowser", "command", id("id"), adapter("minio")),
+			route(http.MethodGet, "/api/v1/storage/filebrowser/{id}/proxy/{path...}", "filebrowser_proxy", "proxy", id("id"), adapter("minio")),
+			route(http.MethodGet, "/api/v1/admin/group-storage", "group_storage", "list", admin(), adapter("minio")),
+			route(http.MethodPost, "/api/v1/admin/group-storage", "group_storage", "create", admin(), adapter("minio")),
+			route(http.MethodDelete, "/api/v1/admin/group-storage/{id}", "group_storage", "delete", id("id"), admin(), adapter("minio")),
+			route(http.MethodGet, "/api/v1/storage/permissions", "storage_permissions", "list"),
+			route(http.MethodPost, "/api/v1/storage/permissions", "storage_permissions", "create"),
+			route(http.MethodPost, "/api/v1/storage/permissions/batch", "storage_permissions", "batch_set"),
+			route(http.MethodDelete, "/api/v1/storage/permissions/batch", "storage_permissions", "batch_delete"),
+			route(http.MethodDelete, "/api/v1/storage/permissions/{id}", "storage_permissions", "delete", id("id")),
+			route(http.MethodGet, "/api/v1/storage/permissions/group/{group_id}/pvc/{pvc_id}", "storage_permissions", "get", id("pvc_id")),
+			route(http.MethodGet, "/api/v1/storage/permissions/group/{group_id}/pvc/{pvc_id}/policy", "storage_access_policies", "get", id("pvc_id")),
+			route(http.MethodGet, "/api/v1/storage/permissions/group/{group_id}/pvc/{pvc_id}/list", "storage_permissions", "list", id("pvc_id")),
+			route(http.MethodDelete, "/api/v1/storage/permissions/group/{group_id}/pvc/{pvc_id}/user/{user_id}", "storage_permissions", "delete", id("user_id")),
+			route(http.MethodPost, "/api/v1/storage/policies", "storage_access_policies", "create"),
+			route(http.MethodGet, "/api/v1/projects/{id}/storage/bindings", "storage_bindings", "list", id("id")),
+			route(http.MethodPost, "/api/v1/projects/{id}/storage/bindings", "storage_bindings", "create", id("id")),
+			route(http.MethodDelete, "/api/v1/projects/{id}/storage/bindings/{requestId}", "storage_bindings", "delete", id("requestId")),
+			route(http.MethodGet, "/api/v1/projects/{id}/storage/bindings/{pvcId}/permissions", "project_storage_permissions", "list", id("pvcId")),
+			route(http.MethodPut, "/api/v1/projects/{id}/storage/bindings/{pvcId}/permissions", "project_storage_permissions", "update", id("pvcId")),
+			route(http.MethodDelete, "/api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/{userId}", "project_storage_permissions", "delete", id("userId")),
+			route(http.MethodPut, "/api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/batch", "project_storage_permissions", "batch_update", id("pvcId")),
+			route(http.MethodDelete, "/api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/batch", "project_storage_permissions", "batch_delete", id("pvcId")),
+			route(http.MethodGet, "/api/v1/projects/{id}/storage/permissions", "project_storage_permissions", "list", id("id")),
+			route(http.MethodPost, "/api/v1/projects/{id}/storage/permissions", "project_storage_permissions", "create", id("id")),
+			route(http.MethodDelete, "/api/v1/projects/{id}/storage/permissions/{requestId}", "project_storage_permissions", "delete", id("requestId")),
+			route(http.MethodGet, "/api/v1/projects/{id}/storage/transfers", "fast_transfers", "list", id("id")),
+			route(http.MethodPost, "/api/v1/projects/{id}/storage/transfers", "fast_transfers", "command", id("id"), adapter("minio")),
+			route(http.MethodPost, "/api/v1/projects/{id}/storage/transfers/fast-stage", "fast_transfers", "command", id("id"), adapter("minio")),
+			route(http.MethodGet, "/api/v1/projects/{id}/storage/transfers/{targetNamespace}/{name}", "fast_transfers", "get", id("name")),
+			route(http.MethodDelete, "/api/v1/projects/{id}/storage/transfers/{targetNamespace}/{name}", "fast_transfers", "command", id("name"), adapter("minio")),
+			route(http.MethodPost, "/api/v1/projects/{id}/storage/transfers/{requestId}/cancel", "fast_transfers", "command", id("requestId"), adapter("minio")),
+		},
+	}
+}

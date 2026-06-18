@@ -2,6 +2,7 @@ package workload
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
@@ -41,22 +42,23 @@ func TestDispatchSubmittedWorkloadCreatesNativeJobAndMarksRunning(t *testing.T) 
 	app := platform.NewApp(platform.Config{ServiceName: serviceName}, platform.WithCluster(cl))
 	ctx := context.Background()
 	createWorkloadRecord(t, app, jobsResource, map[string]any{
-		"id":              "J2600001",
-		"job_id":          "J2600001",
-		"project_id":      "P1",
-		"user_id":         "U1",
-		"status":          "submitted",
-		"namespace":       "proj-p1",
-		"queue_name":      "default-batch",
-		"priority":        10000,
-		"created_at":      now.Add(-time.Minute).Format(time.RFC3339),
-		"retry_count":     3,
-		"next_retry_at":   now.Add(-time.Second).Format(time.RFC3339),
-		"error_message":   "previous transient failure",
-		"status_reason":   "previous transient failure",
-		"resources":       []any{nativeJobResource("train")},
-		"required_cpu":    1,
-		"required_memory": 1024,
+		"id":                    "J2600001",
+		"job_id":                "J2600001",
+		"project_id":            "P1",
+		"user_id":               "U1",
+		"status":                "submitted",
+		"namespace":             "proj-p1",
+		"queue_name":            "default-batch",
+		"priority":              10000,
+		"runtime_limit_seconds": 60,
+		"created_at":            now.Add(-time.Minute).Format(time.RFC3339),
+		"retry_count":           3,
+		"next_retry_at":         now.Add(-time.Second).Format(time.RFC3339),
+		"error_message":         "previous transient failure",
+		"status_reason":         "previous transient failure",
+		"resources":             []any{nativeJobResource("train")},
+		"required_cpu":          1,
+		"required_memory":       1024,
 	})
 
 	if err := dispatchSubmittedWorkloads(ctx, app.Cluster, app.Store, now); err != nil {
@@ -71,6 +73,12 @@ func TestDispatchSubmittedWorkloadCreatesNativeJobAndMarksRunning(t *testing.T) 
 	if labels[cluster.LabelJobID] != "J2600001" || labels[cluster.LabelProjectID] != "P1" || labels[cluster.LabelUserID] != "U1" {
 		t.Fatalf("job template labels = %#v, want platform job/project/user labels", labels)
 	}
+	if job.Labels[cluster.RuntimeLimitSecondsKey] != "60" || labels[cluster.RuntimeLimitSecondsKey] != "60" {
+		t.Fatalf("job runtime labels = object:%#v template:%#v, want runtime limit label", job.Labels, labels)
+	}
+	if job.Spec.ActiveDeadlineSeconds == nil || *job.Spec.ActiveDeadlineSeconds != 60 {
+		t.Fatalf("job activeDeadlineSeconds = %#v, want 60", job.Spec.ActiveDeadlineSeconds)
+	}
 	if job.Spec.Template.Spec.SchedulerName != defaultDispatcherSchedulerName {
 		t.Fatalf("schedulerName = %q, want %q", job.Spec.Template.Spec.SchedulerName, defaultDispatcherSchedulerName)
 	}
@@ -83,6 +91,65 @@ func TestDispatchSubmittedWorkloadCreatesNativeJobAndMarksRunning(t *testing.T) 
 	}
 	if resources, ok := record.Data["created_resources"].([]map[string]any); !ok || len(resources) != 1 || resources[0]["kind"] != "Job" {
 		t.Fatalf("created resources = %#v, want one Job", record.Data["created_resources"])
+	}
+}
+
+func TestDispatchSubmittedWorkloadLabelsDeploymentRuntimeLimit(t *testing.T) {
+	now := time.Date(2026, 6, 14, 16, 31, 0, 0, time.UTC)
+	cl := cluster.New(fake.NewSimpleClientset(), "proj")
+	app := platform.NewApp(platform.Config{ServiceName: serviceName}, platform.WithCluster(cl))
+	ctx := context.Background()
+	createWorkloadRecord(t, app, jobsResource, map[string]any{
+		"id":                    "J2600005",
+		"job_id":                "J2600005",
+		"project_id":            "P1",
+		"user_id":               "U1",
+		"status":                "submitted",
+		"namespace":             "proj-p1",
+		"queue_name":            "default-batch",
+		"priority_value":        1000,
+		"runtime_limit_seconds": 120,
+		"created_at":            now.Add(-time.Minute).Format(time.RFC3339),
+		"resources":             []any{nativeDeploymentResource("trainer")},
+	})
+
+	if err := dispatchSubmittedWorkloads(ctx, app.Cluster, app.Store, now); err != nil {
+		t.Fatal(err)
+	}
+
+	deployment, err := cl.Clientset().AppsV1().Deployments("proj-p1").Get(ctx, "trainer", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("deployment was not created: %v", err)
+	}
+	if deployment.Labels[cluster.RuntimeLimitSecondsKey] != "120" ||
+		deployment.Spec.Template.Labels[cluster.RuntimeLimitSecondsKey] != "120" ||
+		deployment.Spec.Template.Labels[cluster.LabelJobID] != "J2600005" {
+		t.Fatalf("deployment runtime labels = object:%#v template:%#v, want runtime and platform labels", deployment.Labels, deployment.Spec.Template.Labels)
+	}
+	if deployment.Spec.Template.Spec.ActiveDeadlineSeconds != nil {
+		t.Fatalf("deployment pod template activeDeadlineSeconds = %#v, want nil; controller deletion owns timeout", deployment.Spec.Template.Spec.ActiveDeadlineSeconds)
+	}
+	record, _ := app.Store.Get(ctx, jobsResource, "J2600005")
+	if resources, ok := record.Data["created_resources"].([]map[string]any); !ok || len(resources) != 1 || resources[0]["kind"] != "Deployment" {
+		t.Fatalf("created resources = %#v, want one Deployment", record.Data["created_resources"])
+	}
+}
+
+func TestPrepareDispatchRuntimeLimitKeepsShorterNativeDeadline(t *testing.T) {
+	raw, err := prepareDispatchManifest(map[string]any{
+		"job_id":                "J-short",
+		"project_id":            "P1",
+		"runtime_limit_seconds": 60,
+	}, nativeJobWithDeadlineResource("short", 30), "proj-p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		t.Fatal(err)
+	}
+	if got := testNestedInt64(obj, "spec", "activeDeadlineSeconds"); got != 30 {
+		t.Fatalf("activeDeadlineSeconds = %d, want shorter user deadline 30", got)
 	}
 }
 
@@ -490,7 +557,7 @@ func TestDispatchSubmittedWorkloadInjectsStorageMountsIntoNativePod(t *testing.T
 			Name: "datasets-pvc", ClaimName: "datasets-pvc", MountPath: "/mnt/datasets", ReadOnly: true, SubPath: "training",
 		}},
 	}}
-	if err := dispatchSubmittedWorkloadsWithStorageMountClient(ctx, app.Cluster, app.Store, storagePlans, now); err != nil {
+	if err := dispatchSubmittedWorkloadsWithStorageMountClient(ctx, app.Cluster, app.Store, storagePlans.Resolve, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -537,7 +604,7 @@ func TestDispatchSubmittedWorkloadInjectsStorageMountsIntoBatchJobTemplate(t *te
 			Name: "scratch", ClaimName: "scratch-pvc", MountPath: "/scratch",
 		}},
 	}}
-	if err := dispatchSubmittedWorkloadsWithStorageMountClient(ctx, app.Cluster, app.Store, storagePlans, now); err != nil {
+	if err := dispatchSubmittedWorkloadsWithStorageMountClient(ctx, app.Cluster, app.Store, storagePlans.Resolve, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -592,7 +659,7 @@ func TestDispatchSubmittedWorkloadMaterializesStorageShareBeforePodCreate(t *tes
 			SourceNamespace: "group-storage", SourcePVC: "datasets", TargetPVC: "datasets",
 		}},
 	}}
-	if err := dispatchSubmittedWorkloadsWithStorageMountClient(ctx, app.Cluster, app.Store, storagePlans, now); err != nil {
+	if err := dispatchSubmittedWorkloadsWithStorageMountClient(ctx, app.Cluster, app.Store, storagePlans.Resolve, now); err != nil {
 		t.Fatal(err)
 	}
 	if storagePlans.got.Mounts[0].PVCID != "datasets" {
@@ -783,6 +850,32 @@ func nativeJobResource(name string) map[string]any {
 			"kind":"Job",
 			"metadata":{"name":"` + name + `","labels":{"existing":"label"}},
 			"spec":{"template":{"metadata":{"labels":{"app":"trainer"}},"spec":{"restartPolicy":"Never","containers":[{"name":"main","image":"busybox"}]}}}
+		}`,
+	}
+}
+
+func nativeJobWithDeadlineResource(name string, seconds int) dispatchResource {
+	return dispatchResource{
+		Name: name,
+		Kind: "Job",
+		Raw: []byte(`{
+			"apiVersion":"batch/v1",
+			"kind":"Job",
+			"metadata":{"name":"` + name + `"},
+			"spec":{"activeDeadlineSeconds":` + strconv.Itoa(seconds) + `,"template":{"spec":{"restartPolicy":"Never","containers":[{"name":"main","image":"busybox"}]}}}
+		}`),
+	}
+}
+
+func nativeDeploymentResource(name string) map[string]any {
+	return map[string]any{
+		"name": name,
+		"kind": "Deployment",
+		"json_data": `{
+			"apiVersion":"apps/v1",
+			"kind":"Deployment",
+			"metadata":{"name":"` + name + `","labels":{"existing":"label"}},
+			"spec":{"replicas":1,"selector":{"matchLabels":{"app":"trainer"}},"template":{"metadata":{"labels":{"app":"trainer"}},"spec":{"containers":[{"name":"main","image":"busybox","command":["sleep","3600"]}]}}}
 		}`,
 	}
 }

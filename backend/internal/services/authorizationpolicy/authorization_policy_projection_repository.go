@@ -27,39 +27,20 @@ const (
 
 var errAuthorizationPolicyProjectionRepositoryUnavailable = errors.New("authorization policy projection repository unavailable")
 
-type authorizationPolicyProjectionRepository interface {
-	UpsertIdentityUser(context.Context, map[string]any) error
-	UpsertIdentityRole(context.Context, map[string]any) error
-	DeleteIdentityUser(context.Context, map[string]any) bool
-	DeleteIdentityRole(context.Context, map[string]any) bool
-	ListIdentityUsers(context.Context) []map[string]any
-	ListIdentityRoles(context.Context) []map[string]any
-
-	UpsertPolicyProject(context.Context, map[string]any) error
-	UpsertPolicyPlan(context.Context, map[string]any) error
-	UpsertPolicyImageAllowList(context.Context, map[string]any) error
-	DeletePolicyProject(context.Context, map[string]any) bool
-	DeletePolicyPlan(context.Context, map[string]any) bool
-	DeletePolicyImageAllowList(context.Context, map[string]any) bool
-	ListPolicyProjects(context.Context) []map[string]any
-	FindPolicyPlanForProject(context.Context, map[string]any) map[string]any
-	ListPolicyImageRulesForProject(context.Context, string) []map[string]any
-}
-
 type recordStoreAuthorizationPolicyProjectionRepository struct {
 	store  platform.RecordStore
 	config platform.Config
 }
 
-func authorizationPolicyProjectionRepo(app *platform.App) authorizationPolicyProjectionRepository {
+func authorizationPolicyProjectionRepo(app *platform.App) *recordStoreAuthorizationPolicyProjectionRepository {
 	if app == nil {
-		return recordStoreAuthorizationPolicyProjectionRepository{}
+		return &recordStoreAuthorizationPolicyProjectionRepository{}
 	}
-	return recordStoreAuthorizationPolicyProjectionRepository{store: app.Store, config: app.Config}
+	return &recordStoreAuthorizationPolicyProjectionRepository{store: app.Store, config: app.Config}
 }
 
-func authorizationPolicyProjectionRepoFromStore(store platform.RecordStore, config platform.Config) authorizationPolicyProjectionRepository {
-	return recordStoreAuthorizationPolicyProjectionRepository{store: store, config: config}
+func authorizationPolicyProjectionRepoFromStore(store platform.RecordStore, config platform.Config) *recordStoreAuthorizationPolicyProjectionRepository {
+	return &recordStoreAuthorizationPolicyProjectionRepository{store: store, config: config}
 }
 
 func (r recordStoreAuthorizationPolicyProjectionRepository) UpsertIdentityUser(ctx context.Context, data map[string]any) error {

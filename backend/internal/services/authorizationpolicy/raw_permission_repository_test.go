@@ -28,7 +28,7 @@ func TestRawPermissionRepositoryPolicyLifecycle(t *testing.T) {
 	assertRawPermissionPolicyAllowedAndDeleted(t, repo, ctx, aliceWrite)
 }
 
-func createRawPermissionPoliciesForTest(t *testing.T, repo rawPermissionRepository, store platform.RecordStore, ctx context.Context, aliceRead, bobRead []string) {
+func createRawPermissionPoliciesForTest(t *testing.T, repo *recordStoreRawPermissionRepository, store platform.RecordStore, ctx context.Context, aliceRead, bobRead []string) {
 	t.Helper()
 	created, err := repo.CreateRawPermissionPolicy(ctx, aliceRead)
 	if err != nil || !created {
@@ -46,7 +46,7 @@ func createRawPermissionPoliciesForTest(t *testing.T, repo rawPermissionReposito
 	}
 }
 
-func assertRawPermissionPolicyList(t *testing.T, repo rawPermissionRepository, ctx context.Context) {
+func assertRawPermissionPolicyList(t *testing.T, repo *recordStoreRawPermissionRepository, ctx context.Context) {
 	t.Helper()
 	rows := repo.ListRawPermissionPolicies(ctx)
 	if len(rows) != 2 || rows[0][0] != "alice" || rows[1][0] != "bob" {
@@ -58,7 +58,7 @@ func assertRawPermissionPolicyList(t *testing.T, repo rawPermissionRepository, c
 	}
 }
 
-func assertRawPermissionPolicyUpdates(t *testing.T, repo rawPermissionRepository, ctx context.Context, aliceRead, aliceWrite, bobRead []string) {
+func assertRawPermissionPolicyUpdates(t *testing.T, repo *recordStoreRawPermissionRepository, ctx context.Context, aliceRead, aliceWrite, bobRead []string) {
 	t.Helper()
 	result, err := repo.UpdateRawPermissionPolicy(ctx, aliceRead, aliceRead)
 	if err != nil || !result.Found || !result.Updated || result.Conflict {
@@ -81,7 +81,7 @@ func assertRawPermissionPolicyUpdates(t *testing.T, repo rawPermissionRepository
 	}
 }
 
-func assertRawPermissionPolicyAllowedAndDeleted(t *testing.T, repo rawPermissionRepository, ctx context.Context, aliceWrite []string) {
+func assertRawPermissionPolicyAllowedAndDeleted(t *testing.T, repo *recordStoreRawPermissionRepository, ctx context.Context, aliceWrite []string) {
 	t.Helper()
 	allowed, err := repo.RawPermissionAllowed(ctx, aliceWrite[0], aliceWrite[1], aliceWrite[2], aliceWrite[3])
 	if err != nil || !allowed {

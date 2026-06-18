@@ -109,7 +109,7 @@ func TestReapExpiredPlanWindows(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			app, cl, evictor := reaperFixture(t, tc.project, tc.plan)
-			if err := reapExpiredPlanWindows(context.Background(), cl, app.Store, evictor, now, true); err != nil {
+			if err := reapExpiredPlanWindows(context.Background(), cl, app.Store, evictor.Evict, now, true); err != nil {
 				t.Fatalf("reap: %v", err)
 			}
 			gotEvict := !podExists(t, cl, "proj-p1-alice", "pod-1")
@@ -137,7 +137,7 @@ func TestReapExpiredPlanWindowsRespectsGracePeriod(t *testing.T) {
 	}}
 	app, cl, evictor := reaperFixture(t, map[string]any{"plan_id": "PL1"}, plan)
 
-	if err := reapExpiredPlanWindows(context.Background(), cl, app.Store, evictor, now, true); err != nil {
+	if err := reapExpiredPlanWindows(context.Background(), cl, app.Store, evictor.Evict, now, true); err != nil {
 		t.Fatalf("reap: %v", err)
 	}
 	if !podExists(t, cl, "proj-p1-alice", "pod-1") {
@@ -157,7 +157,7 @@ func TestReapExpiredPlanWindowsEvictFailureDefersPodCleanup(t *testing.T) {
 	app, cl, evictor := reaperFixture(t, map[string]any{}, nil) // no plan -> evict
 	evictor.err = errors.New("workload eviction contract unreachable")
 
-	if err := reapExpiredPlanWindows(context.Background(), cl, app.Store, evictor, now, true); err != nil {
+	if err := reapExpiredPlanWindows(context.Background(), cl, app.Store, evictor.Evict, now, true); err != nil {
 		t.Fatalf("reap: %v", err)
 	}
 	if !podExists(t, cl, "proj-p1-alice", "pod-1") {
@@ -172,7 +172,7 @@ func TestReapExpiredPlanWindowsKillSwitchOff(t *testing.T) {
 	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
 	app, cl, evictor := reaperFixture(t, map[string]any{}, nil)
 
-	if err := reapExpiredPlanWindows(context.Background(), cl, app.Store, evictor, now, false); err != nil {
+	if err := reapExpiredPlanWindows(context.Background(), cl, app.Store, evictor.Evict, now, false); err != nil {
 		t.Fatalf("reap: %v", err)
 	}
 	if !podExists(t, cl, "proj-p1-alice", "pod-1") {
@@ -186,7 +186,7 @@ func TestReapExpiredPlanWindowsKillSwitchOff(t *testing.T) {
 func TestReapExpiredPlanWindowsDegradedNoop(t *testing.T) {
 	app := platform.NewApp(platform.Config{ServiceName: serviceName})
 	evictor := newFakeEvictor()
-	if err := reapExpiredPlanWindows(context.Background(), app.Cluster, app.Store, evictor, time.Now(), true); err != nil {
+	if err := reapExpiredPlanWindows(context.Background(), app.Cluster, app.Store, evictor.Evict, time.Now(), true); err != nil {
 		t.Fatalf("degraded reap should not error: %v", err)
 	}
 	if len(evictor.calls) != 0 {

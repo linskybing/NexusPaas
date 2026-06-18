@@ -60,7 +60,7 @@ func dispatchSubmittedWorkloads(ctx context.Context, cl *cluster.Client, store p
 	return dispatchSubmittedWorkloadsWithStorageMountClient(ctx, cl, store, nil, now)
 }
 
-func dispatchSubmittedWorkloadsWithStorageMountClient(ctx context.Context, cl *cluster.Client, store platform.RecordStore, storageMounts storageMountPlanClient, now time.Time) error {
+func dispatchSubmittedWorkloadsWithStorageMountClient(ctx context.Context, cl *cluster.Client, store platform.RecordStore, storageMounts storageMountPlanResolver, now time.Time) error {
 	jobs := jobRepositoryFromStore(store)
 	if jobs == nil {
 		return nil
@@ -80,7 +80,7 @@ func dispatchCandidates(ctx context.Context, store platform.RecordStore, now tim
 	return jobs.ListDispatchCandidates(ctx, now)
 }
 
-func dispatchJob(ctx context.Context, cl *cluster.Client, store platform.RecordStore, storageMounts storageMountPlanClient, record contracts.Record[map[string]any], now time.Time) {
+func dispatchJob(ctx context.Context, cl *cluster.Client, store platform.RecordStore, storageMounts storageMountPlanResolver, record contracts.Record[map[string]any], now time.Time) {
 	if cl == nil {
 		deferDispatchForInfrastructure(ctx, store, record, now, cluster.ErrUnavailable)
 		return
@@ -278,6 +278,7 @@ func prepareDispatchManifestWithGroup(job map[string]any, resource dispatchResou
 	mergeObjectLabels(u, labels)
 	mergePodTemplateLabels(u, labels)
 	applyDispatchScheduling(u, job, groupName)
+	applyDispatchRuntimeLimit(u, job)
 	raw, err := json.Marshal(u.Object)
 	if err != nil {
 		return nil, fmt.Errorf(dispatcherMarshalResourceError, u.GetName(), err)
@@ -323,7 +324,64 @@ func dispatchLabels(job map[string]any) map[string]string {
 	if workloadJobPreemptible(job) {
 		labels[platformPreemptibleLabelKey] = "true"
 	}
+	if seconds, ok := dispatchRuntimeLimitSeconds(job); ok {
+		labels[cluster.RuntimeLimitSecondsKey] = strconv.FormatInt(seconds, 10)
+	}
 	return labels
+}
+
+func applyDispatchRuntimeLimit(u *unstructured.Unstructured, job map[string]any) {
+	seconds, ok := dispatchRuntimeLimitSeconds(job)
+	if !ok {
+		return
+	}
+	switch strings.ToLower(u.GetKind()) {
+	case "pod":
+		capActiveDeadlineSeconds(u, seconds, "spec", "activeDeadlineSeconds")
+	case "job":
+		if strings.EqualFold(u.GetAPIVersion(), "batch/v1") {
+			capActiveDeadlineSeconds(u, seconds, "spec", "activeDeadlineSeconds")
+		}
+	case "deployment":
+		// Deployments reconcile Pods through ReplicaSets; runtime cleanup deletes
+		// the labeled Deployment controller instead of relying on Pod deadlines.
+		return
+	}
+}
+
+func dispatchRuntimeLimitSeconds(job map[string]any) (int64, bool) {
+	seconds := shared.IntValue(job, "runtime_limit_seconds", "runtimeLimitSeconds", "max_runtime_seconds", "maxRuntimeSeconds")
+	if seconds <= 0 {
+		return 0, false
+	}
+	return int64(seconds), true
+}
+
+func capActiveDeadlineSeconds(u *unstructured.Unstructured, seconds int64, fields ...string) {
+	if current, found := nestedPositiveInt64(u.Object, fields...); found && current > 0 && current <= seconds {
+		return
+	}
+	_ = unstructured.SetNestedField(u.Object, seconds, fields...)
+}
+
+func nestedPositiveInt64(obj map[string]any, fields ...string) (int64, bool) {
+	value, found, _ := unstructured.NestedFieldNoCopy(obj, fields...)
+	if !found {
+		return 0, false
+	}
+	switch typed := value.(type) {
+	case int64:
+		return typed, typed > 0
+	case int:
+		return int64(typed), typed > 0
+	case float64:
+		return int64(typed), typed > 0
+	case json.Number:
+		n, err := typed.Int64()
+		return n, err == nil && n > 0
+	default:
+		return 0, false
+	}
 }
 
 func mergeObjectLabels(u *unstructured.Unstructured, labels map[string]string) {
@@ -674,7 +732,13 @@ func jobPriority(data map[string]any) int {
 }
 
 func registerJobDispatcher(app *platform.App) {
+	storageMounts, err := newStorageMountPlanClient(app)
+	if err != nil {
+		storageMounts = func(context.Context, string, storageMountPlanRequest) (storageMountPlan, error) {
+			return storageMountPlan{}, err
+		}
+	}
 	app.RegisterMaintenanceTaskForService(serviceName, "workload-dispatcher", func(ctx context.Context) error {
-		return dispatchSubmittedWorkloadsWithStorageMountClient(ctx, app.Cluster, app.Store, newAppStorageMountPlanClient(app), time.Now().UTC())
+		return dispatchSubmittedWorkloadsWithStorageMountClient(ctx, app.Cluster, app.Store, storageMounts, time.Now().UTC())
 	})
 }

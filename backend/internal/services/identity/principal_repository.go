@@ -18,37 +18,19 @@ const (
 
 var errIdentityPrincipalStoreUnavailable = errors.New("identity principal repository unavailable")
 
-type identityPrincipalRepository interface {
-	UserResourceName() string
-	RoleResourceName() string
-	NextUserID() string
-	ListUsers(ctx context.Context) []contracts.Record[map[string]any]
-	GetUser(ctx context.Context, id string) (contracts.Record[map[string]any], bool)
-	FindUserByUsername(ctx context.Context, username string) (contracts.Record[map[string]any], bool)
-	FindUserByIdentifier(ctx context.Context, identifier string) (contracts.Record[map[string]any], bool)
-	CreateUser(ctx context.Context, user map[string]any) (contracts.Record[map[string]any], error)
-	UpdateUser(ctx context.Context, id string, update map[string]any) (contracts.Record[map[string]any], bool)
-	DeleteUser(ctx context.Context, id string) bool
-	SetUserStatus(ctx context.Context, id, status string) bool
-	GetUserSettings(ctx context.Context, id string) (map[string]any, bool)
-	UpdateUserSettings(ctx context.Context, id string, settings map[string]any, now time.Time) (map[string]any, bool)
-	ListRoles(ctx context.Context) []contracts.Record[map[string]any]
-	GetRole(ctx context.Context, id string) (contracts.Record[map[string]any], bool)
-}
-
 type recordStoreIdentityPrincipalRepository struct {
 	store platform.RecordStore
 }
 
-func principalRepository(app *platform.App) identityPrincipalRepository {
+func principalRepository(app *platform.App) *recordStoreIdentityPrincipalRepository {
 	if app == nil {
-		return recordStoreIdentityPrincipalRepository{}
+		return &recordStoreIdentityPrincipalRepository{}
 	}
 	return principalRepositoryFromStore(app.Store)
 }
 
-func principalRepositoryFromStore(store platform.RecordStore) identityPrincipalRepository {
-	return recordStoreIdentityPrincipalRepository{store: store}
+func principalRepositoryFromStore(store platform.RecordStore) *recordStoreIdentityPrincipalRepository {
+	return &recordStoreIdentityPrincipalRepository{store: store}
 }
 
 func (r recordStoreIdentityPrincipalRepository) UserResourceName() string {

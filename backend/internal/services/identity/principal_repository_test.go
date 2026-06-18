@@ -91,7 +91,7 @@ func TestIdentityPrincipalRepositoryUserUpdateSettingsDelete(t *testing.T) {
 	}
 }
 
-func assertPrincipalIdentifier(t *testing.T, repo identityPrincipalRepository, ctx context.Context, identifier string) {
+func assertPrincipalIdentifier(t *testing.T, repo *recordStoreIdentityPrincipalRepository, ctx context.Context, identifier string) {
 	t.Helper()
 	if _, ok := repo.FindUserByIdentifier(ctx, identifier); !ok {
 		t.Fatalf("FindUserByIdentifier(%q) = false, want true", identifier)

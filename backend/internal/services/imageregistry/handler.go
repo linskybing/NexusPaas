@@ -115,7 +115,7 @@ func syncCatalog(app *platform.App, r *http.Request, _ platform.RouteSpec) (int,
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(msgInvalidRequestBody), nil
 	}
-	tagID := firstNonEmpty(shared.TextValue(payload, "tag_id", "tagId"), "catalog")
+	tagID := shared.FirstNonBlank(shared.TextValue(payload, "tag_id", "tagId"), "catalog")
 	record := map[string]any{
 		"id":           tagID,
 		"tag_id":       tagID,
@@ -133,7 +133,7 @@ func listCatalogSyncStatus(app *platform.App, r *http.Request, _ platform.RouteS
 }
 
 func getCatalogSyncStatus(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
-	tagID := firstNonEmpty(r.PathValue("tagId"), r.PathValue("id"))
+	tagID := shared.FirstNonBlank(r.PathValue("tagId"), r.PathValue("id"))
 	if record, found := app.Store.Get(r.Context(), imageSyncResource, tagID); found {
 		return http.StatusOK, record.Data, nil
 	}
@@ -152,7 +152,7 @@ func publishCatalog(app *platform.App, r *http.Request, _ platform.RouteSpec) (i
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(msgInvalidRequestBody), nil
 	}
-	tagID := firstNonEmpty(r.PathValue("id"), shared.TextValue(payload, "tag_id", "tagId", "image_id", "imageId"))
+	tagID := shared.FirstNonBlank(r.PathValue("id"), shared.TextValue(payload, "tag_id", "tagId", "image_id", "imageId"))
 	if tagID == "" {
 		return http.StatusBadRequest, shared.ErrorData("tag_id is required"), nil
 	}
@@ -188,7 +188,7 @@ func unpublishCatalog(app *platform.App, r *http.Request, _ platform.RouteSpec) 
 	if !hasAdminPanel(app, r, userID) {
 		return http.StatusForbidden, shared.ErrorData(msgAdminAccessRequired), nil
 	}
-	tagID := firstNonEmpty(r.PathValue("id"), r.PathValue("tagId"))
+	tagID := shared.FirstNonBlank(r.PathValue("id"), r.PathValue("tagId"))
 	deleted := 0
 	for _, rule := range imageRows(app, r, projectImagesResource) {
 		if shared.TextValue(rule, "tag_id", "tagId") == tagID || shared.TextValue(rule, "id") == tagID {
@@ -211,7 +211,7 @@ func deletePublishedRule(app *platform.App, r *http.Request, _ platform.RouteSpe
 	if !hasAdminPanel(app, r, userID) {
 		return http.StatusForbidden, shared.ErrorData(msgAdminAccessRequired), nil
 	}
-	ruleID := firstNonEmpty(r.PathValue("ruleId"), r.PathValue("id"))
+	ruleID := shared.FirstNonBlank(r.PathValue("ruleId"), r.PathValue("id"))
 	if !app.Store.Delete(r.Context(), projectImagesResource, ruleID) {
 		return http.StatusNotFound, shared.ErrorData("publish rule not found"), nil
 	}
@@ -227,7 +227,7 @@ func deleteCatalogArtifact(app *platform.App, r *http.Request, _ platform.RouteS
 	if !hasAdminPanel(app, r, userID) {
 		return http.StatusForbidden, shared.ErrorData(msgAdminAccessRequired), nil
 	}
-	tagID := firstNonEmpty(r.PathValue("tagId"), r.PathValue("id"))
+	tagID := shared.FirstNonBlank(r.PathValue("tagId"), r.PathValue("id"))
 	if !app.Store.Delete(r.Context(), imageCatalogResource, tagID) {
 		return http.StatusNotFound, shared.ErrorData("catalog artifact not found"), nil
 	}
@@ -296,7 +296,7 @@ func removeProjectImage(app *platform.App, r *http.Request, _ platform.RouteSpec
 	if _, status, data, ok := requireProjectManager(app, r, projectID, userID); !ok {
 		return status, data, nil
 	}
-	id := firstNonEmpty(r.PathValue("requestId"), r.PathValue("image_id"))
+	id := shared.FirstNonBlank(r.PathValue("requestId"), r.PathValue("image_id"))
 	record, found := findProjectImageRule(app, r, projectID, id)
 	if !found {
 		return http.StatusNotFound, shared.ErrorData("project image not found"), nil
@@ -361,7 +361,7 @@ func updateImageRequest(app *platform.App, r *http.Request, _ platform.RouteSpec
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(msgInvalidRequestBody), nil
 	}
-	return setImageRequestStatus(app, r, firstNonEmpty(r.PathValue("id"), shared.TextValue(payload, "id")), shared.TextValue(payload, "status"), userID)
+	return setImageRequestStatus(app, r, shared.FirstNonBlank(r.PathValue("id"), shared.TextValue(payload, "id")), shared.TextValue(payload, "status"), userID)
 }
 
 func approveImageRequest(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
@@ -443,7 +443,7 @@ func getBuildLogs(app *platform.App, r *http.Request, _ platform.RouteSpec) (int
 	if !ok {
 		return status, data, nil
 	}
-	buildID := firstNonEmpty(r.PathValue("buildId"), r.PathValue("jobName"))
+	buildID := shared.FirstNonBlank(r.PathValue("buildId"), r.PathValue("jobName"))
 	build, found := findBuild(app, r, buildID)
 	if !found {
 		return http.StatusNotFound, shared.ErrorData("build not found"), nil
@@ -452,7 +452,7 @@ func getBuildLogs(app *platform.App, r *http.Request, _ platform.RouteSpec) (int
 	if _, status, data, ok := requireProjectRead(app, r, projectID, userID); !ok {
 		return status, data, nil
 	}
-	logs := firstNonEmpty(shared.TextValue(build.Data, "logs"), "build logs are not available yet\n")
+	logs := shared.FirstNonBlank(shared.TextValue(build.Data, "logs"), "build logs are not available yet\n")
 	return http.StatusOK, platform.RawResponse{ContentType: "text/plain; charset=utf-8", Body: []byte(logs)}, nil
 }
 
@@ -465,7 +465,7 @@ func cancelProjectBuild(app *platform.App, r *http.Request, _ platform.RouteSpec
 	if _, status, data, ok := requireProjectManager(app, r, projectID, userID); !ok {
 		return status, data, nil
 	}
-	buildID := firstNonEmpty(r.PathValue("jobName"), r.PathValue("buildId"))
+	buildID := shared.FirstNonBlank(r.PathValue("jobName"), r.PathValue("buildId"))
 	build, found := findBuild(app, r, buildID)
 	if !found || shared.TextValue(build.Data, "project_id", "projectId") != projectID {
 		return http.StatusNotFound, shared.ErrorData("build not found"), nil
@@ -498,7 +498,7 @@ func createBuild(app *platform.App, r *http.Request, _ platform.RouteSpec, build
 	if imageRef == "" {
 		return http.StatusBadRequest, shared.ErrorData("image reference is required"), nil
 	}
-	id := firstNonEmpty(shared.TextValue(payload, "id", "job_name", "jobName", "build_id", "buildId"), app.Store.NextID(imageBuildsResource, "build-", 1, 6))
+	id := shared.FirstNonBlank(shared.TextValue(payload, "id", "job_name", "jobName", "build_id", "buildId"), app.Store.NextID(imageBuildsResource, "build-", 1, 6))
 	now := time.Now().UTC()
 	build := map[string]any{
 		"id":              id,

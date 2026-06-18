@@ -12,32 +12,20 @@ import (
 
 var errProjectAccessRepositoryUnavailable = errors.New("request notification project access repository unavailable")
 
-type projectAccessRepository interface {
-	UpsertProject(context.Context, map[string]any) error
-	UpsertProjectMember(context.Context, map[string]any) error
-	UpsertUserGroup(context.Context, map[string]any) error
-	DeleteProject(context.Context, map[string]any) bool
-	DeleteProjectMember(context.Context, map[string]any) bool
-	DeleteUserGroup(context.Context, map[string]any) bool
-	ListProjects(context.Context) []map[string]any
-	ListProjectMembers(context.Context) []map[string]any
-	ListUserGroups(context.Context) []map[string]any
-}
-
 type recordStoreProjectAccessRepository struct {
 	store  platform.RecordStore
 	config platform.Config
 }
 
-func projectAccessRepo(app *platform.App) projectAccessRepository {
+func projectAccessRepo(app *platform.App) *recordStoreProjectAccessRepository {
 	if app == nil {
-		return recordStoreProjectAccessRepository{}
+		return &recordStoreProjectAccessRepository{}
 	}
-	return recordStoreProjectAccessRepository{store: app.Store, config: app.Config}
+	return &recordStoreProjectAccessRepository{store: app.Store, config: app.Config}
 }
 
-func projectAccessRepoFromStore(store platform.RecordStore, config platform.Config) projectAccessRepository {
-	return recordStoreProjectAccessRepository{store: store, config: config}
+func projectAccessRepoFromStore(store platform.RecordStore, config platform.Config) *recordStoreProjectAccessRepository {
+	return &recordStoreProjectAccessRepository{store: store, config: config}
 }
 
 func (r recordStoreProjectAccessRepository) UpsertProject(ctx context.Context, data map[string]any) error {

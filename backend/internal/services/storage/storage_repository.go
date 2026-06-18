@@ -22,48 +22,15 @@ const (
 
 var errStorageRepositoryUnavailable = errors.New("storage repository unavailable")
 
-type storageRepository interface {
-	ListGroupStorage(context.Context) []map[string]any
-	ListGroupStorageByGroup(context.Context, string) []map[string]any
-	CreateGroupStorage(context.Context, map[string]any) (map[string]any, error)
-	UpdateGroupStorageStatus(context.Context, string, string, string, time.Time) (map[string]any, bool)
-	DeleteGroupStorageCascade(context.Context, string, string) bool
-	FindGroupStorageSource(context.Context, string, string) (map[string]any, bool)
-
-	UpsertStoragePermission(context.Context, map[string]any) (map[string]any, error)
-	DeleteStoragePermission(context.Context, string, string, string) bool
-	ListStoragePermissionsForPVC(context.Context, string, string) []map[string]any
-	UpsertStoragePolicy(context.Context, map[string]any) (map[string]any, error)
-	GetStoragePolicy(context.Context, string, string) (map[string]any, bool)
-
-	ListProjectBindings(context.Context, string) []map[string]any
-	CreateProjectBinding(context.Context, map[string]any) (map[string]any, error)
-	DeleteProjectBindingCascade(context.Context, string, string) bool
-	FindProjectStorageBinding(context.Context, string, string) (map[string]any, bool)
-	UpsertProjectPermission(context.Context, map[string]any) (map[string]any, error)
-	DeleteProjectPermission(context.Context, string, string, string) bool
-	ListProjectPermissionsForPVC(context.Context, string, string) []map[string]any
-
-	NextFastTransferName() string
-	CreateFastTransfer(context.Context, map[string]any) (map[string]any, error)
-	GetFastTransfer(context.Context, string, string, string) (map[string]any, bool)
-	CancelFastTransfer(context.Context, string, string, string, time.Time) (map[string]any, bool)
-
-	UpsertUserStorage(context.Context, string, map[string]any) (map[string]any, error)
-	UserStorageStatus(context.Context, string) map[string]any
-
-	EffectiveStoragePermission(context.Context, string, string, string, string) string
-}
-
 type recordStoreStorageRepository struct {
 	store platform.RecordStore
 }
 
-func storageRepo(app *platform.App) storageRepository {
+func storageRepo(app *platform.App) *recordStoreStorageRepository {
 	if app == nil {
-		return recordStoreStorageRepository{}
+		return &recordStoreStorageRepository{}
 	}
-	return recordStoreStorageRepository{store: app.Store}
+	return &recordStoreStorageRepository{store: app.Store}
 }
 
 func (r recordStoreStorageRepository) ListGroupStorage(ctx context.Context) []map[string]any {

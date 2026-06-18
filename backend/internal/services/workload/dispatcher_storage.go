@@ -56,7 +56,7 @@ func ensureDispatchPVCMounts(ctx context.Context, cl *cluster.Client, plan stora
 	return nil
 }
 
-func resolveDispatchStorageMountPlan(ctx context.Context, client storageMountPlanClient, job map[string]any, namespace string) (storageMountPlan, error) {
+func resolveDispatchStorageMountPlan(ctx context.Context, client storageMountPlanResolver, job map[string]any, namespace string) (storageMountPlan, error) {
 	selectors, err := storageMountPlanSelectorsFromJob(job)
 	if err != nil {
 		return storageMountPlan{}, err
@@ -72,7 +72,7 @@ func resolveDispatchStorageMountPlan(ctx context.Context, client storageMountPla
 	if projectID == "" || userID == "" {
 		return storageMountPlan{}, fmt.Errorf("%w: storage mounts require project_id and user_id", cluster.ErrInvalidManifest)
 	}
-	return client.Resolve(ctx, projectID, storageMountPlanRequest{UserID: userID, Namespace: namespace, Mounts: selectors})
+	return client(ctx, projectID, storageMountPlanRequest{UserID: userID, Namespace: namespace, Mounts: selectors})
 }
 
 func storageMountPlanSelectorsFromJob(job map[string]any) ([]storageMountPlanSelector, error) {

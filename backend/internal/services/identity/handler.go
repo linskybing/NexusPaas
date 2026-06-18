@@ -83,19 +83,7 @@ func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/oidc/revoke", oidcRevoke)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/oidc/callback", oidcCallback)
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/oidc/callback", oidcCallback)
-	app.RegisterCustomHandler(http.MethodPost, "/oauth/token", oidcToken)
-	app.RegisterCustomHandler(http.MethodPost, "/revoke", oidcRevoke)
-	app.RegisterCustomHandler(http.MethodPost, "/device_authorization", oidcDeviceAuthorization)
 	registerInternalReadContracts(app)
-	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
-		app.RegisterCustomHandler(method, "/api/v1/.well-known/{path...}", oidcWellKnown)
-		app.RegisterCustomHandler(method, "/api/v1/keys", oidcProviderUnavailable)
-		app.RegisterCustomHandler(method, "/api/v1/authorize", oidcAuthorize)
-		app.RegisterCustomHandler(method, "/api/v1/userinfo", oidcUserInfo)
-		app.RegisterCustomHandler(method, "/api/v1/authorize/callback", oidcCallback)
-	}
-	// When a real OIDC provider (Dex) is configured, replace the fail-closed
-	// compatibility handlers with reverse proxies to it (findings 6, 30).
 	registerDexProxies(app)
 	// Periodically prune expired sessions/refresh/API tokens (finding 1).
 	registerAuthCleanup(app)

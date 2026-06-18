@@ -2,6 +2,7 @@ package shared
 
 import (
 	"encoding/json"
+	"net/http"
 	"testing"
 
 	"github.com/linskybing/nexuspaas/backend/internal/contracts"
@@ -119,6 +120,20 @@ func TestCloneMap(t *testing.T) {
 	got["a"] = 2
 	if src["a"] != 1 {
 		t.Fatalf("CloneMap mutated source")
+	}
+}
+
+func TestRouteSpecHelpers(t *testing.T) {
+	spec := Route(http.MethodPost, "/internal/demo/{id}", "demo", "create", ID("id"), Admin(), ServiceInternal(), Adapter("k8s"))
+	if spec.Method != http.MethodPost || spec.Pattern != "/internal/demo/{id}" || spec.Resource != "demo" || spec.Action != "create" {
+		t.Fatalf("Route() = %#v, want basic fields", spec)
+	}
+	if spec.IDParam != "id" || !spec.Admin || !spec.PolicyBypass || spec.AuthRequired || spec.ExternalAdapter != "k8s" || !spec.StateChanging {
+		t.Fatalf("Route() options = %#v, want id/admin/internal/adapter/state-changing", spec)
+	}
+	public := Public(Route(http.MethodGet, "/public", "public", "list", PolicyBypass()))
+	if public.AuthRequired || !public.PolicyBypass || public.StateChanging {
+		t.Fatalf("Public(Route()) = %#v, want public read route with policy bypass", public)
 	}
 }
 

@@ -159,12 +159,3 @@ func WithRateLimiter(limiter Limiter) Option {
 		}
 	}
 }
-
-// WithSwitches injects the route-switch (rollback/traffic) controller.
-func WithSwitches(switches *RouteSwitches) Option {
-	return func(a *App) {
-		if switches != nil {
-			a.Switches = switches
-		}
-	}
-}

@@ -112,6 +112,38 @@ func TestRouteCoverage(t *testing.T) {
 	}
 }
 
+func TestOpenAPICoversAllRegisteredServiceRoutes(t *testing.T) {
+	app := newTestApp()
+	doc := app.OpenAPI()
+	paths, ok := doc["paths"].(map[string]map[string]any)
+	if !ok {
+		t.Fatalf("openapi paths type = %T, want map[string]map[string]any", doc["paths"])
+	}
+
+	for _, route := range app.Routes {
+		pattern := openAPIRoutePattern(route.Pattern)
+		operations, ok := paths[pattern]
+		if !ok {
+			t.Fatalf("openapi missing path for registered route %s %s (expected %s)", route.Method, route.Pattern, pattern)
+		}
+		if _, ok := operations[strings.ToLower(route.Method)]; !ok {
+			t.Fatalf("openapi missing method for registered route %s %s", route.Method, route.Pattern)
+		}
+	}
+}
+
+func openAPIRoutePattern(pattern string) string {
+	segments := strings.Split(pattern, "/")
+	for i, segment := range segments {
+		if !strings.HasPrefix(segment, "{") || !strings.HasSuffix(segment, "...}") {
+			continue
+		}
+		name := strings.TrimSuffix(strings.TrimPrefix(segment, "{"), "...}")
+		segments[i] = "{" + name + "}"
+	}
+	return strings.Join(segments, "/")
+}
+
 func TestProxyRoutesWithoutAdaptersAreServiceOwned(t *testing.T) {
 	app := newTestApp()
 	for _, route := range app.Routes {
@@ -130,7 +162,7 @@ func TestProxyRoutesWithoutAdaptersAreServiceOwned(t *testing.T) {
 
 func TestCommonEndpoints(t *testing.T) {
 	app := newTestApp()
-	for _, path := range []string{"/healthz", "/readyz", "/metrics", "/openapi.json", "/service-registry"} {
+	for _, path := range []string{"/healthz", "/readyz", "/metrics", "/openapi.json", "/swagger/", "/service-registry"} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		app.ServeHTTP(rec, req)
@@ -147,6 +179,26 @@ func TestCommonEndpoints(t *testing.T) {
 		data := payload["data"].(map[string]any)
 		if data["status"] != "ok" {
 			t.Fatalf("%s status = %v, want ok", path, data["status"])
+		}
+	}
+}
+
+func TestSwaggerEndpointServesEmbeddedSpec(t *testing.T) {
+	app := newTestApp()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/swagger/", nil)
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/swagger/ returned %d: %s", rec.Code, rec.Body.String())
+	}
+	if contentType := rec.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "text/html") {
+		t.Fatalf("swagger content type = %q, want text/html", contentType)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"SwaggerUIBundle", `"openapi":"3.1.0"`, `"paths":`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("swagger body missing %q: %s", want, body)
 		}
 	}
 }
@@ -246,21 +298,36 @@ func TestOperationalEndpointsRequireAdminWhenAuthEnabled(t *testing.T) {
 		requestRaw(t, app, http.MethodGet, path, nil, http.StatusOK)
 	}
 
-	opsPaths := []string{"/metrics", "/openapi.json", "/service-registry", "/outbox"}
+	opsPaths := []string{"/metrics", "/openapi.json", "/swagger/", "/service-registry", "/outbox"}
 	apiKeyOnly := map[string]string{"X-API-Key": "ops-key"}
 	userSession := map[string]string{"Authorization": "Bearer user-session"}
 	adminSession := map[string]string{"Authorization": "Bearer admin-session"}
 	for _, path := range opsPaths {
-		requestRaw(t, app, http.MethodGet, path, nil, http.StatusUnauthorized)
-		requestRaw(t, app, http.MethodGet, path, apiKeyOnly, http.StatusForbidden)
-		requestRaw(t, app, http.MethodGet, path, userSession, http.StatusForbidden)
-		rec := requestRaw(t, app, http.MethodGet, path, adminSession, http.StatusOK)
-		if path == "/metrics" && !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/plain") {
-			t.Fatalf("metrics content type = %q, want text/plain", rec.Header().Get("Content-Type"))
-		}
+		assertOperationalAdminPath(t, app, path, apiKeyOnly, userSession, adminSession)
 	}
 
 	rec := requestRaw(t, app, http.MethodGet, "/outbox", userSession, http.StatusForbidden)
+	assertOutboxForbiddenEnvelope(t, rec)
+	adminOutbox := requestRaw(t, app, http.MethodGet, "/outbox", adminSession, http.StatusOK)
+	assertAdminOutboxEnvelope(t, adminOutbox)
+}
+
+func assertOperationalAdminPath(t *testing.T, app *platform.App, path string, apiKeyOnly, userSession, adminSession map[string]string) {
+	t.Helper()
+	requestRaw(t, app, http.MethodGet, path, nil, http.StatusUnauthorized)
+	requestRaw(t, app, http.MethodGet, path, apiKeyOnly, http.StatusForbidden)
+	requestRaw(t, app, http.MethodGet, path, userSession, http.StatusForbidden)
+	rec := requestRaw(t, app, http.MethodGet, path, adminSession, http.StatusOK)
+	if path == "/metrics" && !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/plain") {
+		t.Fatalf("metrics content type = %q, want text/plain", rec.Header().Get("Content-Type"))
+	}
+	if path == "/swagger/" && !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("swagger content type = %q, want text/html", rec.Header().Get("Content-Type"))
+	}
+}
+
+func assertOutboxForbiddenEnvelope(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
 	var denied struct {
 		Success bool                `json:"success"`
 		Error   *platform.ErrorBody `json:"error"`
@@ -275,8 +342,10 @@ func TestOperationalEndpointsRequireAdminWhenAuthEnabled(t *testing.T) {
 	if len(denied.Data) != 0 && string(denied.Data) != "null" {
 		t.Fatalf("outbox forbidden data = %s, want absent or null", string(denied.Data))
 	}
+}
 
-	adminOutbox := requestRaw(t, app, http.MethodGet, "/outbox", adminSession, http.StatusOK)
+func assertAdminOutboxEnvelope(t *testing.T, adminOutbox *httptest.ResponseRecorder) {
+	t.Helper()
 	var allowed struct {
 		Success bool            `json:"success"`
 		Data    json.RawMessage `json:"data"`
@@ -314,15 +383,23 @@ func newAuthCommonEndpointTestApp(t *testing.T) *platform.App {
 	})
 	allowRawPolicy(t, app, "ADMIN", "", "platform-runtime:metrics", "platform_runtime_metrics")
 	allowRawPolicy(t, app, "ADMIN", "", "platform-runtime:openapi", "platform_runtime_openapi")
+	allowRawPolicy(t, app, "ADMIN", "", "platform-runtime:swagger", "platform_runtime_swagger")
 	allowRawPolicy(t, app, "ADMIN", "", "platform-runtime:service-registry", "platform_runtime_service_registry")
 	allowRawPolicy(t, app, "ADMIN", "", "platform-runtime:outbox", "platform_runtime_outbox")
 	return app
 }
 
 func TestAuthRequiredWhenConfigured(t *testing.T) {
-	app := platform.NewApp(platform.Config{ServiceName: "all", HTTPAddr: ":0", RequireAuth: true, APIKeys: map[string]bool{"test-key": true}, ExternalURLs: map[string]string{}})
+	app := platform.NewApp(platform.Config{
+		ServiceName:      "all",
+		HTTPAddr:         ":0",
+		RequireAuth:      true,
+		APIKeys:          map[string]bool{"test-key": true},
+		APIKeyPrincipals: map[string]platform.APIKeyPrincipal{"test-key": {ID: "test-user", Role: "user"}},
+		ExternalURLs:     map[string]string{},
+	})
 	RegisterAll(app)
-	allowPolicyForRoute(t, app, "anonymous", "", http.MethodGet, "/api/v1/configfiles")
+	allowPolicyForRoute(t, app, "test-user", "", http.MethodGet, "/api/v1/configfiles")
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
@@ -455,59 +532,6 @@ func TestEventContractsRequireMetadata(t *testing.T) {
 		if !union[required] {
 			t.Fatalf("missing event contract %s", required)
 		}
-	}
-}
-
-func TestRollbackGates(t *testing.T) {
-	app := newTestApp()
-	gate := platform.DefaultRollbackGate()
-	if !gate.Allows(platform.RollbackMetrics{OutboxLag: 10, ErrorRatePercent: 1, DegradedAdapters: 0}) {
-		t.Fatal("rollback gate blocked healthy rollback metrics")
-	}
-	if gate.Allows(platform.RollbackMetrics{OutboxLag: 101, ErrorRatePercent: 1, DegradedAdapters: 0}) {
-		t.Fatal("rollback gate allowed excessive outbox lag")
-	}
-	if gate.Allows(platform.RollbackMetrics{OutboxLag: 10, ErrorRatePercent: 6, DegradedAdapters: 0}) {
-		t.Fatal("rollback gate allowed excessive error rate")
-	}
-	if gate.Allows(platform.RollbackMetrics{OutboxLag: 10, ErrorRatePercent: 1, DegradedAdapters: 1}) {
-		t.Fatal("rollback gate allowed degraded adapter during rollback")
-	}
-	var gateway platform.RouteSpec
-	for _, route := range app.Routes {
-		if route.Pattern == "/api/v1/{path...}" && route.Method == http.MethodGet {
-			gateway = route
-			break
-		}
-	}
-	if app.RollbackTargetFor(gateway) != "monolith" {
-		t.Fatalf("gateway rollback target = %q, want monolith", app.RollbackTargetFor(gateway))
-	}
-	app.Switches.Enable(gateway.Pattern, "identity-service")
-	if app.RollbackTargetFor(gateway) != "identity-service" {
-		t.Fatalf("enabled target = %q, want identity-service", app.RollbackTargetFor(gateway))
-	}
-	app.Switches.Rollback(gateway.Pattern)
-	if app.RollbackTargetFor(gateway) != "monolith" {
-		t.Fatalf("rolled back target = %q, want monolith", app.RollbackTargetFor(gateway))
-	}
-	if !app.CanRollback(gate) {
-		t.Fatal("healthy runtime metrics blocked rollback")
-	}
-	app.Metrics.Inc("harbor_degraded")
-	if app.CanRollback(gate) {
-		t.Fatal("runtime degraded metrics did not block rollback")
-	}
-
-	lagGate := platform.RollbackGate{MaxOutboxLag: 0, MaxErrorRatePercent: 100, MaxDegradedAdapters: 100}
-	app = newTestApp()
-	postJSON(t, app, "/api/v1/forms", `{"title":"lag","description":"track outbox lag"}`, http.StatusCreated)
-	if app.CanRollback(lagGate) {
-		t.Fatal("runtime outbox lag did not block rollback")
-	}
-	app.Events.Checkpoint("rollback-gate")
-	if !app.CanRollback(lagGate) {
-		t.Fatal("checkpointed runtime outbox lag still blocked rollback")
 	}
 }
 
@@ -742,24 +766,15 @@ func TestPlatformHandlersRejectMalformedJSONWithoutWrites(t *testing.T) {
 	}
 }
 
-func TestGatewayOnlyRouteSwitchUsesCatalogTargetRoutes(t *testing.T) {
+func TestGatewayOnlyAppDoesNotForwardRemovedCompatRoutes(t *testing.T) {
 	app := platform.NewApp(platform.Config{ServiceName: "platform-gateway", HTTPAddr: ":0", ExternalURLs: map[string]string{}})
 	RegisterAll(app)
-	app.Switches.Enable("/api/v1/{path...}", "k8s-control-service")
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/ws/job-status/job-1", nil)
 	app.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("gateway-only switch returned %d: %s", rec.Code, rec.Body.String())
-	}
-	var env map[string]any
-	if err := json.NewDecoder(rec.Body).Decode(&env); err != nil {
-		t.Fatal(err)
-	}
-	data := env["data"].(map[string]any)
-	if data["forwarded"] != true || data["target"] != "k8s-control-service" {
-		t.Fatalf("unexpected forwarding data: %+v", data)
+	if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("gateway-only removed compat route returned %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

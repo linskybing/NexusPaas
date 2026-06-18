@@ -1,18 +1,12 @@
 package schedulerquota
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
-	"path"
 	"strings"
-	"time"
 
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
 )
@@ -32,48 +26,25 @@ type bindPlanRequest struct {
 	PlanID string `json:"plan_id"`
 }
 
-// orgProjectBindingClient applies and clears project↔plan bindings through the
-// org-project-owned internal contract. scheduler-quota uses it instead of writing
-// org-project:projects directly so the project aggregate stays owned by
-// org-project-service (problem.md #2). It mirrors workloadEvictionClient.
-type orgProjectBindingClient interface {
-	BindPlan(ctx context.Context, projectID, planID string) error
-	ClearPlanBindings(ctx context.Context, planID string) error
+type internalOrgProjectBindingClient struct {
+	client platform.InternalJSONClient
 }
 
-type httpOrgProjectBindingClient struct {
-	baseURL string
-	apiKey  string
-	client  *http.Client
-}
-
-type localOrgProjectBindingClient struct {
-	app *platform.App
-}
-
-// newOrgProjectBindingClient returns a co-hosted (in-process) client when this
-// process also hosts org-project-service, otherwise a remote HTTP client targeting
-// the configured org-project URL. It mirrors newWorkloadEvictionClient.
-func newOrgProjectBindingClient(app *platform.App) (orgProjectBindingClient, error) {
-	if app.Config.AllowsService(orgProjectServiceName) {
-		return localOrgProjectBindingClient{app: app}, nil
+// internalOrgProjectBindingClient applies and clears project-plan bindings
+// through the org-project-owned internal contract.
+func newOrgProjectBindingClient(app *platform.App) (internalOrgProjectBindingClient, error) {
+	if app == nil {
+		return internalOrgProjectBindingClient{}, fmt.Errorf("org-project binding client is not configured")
 	}
-	baseURL := strings.TrimSpace(app.Config.ServiceURLs[orgProjectServiceName])
-	if baseURL == "" {
-		return nil, fmt.Errorf("org-project-service URL is not configured")
+	if !app.Config.AllowsService(orgProjectServiceName) {
+		if strings.TrimSpace(app.Config.ServiceURLs[orgProjectServiceName]) == "" {
+			return internalOrgProjectBindingClient{}, fmt.Errorf("org-project-service URL is not configured")
+		}
+		if strings.TrimSpace(app.Config.ServiceAPIKey) == "" {
+			return internalOrgProjectBindingClient{}, fmt.Errorf("service API key is not configured")
+		}
 	}
-	if strings.TrimSpace(app.Config.ServiceAPIKey) == "" {
-		return nil, fmt.Errorf("service API key is not configured")
-	}
-	timeout := app.Config.AdapterTimeout
-	if timeout <= 0 {
-		timeout = 2 * time.Second
-	}
-	return httpOrgProjectBindingClient{
-		baseURL: baseURL,
-		apiKey:  app.Config.ServiceAPIKey,
-		client:  &http.Client{Timeout: timeout},
-	}, nil
+	return internalOrgProjectBindingClient{client: platform.NewInternalJSONClient(app, orgProjectServiceName)}, nil
 }
 
 func bindPlanPath(projectID string) string {
@@ -84,91 +55,27 @@ func clearPlanBindingsPath(planID string) string {
 	return strings.ReplaceAll(clearPlanBindingsPathTemplate, "{plan_id}", url.PathEscape(planID))
 }
 
-func (c httpOrgProjectBindingClient) BindPlan(ctx context.Context, projectID, planID string) error {
-	body, err := json.Marshal(bindPlanRequest{PlanID: planID})
+func (c internalOrgProjectBindingClient) BindPlan(ctx context.Context, projectID, planID string) error {
+	resp, err := c.client.Do(ctx, platform.InternalJSONRequest{
+		Method: http.MethodPut,
+		Path:   bindPlanPath(projectID),
+		Body:   bindPlanRequest{PlanID: planID},
+	})
 	if err != nil {
 		return err
 	}
-	endpoint, err := c.endpoint(bindPlanPath(projectID))
-	if err != nil {
-		return err
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set(headerServiceKey, c.apiKey)
-	resp, err := c.client.Do(httpReq)
-	if err != nil {
-		return err
-	}
-	defer drainAndClose(resp)
 	return bindStatusError("bind", resp.StatusCode)
 }
 
-func (c httpOrgProjectBindingClient) ClearPlanBindings(ctx context.Context, planID string) error {
-	endpoint, err := c.endpoint(clearPlanBindingsPath(planID))
+func (c internalOrgProjectBindingClient) ClearPlanBindings(ctx context.Context, planID string) error {
+	resp, err := c.client.Do(ctx, platform.InternalJSONRequest{
+		Method: http.MethodDelete,
+		Path:   clearPlanBindingsPath(planID),
+	})
 	if err != nil {
 		return err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
-	if err != nil {
-		return err
-	}
-	httpReq.Header.Set(headerServiceKey, c.apiKey)
-	resp, err := c.client.Do(httpReq)
-	if err != nil {
-		return err
-	}
-	defer drainAndClose(resp)
 	return clearStatusError(resp.StatusCode)
-}
-
-func (c httpOrgProjectBindingClient) endpoint(requestPath string) (string, error) {
-	parsed, err := url.Parse(c.baseURL)
-	if err != nil {
-		return "", err
-	}
-	if !parsed.IsAbs() || parsed.Host == "" {
-		return "", fmt.Errorf("org-project service URL must be absolute")
-	}
-	parsed.Path = path.Join(parsed.Path, requestPath)
-	parsed.RawQuery = ""
-	parsed.Fragment = ""
-	return parsed.String(), nil
-}
-
-func (c localOrgProjectBindingClient) BindPlan(ctx context.Context, projectID, planID string) error {
-	body, err := json.Marshal(bindPlanRequest{PlanID: planID})
-	if err != nil {
-		return err
-	}
-	httpReq := httptest.NewRequest(http.MethodPut, bindPlanPath(projectID), bytes.NewReader(body)).WithContext(ctx)
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set(headerServiceKey, c.app.Config.ServiceAPIKey)
-	rec := httptest.NewRecorder()
-	c.app.ServeHTTP(rec, httpReq)
-	return bindStatusError("bind", rec.Code)
-}
-
-func (c localOrgProjectBindingClient) ClearPlanBindings(ctx context.Context, planID string) error {
-	httpReq := httptest.NewRequest(http.MethodDelete, clearPlanBindingsPath(planID), nil).WithContext(ctx)
-	httpReq.Header.Set(headerServiceKey, c.app.Config.ServiceAPIKey)
-	rec := httptest.NewRecorder()
-	c.app.ServeHTTP(rec, httpReq)
-	return clearStatusError(rec.Code)
-}
-
-// drainAndClose discards any remaining response body before closing so the HTTP
-// transport can reuse the keep-alive connection (review Finding 5). The contract
-// responses are small; the bound caps a misbehaving upstream.
-func drainAndClose(resp *http.Response) {
-	if resp == nil || resp.Body == nil {
-		return
-	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-	_ = resp.Body.Close()
 }
 
 // bindStatusError maps the bind contract status to an error. 404 means the

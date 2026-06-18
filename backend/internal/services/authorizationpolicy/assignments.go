@@ -98,40 +98,6 @@ func batchAssignPolicy(app *platform.App, r *http.Request, _ platform.RouteSpec)
 	return http.StatusOK, result, nil
 }
 
-func assignPolicyLegacy(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
-	if status, data, ok := requireAdmin(app, r); !ok {
-		return status, data, nil
-	}
-	ensureDefaultAssignments(app, r)
-	payload, _, err := decodePayload(r)
-	if err != nil {
-		return http.StatusBadRequest, shared.ErrorData(err.Error()), nil
-	}
-	policyID := shared.TextValue(payload, "policy_id", "policyId")
-	if policyID == "" {
-		return http.StatusBadRequest, shared.ErrorData("policy_id is required"), nil
-	}
-	if _, found := findPolicy(app, r, policyID); !found {
-		return http.StatusNotFound, shared.ErrorData(msgPolicyNotFound), nil
-	}
-	targetType, targetID, err := assignmentTarget(payload)
-	if err != nil {
-		return http.StatusBadRequest, shared.ErrorData(err.Error()), nil
-	}
-	assignment, created, err := createPolicyAssignment(app, r, policyID, targetType, targetID, r.Header.Get(headerUserID))
-	if err != nil {
-		if platform.IsCreateConflict(err) {
-			return http.StatusConflict, shared.ErrorData("assignment already exists"), nil
-		}
-		return http.StatusInternalServerError, shared.ErrorData("assignment could not be created"), nil
-	}
-	if created {
-		publishProxyPolicyChanged(app, r, "assign", assignment)
-		return http.StatusCreated, assignment, nil
-	}
-	return http.StatusOK, assignment, nil
-}
-
 func unassignPolicy(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
 	if status, data, ok := requireAdmin(app, r); !ok {
 		return status, data, nil

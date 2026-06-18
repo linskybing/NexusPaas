@@ -63,7 +63,7 @@ func policyIdentityEventData(event contracts.Event) map[string]any {
 	return maps.Clone(event.Data)
 }
 
-func upsertPolicyIdentityReadModel(repo authorizationPolicyProjectionRepository, r *http.Request, resource string, data map[string]any) error {
+func upsertPolicyIdentityReadModel(repo *recordStoreAuthorizationPolicyProjectionRepository, r *http.Request, resource string, data map[string]any) error {
 	switch resource {
 	case policyIdentityUsers:
 		return repo.UpsertIdentityUser(r.Context(), data)
@@ -74,7 +74,7 @@ func upsertPolicyIdentityReadModel(repo authorizationPolicyProjectionRepository,
 	}
 }
 
-func deletePolicyIdentityReadModel(repo authorizationPolicyProjectionRepository, r *http.Request, resource string, data map[string]any) bool {
+func deletePolicyIdentityReadModel(repo *recordStoreAuthorizationPolicyProjectionRepository, r *http.Request, resource string, data map[string]any) bool {
 	switch resource {
 	case policyIdentityUsers:
 		return repo.DeleteIdentityUser(r.Context(), data)

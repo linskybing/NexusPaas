@@ -19,19 +19,6 @@ const (
 
 var errRawPermissionRepositoryUnavailable = errors.New("raw permission repository unavailable")
 
-type rawPermissionRepository interface {
-	ListRawPermissionPolicies(context.Context) [][]string
-	RawPermissionPolicyExists(context.Context, []string) bool
-	CreateRawPermissionPolicy(context.Context, []string) (bool, error)
-	UpdateRawPermissionPolicy(context.Context, []string, []string) (rawPermissionPolicyUpdateResult, error)
-	DeleteRawPermissionPolicy(context.Context, []string) bool
-	RawPermissionAllowed(context.Context, string, string, string, string) (bool, error)
-	ApplyPermissionOperation(context.Context, map[string]string) error
-	UpsertGroupingPolicy(context.Context, string, string, string, string) error
-	DeleteGroupingPolicy(context.Context, string, string, string, string) bool
-	ListGroupingPolicies(context.Context) []map[string]any
-}
-
 type rawPermissionPolicyUpdateResult struct {
 	Found    bool
 	Conflict bool
@@ -46,15 +33,15 @@ type recordStoreRawPermissionRepository struct {
 	store platform.RecordStore
 }
 
-func rawPermissionRepo(app *platform.App) rawPermissionRepository {
+func rawPermissionRepo(app *platform.App) *recordStoreRawPermissionRepository {
 	if app == nil {
-		return recordStoreRawPermissionRepository{}
+		return &recordStoreRawPermissionRepository{}
 	}
-	return recordStoreRawPermissionRepository{store: app.Store}
+	return &recordStoreRawPermissionRepository{store: app.Store}
 }
 
-func rawPermissionRepoFromStore(store platform.RecordStore) rawPermissionRepository {
-	return recordStoreRawPermissionRepository{store: store}
+func rawPermissionRepoFromStore(store platform.RecordStore) *recordStoreRawPermissionRepository {
+	return &recordStoreRawPermissionRepository{store: store}
 }
 
 func (r recordStoreRawPermissionRepository) ListRawPermissionPolicies(ctx context.Context) [][]string {

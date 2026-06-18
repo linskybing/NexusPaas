@@ -129,18 +129,18 @@ func createGroupStorage(app *platform.App, r *http.Request, _ platform.RouteSpec
 		return http.StatusBadRequest, shared.ErrorData(msgInvalidRequestBody), nil
 	}
 	groupID := groupPathID(r)
-	name := firstNonEmpty(shared.TextValue(payload, "name"), shared.TextValue(payload, "pvc_id", "pvcId"))
+	name := shared.FirstNonBlank(shared.TextValue(payload, "name"), shared.TextValue(payload, "pvc_id", "pvcId"))
 	if groupID == "" || name == "" {
 		return http.StatusBadRequest, shared.ErrorData("group id and storage name are required"), nil
 	}
-	pvcID := firstNonEmpty(shared.TextValue(payload, "id", "pvc_id", "pvcId"), name)
+	pvcID := shared.FirstNonBlank(shared.TextValue(payload, "id", "pvc_id", "pvcId"), name)
 	now := time.Now().UTC()
 	record := map[string]any{
 		"id":            groupStorageID(groupID, pvcID),
 		"group_id":      groupID,
 		"pvc_id":        pvcID,
 		"name":          name,
-		"size":          firstNonEmpty(shared.TextValue(payload, "size"), "10Gi"),
+		"size":          shared.FirstNonBlank(shared.TextValue(payload, "size"), "10Gi"),
 		"storage_class": shared.TextValue(payload, "storage_class", "storageClass"),
 		"status":        "created",
 		"created_at":    now,
@@ -274,7 +274,7 @@ func createStoragePolicy(app *platform.App, r *http.Request, _ platform.RouteSpe
 		"id":                 storagePolicyID(groupID, pvcID),
 		"group_id":           groupID,
 		"pvc_id":             pvcID,
-		"default_permission": normalizePermission(firstNonEmpty(shared.TextValue(payload, "default_permission", "defaultPermission"), "none")),
+		"default_permission": normalizePermission(shared.FirstNonBlank(shared.TextValue(payload, "default_permission", "defaultPermission"), "none")),
 		"updated_at":         time.Now().UTC(),
 	}
 	record, err := storageRepo(app).UpsertStoragePolicy(r.Context(), policy)
@@ -333,7 +333,7 @@ func deleteProjectBinding(app *platform.App, r *http.Request, _ platform.RouteSp
 	if _, status, data, ok := requireProjectManager(app, r, projectID, userID); !ok {
 		return status, data, nil
 	}
-	pvcID := firstNonEmpty(r.PathValue("requestId"), r.PathValue("pvcId"))
+	pvcID := shared.FirstNonBlank(r.PathValue("requestId"), r.PathValue("pvcId"))
 	if !storageRepo(app).DeleteProjectBindingCascade(r.Context(), projectID, pvcID) {
 		return http.StatusNotFound, shared.ErrorData("storage binding not found"), nil
 	}
@@ -412,8 +412,8 @@ func startFastTransfer(app *platform.App, r *http.Request, _ platform.RouteSpec)
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(msgInvalidRequestBody), nil
 	}
-	name := firstNonEmpty(shared.TextValue(payload, "name"), storageRepo(app).NextFastTransferName())
-	namespace := firstNonEmpty(shared.TextValue(payload, "target_namespace", "targetNamespace"), "project-"+projectID)
+	name := shared.FirstNonBlank(shared.TextValue(payload, "name"), storageRepo(app).NextFastTransferName())
+	namespace := shared.FirstNonBlank(shared.TextValue(payload, "target_namespace", "targetNamespace"), "project-"+projectID)
 	transfer := map[string]any{"id": fastTransferID(projectID, namespace, name), "project_id": projectID, "target_namespace": namespace, "name": name, "status": "staged", "created_by": userID, "created_at": time.Now().UTC()}
 	record, err := storageRepo(app).CreateFastTransfer(r.Context(), transfer)
 	if err != nil {

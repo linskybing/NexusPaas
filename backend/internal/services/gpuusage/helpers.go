@@ -10,6 +10,7 @@ import (
 
 	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
+	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
 
 func usageRows(app *platform.App, r *http.Request, since time.Time) []usageRow {
@@ -150,9 +151,9 @@ func snapshotRows(app *platform.App, r *http.Request, since time.Time) []snapsho
 		}
 		jobID := textValue(data, "job_id", "jobId", "JobID")
 		job := jobs[jobID]
-		userID := firstNonEmpty(textValue(data, "user_id", "userId", "UserID"), textValue(job, "user_id", "userId", "UserID"))
-		projectID := firstNonEmpty(textValue(data, "project_id", "projectId", "ProjectID"), textValue(job, "project_id", "projectId", "ProjectID"))
-		gpuUUID := firstNonEmpty(textValue(data, "gpu_uuid", "gpuUUID", "GPUUUID"), textValue(metrics, "gpu_uuid", "gpuUUID", "GPUUUID"))
+		userID := shared.FirstNonBlank(textValue(data, "user_id", "userId", "UserID"), textValue(job, "user_id", "userId", "UserID"))
+		projectID := shared.FirstNonBlank(textValue(data, "project_id", "projectId", "ProjectID"), textValue(job, "project_id", "projectId", "ProjectID"))
+		gpuUUID := shared.FirstNonBlank(textValue(data, "gpu_uuid", "gpuUUID", "GPUUUID"), textValue(metrics, "gpu_uuid", "gpuUUID", "GPUUUID"))
 		gpuIndex := intValue(data, "gpu_index", "gpuIndex", "GPUIndex")
 		rows = append(rows, snapshotRow{
 			record:     record,
@@ -182,8 +183,8 @@ func usageRowFromRecord(record contracts.Record[map[string]any], jobs, projects,
 	metrics := mapValue(data, "metrics", "Metrics")
 	jobID := textValue(data, "job_id", "jobId", "JobID")
 	job := jobs[jobID]
-	userID := firstNonEmpty(textValue(data, "user_id", "userId", "UserID"), textValue(job, "user_id", "userId", "UserID"))
-	projectID := firstNonEmpty(textValue(data, "project_id", "projectId", "ProjectID"), textValue(job, "project_id", "projectId", "ProjectID"))
+	userID := shared.FirstNonBlank(textValue(data, "user_id", "userId", "UserID"), textValue(job, "user_id", "userId", "UserID"))
+	projectID := shared.FirstNonBlank(textValue(data, "project_id", "projectId", "ProjectID"), textValue(job, "project_id", "projectId", "ProjectID"))
 	user := users[userID]
 	project := projects[projectID]
 
@@ -212,9 +213,9 @@ func usageRowFromRecord(record contracts.Record[map[string]any], jobs, projects,
 	return usageRow{
 		UserResourceUsage: UserResourceUsage{
 			UserID:        userID,
-			Username:      firstNonEmpty(textValue(data, "username", "Username"), textValue(user, "username", "Username")),
+			Username:      shared.FirstNonBlank(textValue(data, "username", "Username"), textValue(user, "username", "Username")),
 			ProjectID:     projectID,
-			ProjectName:   firstNonEmpty(textValue(data, "project_name", "projectName", "ProjectName"), textValue(project, "project_name", "projectName", "name", "Name")),
+			ProjectName:   shared.FirstNonBlank(textValue(data, "project_name", "projectName", "ProjectName"), textValue(project, "project_name", "projectName", "name", "Name")),
 			JobID:         jobID,
 			CPUHours:      cpuHours,
 			GPUHours:      gpuHours,
@@ -299,7 +300,7 @@ func indexProjectRecords(records []contracts.Record[map[string]any]) map[string]
 }
 
 func recordID(record contracts.Record[map[string]any]) string {
-	return firstNonEmpty(record.ID, textValue(record.Data, "id", "ID"))
+	return shared.FirstNonBlank(record.ID, textValue(record.Data, "id", "ID"))
 }
 
 func currentUserID(r *http.Request) string {
@@ -461,15 +462,6 @@ func derefTime(value *time.Time) time.Time {
 		return time.Time{}
 	}
 	return *value
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }
 
 func intKey(value int) string {

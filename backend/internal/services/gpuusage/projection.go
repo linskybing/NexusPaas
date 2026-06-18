@@ -3,12 +3,12 @@ package gpuusage
 import (
 	"context"
 	"fmt"
-	"maps"
 	"net/http"
 	"strings"
 
 	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
+	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
 
 const gpuProjectionConsumer = serviceName + ":gpu_usage_projection"
@@ -139,10 +139,10 @@ func statusForJobEvent(name string) string {
 func gpuEventData(event contracts.Event) map[string]any {
 	for _, key := range []string{"new", "record", "job", "project", "user", "role"} {
 		if data, ok := event.Data[key].(map[string]any); ok {
-			return cloneMap(data)
+			return shared.CloneMap(data)
 		}
 	}
-	return cloneMap(event.Data)
+	return shared.CloneMap(event.Data)
 }
 
 func upsertGPUReadModel(app *platform.App, r *http.Request, resource string, data map[string]any) error {
@@ -192,15 +192,15 @@ func gpuReadModelID(resource string, data map[string]any) string {
 	userID := textValue(data, "user_id", "userId", "UserID")
 	switch resource {
 	case gpuJobsResource:
-		return firstNonEmpty(id, jobID)
+		return shared.FirstNonBlank(id, jobID)
 	case gpuProjectsResource:
-		return firstNonEmpty(id, projectID)
+		return shared.FirstNonBlank(id, projectID)
 	case gpuIdentityUsersResource:
-		return firstNonEmpty(id, userID)
+		return shared.FirstNonBlank(id, userID)
 	case gpuAuthorizationRolesResource, gpuIdentityRolesResource:
-		return firstNonEmpty(id, roleID, name, userID)
+		return shared.FirstNonBlank(id, roleID, name, userID)
 	default:
-		return firstNonEmpty(id, jobID, projectID, userID, roleID, name)
+		return shared.FirstNonBlank(id, jobID, projectID, userID, roleID, name)
 	}
 }
 
@@ -228,11 +228,4 @@ func sourceCoHosted(app *platform.App, sourceResource string) bool {
 	}
 	owner, _, ok := strings.Cut(sourceResource, ":")
 	return ok && app.Config.AllowsService(owner)
-}
-
-func cloneMap(data map[string]any) map[string]any {
-	if data == nil {
-		return map[string]any{}
-	}
-	return maps.Clone(data)
 }

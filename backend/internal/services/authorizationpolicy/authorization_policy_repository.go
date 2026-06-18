@@ -15,40 +15,6 @@ import (
 
 var errAuthorizationPolicyRepositoryUnavailable = errors.New("authorization policy repository unavailable")
 
-type authorizationPolicyRepository interface {
-	EnsureDefaultProxyServices(context.Context) error
-	ListProxyServices(context.Context) []map[string]any
-	GetProxyService(context.Context, string) (map[string]any, bool)
-
-	EnsureDefaultProxyPolicies(context.Context) error
-	NextProxyPolicyID(context.Context) string
-	ListProxyPolicies(context.Context) []map[string]any
-	GetProxyPolicy(context.Context, string) (map[string]any, bool)
-	PolicyNameExists(context.Context, string, string) bool
-	CreateProxyPolicy(context.Context, map[string]any, []map[string]any) (map[string]any, error)
-	UpdateProxyPolicy(context.Context, string, map[string]any, *proxyPolicyRuleReplacement) (map[string]any, bool, error)
-	DeleteProxyPolicyCascade(context.Context, string) (map[string]any, bool)
-
-	EnsureDefaultProxyAssignments(context.Context) error
-	ListPolicyAssignments(context.Context, string) []map[string]any
-	CreatePolicyAssignment(context.Context, string, string, string, string) (map[string]any, bool, error)
-	UnassignPolicy(context.Context, string, string, string) (map[string]any, bool)
-	ListTargetAssignments(context.Context, string, string) []map[string]any
-
-	EnsureDefaultProxyRoles(context.Context) error
-	NextProxyRoleID(context.Context) string
-	ListProxyRoles(context.Context) []map[string]any
-	GetProxyRole(context.Context, string) (map[string]any, bool)
-	RoleNameExists(context.Context, string, string) bool
-	CreateProxyRole(context.Context, map[string]any) (map[string]any, error)
-	UpdateProxyRole(context.Context, string, map[string]any) (map[string]any, bool)
-	DeleteProxyRoleCascade(context.Context, string) (map[string]any, bool)
-
-	ListRoleUsers(context.Context, string) []map[string]any
-	CreateRoleUser(context.Context, string, string, string) (map[string]any, bool, error)
-	UnassignRoleUser(context.Context, string, string) (map[string]any, bool)
-}
-
 type proxyPolicyRuleReplacement struct {
 	Rules []map[string]any
 }
@@ -57,11 +23,11 @@ type recordStoreAuthorizationPolicyRepository struct {
 	store platform.RecordStore
 }
 
-func authorizationPolicyRepo(app *platform.App) authorizationPolicyRepository {
+func authorizationPolicyRepo(app *platform.App) *recordStoreAuthorizationPolicyRepository {
 	if app == nil {
-		return recordStoreAuthorizationPolicyRepository{}
+		return &recordStoreAuthorizationPolicyRepository{}
 	}
-	return recordStoreAuthorizationPolicyRepository{store: app.Store}
+	return &recordStoreAuthorizationPolicyRepository{store: app.Store}
 }
 
 func (r recordStoreAuthorizationPolicyRepository) EnsureDefaultProxyServices(ctx context.Context) error {

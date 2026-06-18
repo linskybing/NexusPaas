@@ -73,7 +73,7 @@ func TestAuthorizationPolicyRepositoryPolicyLifecycleAndCascade(t *testing.T) {
 	assertRepositoryPolicyCascadeDelete(t, app, repo, ctx)
 }
 
-func createRepositoryPolicyWithRule(t *testing.T, repo authorizationPolicyRepository, ctx context.Context, now time.Time) {
+func createRepositoryPolicyWithRule(t *testing.T, repo *recordStoreAuthorizationPolicyRepository, ctx context.Context, now time.Time) {
 	t.Helper()
 	policy, err := repo.CreateProxyPolicy(ctx, map[string]any{
 		"id":          "P1",
@@ -91,14 +91,14 @@ func createRepositoryPolicyWithRule(t *testing.T, repo authorizationPolicyReposi
 	}
 }
 
-func assertRepositoryPolicyNameLookup(t *testing.T, repo authorizationPolicyRepository, ctx context.Context) {
+func assertRepositoryPolicyNameLookup(t *testing.T, repo *recordStoreAuthorizationPolicyRepository, ctx context.Context) {
 	t.Helper()
 	if !repo.PolicyNameExists(ctx, "", "ANALYTICS") || repo.PolicyNameExists(ctx, "P1", "analytics") {
 		t.Fatal("PolicyNameExists did not respect case-insensitive duplicate and exclude id")
 	}
 }
 
-func replaceRepositoryPolicyRules(t *testing.T, app *platform.App, repo authorizationPolicyRepository, ctx context.Context, now time.Time) {
+func replaceRepositoryPolicyRules(t *testing.T, app *platform.App, repo *recordStoreAuthorizationPolicyRepository, ctx context.Context, now time.Time) {
 	t.Helper()
 	updated, ok, err := repo.UpdateProxyPolicy(ctx, "P1", map[string]any{
 		"description": "updated",
@@ -115,7 +115,7 @@ func replaceRepositoryPolicyRules(t *testing.T, app *platform.App, repo authoriz
 	}
 }
 
-func createRepositoryPolicyAssignment(t *testing.T, repo authorizationPolicyRepository, ctx context.Context) {
+func createRepositoryPolicyAssignment(t *testing.T, repo *recordStoreAuthorizationPolicyRepository, ctx context.Context) {
 	t.Helper()
 	assignment, created, err := repo.CreatePolicyAssignment(ctx, "P1", "user", "U1", "ADMIN")
 	if err != nil || !created || assignment["policy"] == nil {
@@ -123,7 +123,7 @@ func createRepositoryPolicyAssignment(t *testing.T, repo authorizationPolicyRepo
 	}
 }
 
-func assertRepositoryPolicyCascadeDelete(t *testing.T, app *platform.App, repo authorizationPolicyRepository, ctx context.Context) {
+func assertRepositoryPolicyCascadeDelete(t *testing.T, app *platform.App, repo *recordStoreAuthorizationPolicyRepository, ctx context.Context) {
 	t.Helper()
 	deleted, found := repo.DeleteProxyPolicyCascade(ctx, "P1")
 	if !found || deleted["id"] != "P1" {
@@ -155,7 +155,7 @@ func TestAuthorizationPolicyRepositoryRoleAssignmentIdempotencyAndCascade(t *tes
 	assertRepositoryRoleCascadeDelete(t, repo, ctx)
 }
 
-func createRepositoryRole(t *testing.T, repo authorizationPolicyRepository, ctx context.Context, now time.Time) map[string]any {
+func createRepositoryRole(t *testing.T, repo *recordStoreAuthorizationPolicyRepository, ctx context.Context, now time.Time) map[string]any {
 	t.Helper()
 	role, err := repo.CreateProxyRole(ctx, map[string]any{
 		"id":           "ROLE1",
@@ -171,7 +171,7 @@ func createRepositoryRole(t *testing.T, repo authorizationPolicyRepository, ctx 
 	return role
 }
 
-func assertRepositoryRoleCloneIsolation(t *testing.T, repo authorizationPolicyRepository, ctx context.Context) {
+func assertRepositoryRoleCloneIsolation(t *testing.T, repo *recordStoreAuthorizationPolicyRepository, ctx context.Context) {
 	t.Helper()
 	gotRole, found := repo.GetProxyRole(ctx, "ROLE1")
 	if !found || gotRole["name"] != "operators" {
@@ -179,7 +179,7 @@ func assertRepositoryRoleCloneIsolation(t *testing.T, repo authorizationPolicyRe
 	}
 }
 
-func assertRepositoryRoleUserIdempotency(t *testing.T, repo authorizationPolicyRepository, ctx context.Context) {
+func assertRepositoryRoleUserIdempotency(t *testing.T, repo *recordStoreAuthorizationPolicyRepository, ctx context.Context) {
 	t.Helper()
 	member, created, err := repo.CreateRoleUser(ctx, "ROLE1", "U1", "ADMIN")
 	if err != nil || !created || member["role"] == nil {
@@ -191,7 +191,7 @@ func assertRepositoryRoleUserIdempotency(t *testing.T, repo authorizationPolicyR
 	}
 }
 
-func createRepositoryPolicyForRoleAssignment(t *testing.T, repo authorizationPolicyRepository, ctx context.Context, now time.Time) {
+func createRepositoryPolicyForRoleAssignment(t *testing.T, repo *recordStoreAuthorizationPolicyRepository, ctx context.Context, now time.Time) {
 	t.Helper()
 	policy, err := repo.CreateProxyPolicy(ctx, map[string]any{
 		"id":         "P2",
@@ -204,7 +204,7 @@ func createRepositoryPolicyForRoleAssignment(t *testing.T, repo authorizationPol
 	}
 }
 
-func assertRepositoryRolePolicyAssignmentIdempotency(t *testing.T, repo authorizationPolicyRepository, ctx context.Context) {
+func assertRepositoryRolePolicyAssignmentIdempotency(t *testing.T, repo *recordStoreAuthorizationPolicyRepository, ctx context.Context) {
 	t.Helper()
 	assignment, created, err := repo.CreatePolicyAssignment(ctx, "P2", "role", "ROLE1", "ADMIN")
 	if err != nil || !created || assignment["policy"] == nil {
@@ -216,7 +216,7 @@ func assertRepositoryRolePolicyAssignmentIdempotency(t *testing.T, repo authoriz
 	}
 }
 
-func assertRepositoryRoleCascadeDelete(t *testing.T, repo authorizationPolicyRepository, ctx context.Context) {
+func assertRepositoryRoleCascadeDelete(t *testing.T, repo *recordStoreAuthorizationPolicyRepository, ctx context.Context) {
 	t.Helper()
 	deleted, found := repo.DeleteProxyRoleCascade(ctx, "ROLE1")
 	if !found || deleted["id"] != "ROLE1" {

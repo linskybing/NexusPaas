@@ -299,7 +299,6 @@ func ConfigFromEnv() Config {
 			"pgadmin":       os.Getenv("PGADMIN_URL"),
 			"longhorn":      os.Getenv("LONGHORN_URL"),
 			"prometheus":    os.Getenv("PROMETHEUS_URL"),
-			"monolith":      os.Getenv("MONOLITH_UPSTREAM_URL"),
 		},
 		AdapterConfigs: parser.parseAdapterConfigs(os.Getenv(envAdapterConfig)),
 	}
@@ -619,42 +618,6 @@ func env(key, fallback string) string {
 		return value
 	}
 	return fallback
-}
-
-func envBool(key string, fallback bool) bool {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
-}
-
-func envDuration(key string, fallback time.Duration) time.Duration {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
-}
-
-func envInt(key string, fallback int) int {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
 }
 
 func clampInt(value, min, max int) int {

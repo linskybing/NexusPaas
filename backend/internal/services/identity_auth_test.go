@@ -276,36 +276,41 @@ func TestIdentityOIDCRoutesFailClosed(t *testing.T) {
 		body    string
 		headers map[string]string
 		want    int
+		removed bool
 	}{
 		{name: "login form missing auth request", method: http.MethodGet, path: "/api/v1/oidc/login", want: http.StatusBadRequest},
 		{name: "login form provider missing", method: http.MethodGet, path: "/api/v1/oidc/login?auth_request_id=req-1", want: http.StatusServiceUnavailable},
 		{name: "login post invalid", method: http.MethodPost, path: "/api/v1/oidc/login", body: `{}`, want: http.StatusBadRequest},
 		{name: "login post provider missing", method: http.MethodPost, path: "/api/v1/oidc/login", body: `{"auth_request_id":"req-1","username":"alice","password":"secret"}`, want: http.StatusServiceUnavailable},
-		{name: "legacy token missing grant", method: http.MethodPost, path: "/oauth/token", body: `{}`, want: http.StatusBadRequest},
-		{name: "legacy token missing provider", method: http.MethodPost, path: "/oauth/token?grant_type=authorization_code&client_id=grafana&code=code-1", want: http.StatusServiceUnavailable},
+		{name: "legacy token removed", method: http.MethodPost, path: "/oauth/token", body: `{}`, removed: true},
+		{name: "legacy token with params removed", method: http.MethodPost, path: "/oauth/token?grant_type=authorization_code&client_id=grafana&code=code-1", removed: true},
 		{name: "prefixed token missing provider", method: http.MethodPost, path: "/api/v1/oidc/token?grant_type=refresh_token&client_id=grafana&refresh_token=refresh-1", want: http.StatusServiceUnavailable},
-		{name: "legacy revoke missing token", method: http.MethodPost, path: "/revoke", body: `{}`, want: http.StatusBadRequest},
-		{name: "legacy revoke missing provider", method: http.MethodPost, path: "/revoke?token=access-1", want: http.StatusServiceUnavailable},
+		{name: "legacy revoke removed", method: http.MethodPost, path: "/revoke", body: `{}`, removed: true},
+		{name: "legacy revoke with token removed", method: http.MethodPost, path: "/revoke?token=access-1", removed: true},
 		{name: "prefixed revoke missing provider", method: http.MethodPost, path: "/api/v1/oidc/revoke?token=access-1", want: http.StatusServiceUnavailable},
-		{name: "device authorization missing client", method: http.MethodPost, path: "/device_authorization", body: `{}`, want: http.StatusBadRequest},
-		{name: "device authorization missing provider", method: http.MethodPost, path: "/device_authorization?client_id=grafana", want: http.StatusServiceUnavailable},
-		{name: "unknown well known", method: http.MethodGet, path: "/api/v1/.well-known/unknown", want: http.StatusNotFound},
-		{name: "well known missing provider", method: http.MethodGet, path: "/api/v1/.well-known/openid-configuration", want: http.StatusServiceUnavailable},
+		{name: "device authorization removed", method: http.MethodPost, path: "/device_authorization", body: `{}`, removed: true},
+		{name: "device authorization with params removed", method: http.MethodPost, path: "/device_authorization?client_id=grafana", removed: true},
+		{name: "unknown well known", method: http.MethodGet, path: "/api/v1/.well-known/unknown", removed: true},
+		{name: "legacy well known removed", method: http.MethodGet, path: "/api/v1/.well-known/openid-configuration", removed: true},
 		{name: "prefixed discovery missing provider", method: http.MethodGet, path: "/api/v1/oidc/.well-known/openid-configuration", want: http.StatusServiceUnavailable},
-		{name: "legacy jwks missing provider", method: http.MethodGet, path: "/api/v1/keys", want: http.StatusServiceUnavailable},
+		{name: "legacy jwks removed", method: http.MethodGet, path: "/api/v1/keys", removed: true},
 		{name: "prefixed jwks missing provider", method: http.MethodGet, path: "/api/v1/oidc/jwks", want: http.StatusServiceUnavailable},
-		{name: "legacy authorize missing params", method: http.MethodGet, path: "/api/v1/authorize", want: http.StatusBadRequest},
-		{name: "legacy authorize missing provider", method: http.MethodGet, path: "/api/v1/authorize?client_id=grafana&response_type=code&redirect_uri=https://grafana.example/callback", want: http.StatusServiceUnavailable},
+		{name: "legacy authorize removed", method: http.MethodGet, path: "/api/v1/authorize", removed: true},
+		{name: "legacy authorize with params removed", method: http.MethodGet, path: "/api/v1/authorize?client_id=grafana&response_type=code&redirect_uri=https://grafana.example/callback", removed: true},
 		{name: "prefixed authorize missing provider", method: http.MethodGet, path: "/api/v1/oidc/authorize?client_id=grafana&response_type=code&redirect_uri=https://grafana.example/callback", want: http.StatusServiceUnavailable},
-		{name: "legacy userinfo missing bearer", method: http.MethodGet, path: "/api/v1/userinfo", want: http.StatusUnauthorized},
-		{name: "legacy userinfo missing provider", method: http.MethodGet, path: "/api/v1/userinfo", headers: map[string]string{"Authorization": "Bearer access-1"}, want: http.StatusServiceUnavailable},
+		{name: "legacy userinfo removed", method: http.MethodGet, path: "/api/v1/userinfo", removed: true},
+		{name: "legacy userinfo with bearer removed", method: http.MethodGet, path: "/api/v1/userinfo", headers: map[string]string{"Authorization": "Bearer access-1"}, removed: true},
 		{name: "prefixed userinfo missing provider", method: http.MethodGet, path: "/api/v1/oidc/userinfo", headers: map[string]string{"Authorization": "Bearer access-1"}, want: http.StatusServiceUnavailable},
-		{name: "legacy callback missing params", method: http.MethodGet, path: "/api/v1/authorize/callback", want: http.StatusBadRequest},
-		{name: "legacy callback missing provider", method: http.MethodGet, path: "/api/v1/authorize/callback?code=code-1&state=state-1", want: http.StatusServiceUnavailable},
+		{name: "legacy callback removed", method: http.MethodGet, path: "/api/v1/authorize/callback", removed: true},
+		{name: "legacy callback with params removed", method: http.MethodGet, path: "/api/v1/authorize/callback?code=code-1&state=state-1", removed: true},
 		{name: "prefixed callback missing provider", method: http.MethodGet, path: "/api/v1/oidc/callback?code=code-1&state=state-1", want: http.StatusServiceUnavailable},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.removed {
+				requestRemovedRoute(t, app, tc.method, tc.path, tc.body, tc.headers)
+				return
+			}
 			requestJSON(t, app, tc.method, tc.path, tc.body, tc.headers, tc.want)
 		})
 	}

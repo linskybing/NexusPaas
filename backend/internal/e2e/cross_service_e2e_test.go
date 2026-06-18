@@ -904,6 +904,7 @@ func (h *e2eHarness) seedIdentityContracts() identityIDs {
 		"expires_at": expires,
 		"revoked":    false,
 	})
+	h.installStaticUserAPIKey(ids.apiToken, ids.userID, "alice-"+h.runID, "user", false)
 	return ids
 }
 
@@ -1323,6 +1324,7 @@ func (h *e2eHarness) assertSchedulerUnavailableDoesNotPersist(ids identityIDs) {
 	before := len(h.listRecords(workloadJobsResource))
 	failing := h.startExtraService("workload-failing-"+h.runID, workloadService, map[string]string{
 		schedulerQuotaService: "http://127.0.0.1:1",
+		orgProjectService:     h.services[orgProjectService].url,
 	})
 	h.submitJob(ids, failing.url, http.StatusServiceUnavailable)
 	after := len(h.listRecords(workloadJobsResource))
@@ -1331,10 +1333,13 @@ func (h *e2eHarness) assertSchedulerUnavailableDoesNotPersist(ids identityIDs) {
 	}
 	beforeBadRemoteKeyJobs := len(h.listRecords(workloadJobsResource))
 	beforeBadRemoteKeyAdmissions := len(h.listRecords(schedulerAdmissionsResource))
-	badKeyWorkload := h.startExtraServiceWithConfig("workload-bad-key-"+h.runID, workloadService, map[string]string{
-		schedulerQuotaService: h.services[schedulerQuotaService].url,
-	}, func(cfg *platform.Config) {
-		cfg.ServiceAPIKey = "wrong-" + h.serviceKey
+	unauthorizedScheduler := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		platform.WriteError(w, r, http.StatusUnauthorized, "unauthorized", "bad scheduler service key")
+	}))
+	h.t.Cleanup(unauthorizedScheduler.Close)
+	badKeyWorkload := h.startExtraService("workload-bad-key-"+h.runID, workloadService, map[string]string{
+		schedulerQuotaService: unauthorizedScheduler.URL,
+		orgProjectService:     h.services[orgProjectService].url,
 	})
 	h.submitJob(ids, badKeyWorkload.url, http.StatusUnauthorized)
 	if afterJobs := len(h.listRecords(workloadJobsResource)); afterJobs != beforeBadRemoteKeyJobs {

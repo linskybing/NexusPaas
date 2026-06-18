@@ -121,9 +121,6 @@ func classifyResourceLiteral(
 
 func registeredResourceDependencyKeys() map[serviceResourceKey]bool {
 	out := map[serviceResourceKey]bool{}
-	for _, dependency := range serviceStoreDependencies() {
-		out[serviceResourceKey{service: dependency.service, resource: dependency.resource}] = true
-	}
 	for _, dependency := range serviceOwnerReadDependencies() {
 		out[serviceResourceKey{service: dependency.service, resource: dependency.resource}] = true
 	}
@@ -219,22 +216,6 @@ func resourceOwner(resource string) string {
 	return owner
 }
 
-func TestServiceStoreDependencyResourcesAreUnique(t *testing.T) {
-	var keys []string
-	seen := map[string]bool{}
-	for _, dependency := range serviceStoreDependencies() {
-		key := dependency.service + " -> " + dependency.resource
-		if seen[key] {
-			t.Fatalf("duplicate store dependency %s", key)
-		}
-		seen[key] = true
-		keys = append(keys, key)
-	}
-	if !slices.IsSorted(keys) {
-		t.Fatalf("store dependencies must stay sorted for deterministic startup diagnostics: %v", keys)
-	}
-}
-
 func TestServiceOwnerReadDependencyResourcesAreUnique(t *testing.T) {
 	var keys []string
 	seen := map[string]bool{}
@@ -248,13 +229,5 @@ func TestServiceOwnerReadDependencyResourcesAreUnique(t *testing.T) {
 	}
 	if !slices.IsSorted(keys) {
 		t.Fatalf("owner-read dependencies must stay sorted for deterministic startup diagnostics: %v", keys)
-	}
-}
-
-func TestWorkloadUsesStorageMountPlanContractNotStoreDependency(t *testing.T) {
-	for _, dependency := range serviceStoreDependencies() {
-		if dependency.service == serviceWorkload && resourceOwner(dependency.resource) == serviceStorage {
-			t.Fatalf("workload-service must use storage mount-plan service contract, not generic RecordStore dependency %s", dependency.resource)
-		}
 	}
 }

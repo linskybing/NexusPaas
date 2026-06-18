@@ -26,7 +26,7 @@ const (
 // the per-project/per-pod helpers stay small.
 type planWindowReaper struct {
 	cl              *cluster.Client
-	evictor         workloadEvictionClient
+	evictor         workloadEvictFunc
 	deletionEnabled bool
 }
 
@@ -41,7 +41,7 @@ func reapExpiredPlanWindows(
 	ctx context.Context,
 	cl *cluster.Client,
 	store platform.RecordStore,
-	evictor workloadEvictionClient,
+	evictor workloadEvictFunc,
 	now time.Time,
 	deletionEnabled bool,
 ) error {
@@ -53,7 +53,7 @@ func reapExpiredPlanWindowsWithReader(
 	cl *cluster.Client,
 	store platform.RecordStore,
 	reader admissionReader,
-	evictor workloadEvictionClient,
+	evictor workloadEvictFunc,
 	now time.Time,
 	deletionEnabled bool,
 ) error {
@@ -79,7 +79,7 @@ func reapExpiredPlanWindowsWithReader(
 // grace; the weekly window is checked at checkTime (now - grace) to avoid flapping.
 func planWindowEvictionReason(
 	ctx context.Context,
-	repo schedulerQuotaRepository,
+	repo *recordStoreSchedulerQuotaRepository,
 	project contracts.Record[map[string]any],
 	now, checkTime time.Time,
 ) string {
@@ -149,7 +149,7 @@ func (r planWindowReaper) evictPlanWindowPod(ctx context.Context, namespace stri
 	// authoritative state transition. Only after it succeeds do we delete the pods, so
 	// a failed or unreachable eviction contract defers pod cleanup to the next cycle
 	// instead of orphaning pods against a still-active job record (review Finding 1).
-	if err := r.evictor.Evict(ctx, jobID, workloadEvictRequest{Reason: reason}); err != nil {
+	if err := r.evictor(ctx, jobID, workloadEvictRequest{Reason: reason}); err != nil {
 		slog.Warn("plan window reaper: mark job evicted failed, deferring pod cleanup",
 			"job_id", jobID, "namespace", namespace, "reason", reason, "error", err)
 		return

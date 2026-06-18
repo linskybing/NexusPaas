@@ -7,63 +7,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 )
 
-const (
-	forwardMonolithAdapter = "monolith"
-	forwardProxyHeader     = "X-Proxy-Test"
-)
-
-func TestProxyForwarderExecutesTargetServiceRoute(t *testing.T) {
-	app := NewApp(Config{ServiceName: "all", HTTPAddr: ":0"})
-	current := RouteSpec{Method: http.MethodGet, Pattern: "/api/v1/{path...}", Resource: "platform-gateway:compat_proxy", Action: "proxy", ExternalAdapter: forwardMonolithAdapter}
-	target := RouteSpec{Method: http.MethodGet, Pattern: "/api/v1/users/{id}", Resource: "identity-service:users", Action: "get", IDParam: "id"}
-	app.Routes = []RouteSpec{current, target}
-	app.CatalogRoutes = []RouteSpec{current, target}
-	app.Switches.Enable(current.Pattern, "identity-service")
-	_, _ = app.Store.Create(httptest.NewRequest(http.MethodGet, "/", nil).Context(), "identity-service:users", map[string]any{"id": "u1", "name": "Ada"})
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/u1", nil)
-	forwarded, ok := app.forwardToService(&httpRequest{Request: req, Service: "platform-gateway", TraceID: "trace"}, current)
-	if !ok {
-		t.Fatal("proxy forwarder did not handle service target")
-	}
-	if forwarded.status != http.StatusOK {
-		t.Fatalf("forwarded status = %d, want 200", forwarded.status)
-	}
-	data := forwarded.data.(map[string]any)
-	if data["forwarded"] != true || data["target"] != "identity-service" {
-		t.Fatalf("unexpected forward data: %+v", data)
-	}
-	response := data["response"].(contracts.Record[map[string]any])
-	if response.ID != "u1" {
-		t.Fatalf("forwarded response id = %q, want u1", response.ID)
-	}
-}
-
-func TestProxyForwarderPreservesTargetProxyAction(t *testing.T) {
-	app := NewApp(Config{ServiceName: "all", HTTPAddr: ":0"})
-	current := RouteSpec{Method: http.MethodGet, Pattern: "/api/v1/{path...}", Resource: "platform-gateway:compat_proxy", Action: "proxy", ExternalAdapter: forwardMonolithAdapter}
-	target := RouteSpec{Method: http.MethodGet, Pattern: "/api/v1/ide/proxy/{podName}/{path...}", Resource: "ide-service:ide_proxy", Action: "proxy", IDParam: "podName", ExternalAdapter: "k8s"}
-	app.Routes = []RouteSpec{current, target}
-	app.CatalogRoutes = []RouteSpec{current, target}
-	app.Switches.Enable(current.Pattern, "ide-service")
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/ide/proxy/pod-1/lab", nil)
-	forwarded, ok := app.forwardToService(&httpRequest{Request: req, Service: "platform-gateway", TraceID: "trace"}, current)
-	if !ok {
-		t.Fatal("proxy forwarder did not handle proxy target")
-	}
-	if forwarded.status != http.StatusOK {
-		t.Fatalf("forwarded proxy status = %d, want 200", forwarded.status)
-	}
-	data := forwarded.data.(map[string]any)
-	if data["degraded"] == nil {
-		t.Fatalf("expected target proxy adapter degraded metadata, got %+v", data)
-	}
-}
+const forwardProxyHeader = "X-Proxy-Test"
 
 func TestProxyActionFailsClosedWithoutAdapter(t *testing.T) {
 	app := NewApp(Config{ServiceName: "all", HTTPAddr: ":0"})
@@ -157,7 +103,7 @@ func TestProxyActionPropagatesExternalAdapterResponse(t *testing.T) {
 	app := NewApp(Config{
 		ServiceName:  "all",
 		HTTPAddr:     ":0",
-		ExternalURLs: map[string]string{forwardMonolithAdapter: upstream.URL},
+		ExternalURLs: map[string]string{"test-proxy": upstream.URL},
 	})
 	app.RegisterService(ServiceSpec{
 		Name: "platform-gateway",
@@ -166,7 +112,7 @@ func TestProxyActionPropagatesExternalAdapterResponse(t *testing.T) {
 			Pattern:         "/api/v1/{path...}",
 			Resource:        "compat_proxy",
 			Action:          "proxy",
-			ExternalAdapter: forwardMonolithAdapter,
+			ExternalAdapter: "test-proxy",
 		}},
 	})
 

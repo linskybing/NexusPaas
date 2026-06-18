@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"time"
@@ -18,6 +20,165 @@ import (
 )
 
 const internalRecordsPath = "/internal/records"
+
+const (
+	defaultInternalJSONResponseLimit int64 = 8 << 20
+	serviceKeyHeader                       = "X-Service-Key"
+)
+
+// InternalJSONClient calls explicit service-to-service JSON contracts. It keeps
+// service wrappers responsible for path construction, payloads, and status
+// mapping; the shared client only owns local/remote transport and envelope
+// decoding.
+type InternalJSONClient struct {
+	app    *App
+	owner  string
+	client *http.Client
+}
+
+type InternalJSONRequest struct {
+	Method        string
+	Path          string
+	Query         url.Values
+	Headers       http.Header
+	Body          any
+	Response      any
+	ResponseLimit int64
+}
+
+type InternalJSONResponse struct {
+	StatusCode    int
+	Header        http.Header
+	EnvelopeError *ErrorBody
+}
+
+func NewInternalJSONClient(app *App, owner string) InternalJSONClient {
+	timeout := 2 * time.Second
+	if app != nil && app.Config.AdapterTimeout > 0 {
+		timeout = app.Config.AdapterTimeout
+	}
+	return InternalJSONClient{
+		app:    app,
+		owner:  owner,
+		client: &http.Client{Timeout: timeout, Transport: otelhttp.NewTransport(http.DefaultTransport)},
+	}
+}
+
+func (c InternalJSONClient) Do(ctx context.Context, req InternalJSONRequest) (InternalJSONResponse, error) {
+	if c.app == nil {
+		return InternalJSONResponse{}, fmt.Errorf("internal JSON client is not configured")
+	}
+	method := req.Method
+	if method == "" {
+		method = http.MethodGet
+	}
+	body, err := encodeInternalJSONBody(req.Body)
+	if err != nil {
+		return InternalJSONResponse{}, err
+	}
+	headers := cloneInternalJSONHeaders(req.Headers)
+	if req.Body != nil && strings.TrimSpace(headers.Get("Content-Type")) == "" {
+		headers.Set("Content-Type", "application/json")
+	}
+	if serviceKey := strings.TrimSpace(c.app.Config.ServiceAPIKey); serviceKey != "" {
+		headers.Set(serviceKeyHeader, serviceKey)
+	}
+	if c.app.Config.AllowsService(c.owner) {
+		return c.doLocal(ctx, method, req.Path, req.Query, headers, body, req)
+	}
+	return c.doRemote(ctx, method, req.Path, req.Query, headers, body, req)
+}
+
+func (c InternalJSONClient) doLocal(ctx context.Context, method, requestPath string, query url.Values, headers http.Header, body []byte, spec InternalJSONRequest) (InternalJSONResponse, error) {
+	target := requestPath
+	if encoded := query.Encode(); encoded != "" {
+		target += "?" + encoded
+	}
+	httpReq := httptest.NewRequest(method, target, bytes.NewReader(body)).WithContext(ctx)
+	copyInternalJSONHeaders(httpReq.Header, headers)
+	rec := httptest.NewRecorder()
+	c.app.ServeHTTP(rec, httpReq)
+	return decodeInternalJSONResponse(rec.Code, rec.Header(), rec.Body.Bytes(), spec)
+}
+
+func (c InternalJSONClient) doRemote(ctx context.Context, method, requestPath string, query url.Values, headers http.Header, body []byte, spec InternalJSONRequest) (InternalJSONResponse, error) {
+	baseURL := strings.TrimSpace(c.app.Config.ServiceURLs[c.owner])
+	if baseURL == "" {
+		return InternalJSONResponse{}, fmt.Errorf("no SERVICE_URLS entry for owner %q", c.owner)
+	}
+	endpoint, err := serviceEndpoint(baseURL, requestPath, query.Encode())
+	if err != nil {
+		return InternalJSONResponse{}, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return InternalJSONResponse{}, err
+	}
+	copyInternalJSONHeaders(httpReq.Header, headers)
+	client := c.client
+	if client == nil {
+		client = NewInternalJSONClient(c.app, c.owner).client
+	}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return InternalJSONResponse{}, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, internalJSONLimit(spec)))
+	if err != nil {
+		return InternalJSONResponse{StatusCode: resp.StatusCode, Header: resp.Header.Clone()}, err
+	}
+	return decodeInternalJSONResponse(resp.StatusCode, resp.Header, raw, spec)
+}
+
+func encodeInternalJSONBody(body any) ([]byte, error) {
+	if body == nil {
+		return nil, nil
+	}
+	return json.Marshal(body)
+}
+
+func decodeInternalJSONResponse(status int, header http.Header, raw []byte, spec InternalJSONRequest) (InternalJSONResponse, error) {
+	out := InternalJSONResponse{StatusCode: status, Header: header.Clone()}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return out, nil
+	}
+	var envelope struct {
+		Data  json.RawMessage `json:"data"`
+		Error *ErrorBody      `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return out, err
+	}
+	out.EnvelopeError = envelope.Error
+	if spec.Response != nil && len(envelope.Data) > 0 && string(envelope.Data) != "null" {
+		if err := json.Unmarshal(envelope.Data, spec.Response); err != nil {
+			return out, err
+		}
+	}
+	return out, nil
+}
+
+func internalJSONLimit(spec InternalJSONRequest) int64 {
+	if spec.ResponseLimit > 0 {
+		return spec.ResponseLimit
+	}
+	return defaultInternalJSONResponseLimit
+}
+
+func cloneInternalJSONHeaders(src http.Header) http.Header {
+	dst := http.Header{}
+	copyInternalJSONHeaders(dst, src)
+	return dst
+}
+
+func copyInternalJSONHeaders(dst, src http.Header) {
+	for key, values := range src {
+		for _, value := range values {
+			dst.Add(key, value)
+		}
+	}
+}
 
 // CrossServiceReader resolves reads of resources owned by other services. The
 // remote implementation calls explicit owning-service read contracts so an
@@ -185,7 +346,7 @@ func (rr *RemoteServiceReader) fetchPath(ctx context.Context, owner, requestPath
 		return nil, 0, err
 	}
 	if rr.apiKey != "" {
-		req.Header.Set("X-Service-Key", rr.apiKey)
+		req.Header.Set(serviceKeyHeader, rr.apiKey)
 	}
 	resp, err := rr.client.Do(req)
 	if err != nil {
@@ -249,6 +410,6 @@ func (a *App) ServiceRequestAuthorized(r *http.Request) bool {
 	if a.Config.ServiceAPIKey == "" {
 		return false
 	}
-	key := r.Header.Get("X-Service-Key")
+	key := r.Header.Get(serviceKeyHeader)
 	return subtle.ConstantTimeCompare([]byte(key), []byte(a.Config.ServiceAPIKey)) == 1
 }

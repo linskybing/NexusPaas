@@ -28,35 +28,19 @@ const (
 
 var errWorkloadConfigRepositoryUnavailable = errors.New("workload config repository unavailable")
 
-type workloadConfigRepository interface {
-	NextConfigID() string
-	NextVersionID() string
-	NextCommandID() string
-	CreateConfig(context.Context, map[string]any) (contracts.Record[map[string]any], error)
-	GetConfig(context.Context, string) (contracts.Record[map[string]any], bool)
-	UpdateConfig(context.Context, string, map[string]any) (contracts.Record[map[string]any], bool)
-	DeleteConfig(context.Context, string) bool
-	ListConfigsByProject(context.Context, string) []contracts.Record[map[string]any]
-	CreateVersion(context.Context, string, map[string]any, string, time.Time) (contracts.Record[map[string]any], error)
-	GetVersion(context.Context, string) (contracts.Record[map[string]any], bool)
-	ListVersionsForConfigs(context.Context, map[string]bool) []contracts.Record[map[string]any]
-	ListInstancesByConfig(context.Context, string) []contracts.Record[map[string]any]
-	CreateInstanceCommand(context.Context, string, string, map[string]any, time.Time) (contracts.Record[map[string]any], error)
-}
-
 type recordStoreWorkloadConfigRepository struct {
 	store platform.RecordStore
 }
 
-func configRepository(app *platform.App) workloadConfigRepository {
+func configRepository(app *platform.App) *recordStoreWorkloadConfigRepository {
 	if app == nil {
-		return recordStoreWorkloadConfigRepository{}
+		return &recordStoreWorkloadConfigRepository{}
 	}
 	return configRepositoryFromStore(app.Store)
 }
 
-func configRepositoryFromStore(store platform.RecordStore) workloadConfigRepository {
-	return recordStoreWorkloadConfigRepository{store: store}
+func configRepositoryFromStore(store platform.RecordStore) *recordStoreWorkloadConfigRepository {
+	return &recordStoreWorkloadConfigRepository{store: store}
 }
 
 func (r recordStoreWorkloadConfigRepository) NextConfigID() string {
@@ -97,6 +81,18 @@ func (r recordStoreWorkloadConfigRepository) DeleteConfig(ctx context.Context, i
 	return r.delete(ctx, configsResource, id)
 }
 
+func (r recordStoreWorkloadConfigRepository) ListConfigs(ctx context.Context) []contracts.Record[map[string]any] {
+	records := r.listMatching(ctx, configsResource, func(contracts.Record[map[string]any]) bool {
+		return true
+	})
+	sort.SliceStable(records, func(i, j int) bool {
+		left := configSortKey(records[i])
+		right := configSortKey(records[j])
+		return left < right
+	})
+	return records
+}
+
 func (r recordStoreWorkloadConfigRepository) ListConfigsByProject(
 	ctx context.Context,
 	projectID string,
@@ -110,6 +106,27 @@ func (r recordStoreWorkloadConfigRepository) ListConfigsByProject(
 		return left < right
 	})
 	return records
+}
+
+func (r recordStoreWorkloadConfigRepository) CommitVersion(
+	ctx context.Context,
+	configID string,
+	data map[string]any,
+	now time.Time,
+) (contracts.Record[map[string]any], error) {
+	if r.store == nil {
+		return contracts.Record[map[string]any]{}, errWorkloadConfigRepositoryUnavailable
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	version := shared.CloneMap(data)
+	sum := sha256.Sum256([]byte(shared.TextValue(version, "content")))
+	version["sha256"] = hex.EncodeToString(sum[:])
+	version["immutable"] = true
+	version["config_id"] = shared.FirstNonEmpty(shared.TextValue(version, "config_id", "configId"), configID)
+	version["committed_at"] = now.UTC().Format(time.RFC3339)
+	return r.create(ctx, versionsResource, version)
 }
 
 func (r recordStoreWorkloadConfigRepository) CreateVersion(

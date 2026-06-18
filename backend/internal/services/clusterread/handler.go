@@ -3,7 +3,6 @@ package clusterread
 import (
 	"encoding/json"
 	"fmt"
-	"maps"
 	"net/http"
 	"sort"
 	"strings"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
+	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
 
 const (
@@ -169,9 +169,9 @@ func clusterSummary(app *platform.App, r *http.Request) map[string]any {
 	}
 	record := records[len(records)-1]
 	if summary := mapValue(record.Data, "summary", "Summary"); len(summary) > 0 {
-		return cloneMap(summary)
+		return shared.CloneMap(summary)
 	}
-	return cloneMap(record.Data)
+	return shared.CloneMap(record.Data)
 }
 
 func emptySummary() map[string]any {
@@ -191,7 +191,7 @@ func emptySummary() map[string]any {
 }
 
 func publicSummary(summary map[string]any) map[string]any {
-	out := cloneMap(summary)
+	out := shared.CloneMap(summary)
 	delete(out, "nodes")
 	delete(out, "Nodes")
 	delete(out, "podGpuUsages")
@@ -205,7 +205,7 @@ func nodeList(summary map[string]any) []map[string]any {
 	out := make([]map[string]any, 0, len(nodes))
 	for _, raw := range nodes {
 		if node, ok := raw.(map[string]any); ok {
-			out = append(out, cloneMap(node))
+			out = append(out, shared.CloneMap(node))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -219,7 +219,7 @@ func podGPUUsages(summary map[string]any) []map[string]any {
 	out := make([]map[string]any, 0, len(usages))
 	for _, raw := range usages {
 		if usage, ok := raw.(map[string]any); ok {
-			out = append(out, cloneMap(usage))
+			out = append(out, shared.CloneMap(usage))
 		}
 	}
 	return out
@@ -459,14 +459,14 @@ func proxyPolicyProjection(event contracts.Event) (string, map[string]any, bool,
 
 func clusterEventData(event contracts.Event) map[string]any {
 	if next, ok := event.Data["new"].(map[string]any); ok {
-		return cloneMap(next)
+		return shared.CloneMap(next)
 	}
-	return cloneMap(event.Data)
+	return shared.CloneMap(event.Data)
 }
 
 func groupMembershipProjectionData(event contracts.Event) (map[string]any, bool) {
 	if next, ok := event.Data["new"].(map[string]any); ok {
-		return cloneMap(next), false
+		return shared.CloneMap(next), false
 	}
 	data := clusterEventData(event)
 	action := strings.ToLower(textValue(data, keyAction))
@@ -524,13 +524,13 @@ func readModelID(resource string, data map[string]any) string {
 			return roleID + ":" + userID
 		}
 	case clusterProjectsResource:
-		return firstNonEmpty(id, projectID)
+		return shared.FirstNonBlank(id, projectID)
 	case clusterIdentityRolesResource, clusterPolicyRolesResource:
-		return firstNonEmpty(id, roleID, name, userID)
+		return shared.FirstNonBlank(id, roleID, name, userID)
 	case clusterIdentityUsersResource:
-		return firstNonEmpty(id, userID)
+		return shared.FirstNonBlank(id, userID)
 	}
-	return firstNonEmpty(id, projectID, userID, groupID, roleID, name)
+	return shared.FirstNonBlank(id, projectID, userID, groupID, roleID, name)
 }
 
 func clusterRecords(app *platform.App, r *http.Request, localResource, sourceResource string) []map[string]any {
@@ -572,7 +572,7 @@ func recordMaps(app *platform.App, r *http.Request, resource string) []map[strin
 	records := app.Store.List(r.Context(), resource)
 	out := make([]map[string]any, 0, len(records))
 	for _, record := range records {
-		out = append(out, cloneMap(record.Data))
+		out = append(out, shared.CloneMap(record.Data))
 	}
 	return out
 }
@@ -643,20 +643,4 @@ func anySlice(data map[string]any, keys ...string) []any {
 		}
 	}
 	return nil
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
-}
-
-func cloneMap(in map[string]any) map[string]any {
-	if in == nil {
-		return map[string]any{}
-	}
-	return maps.Clone(in)
 }

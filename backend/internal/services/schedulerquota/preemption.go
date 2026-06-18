@@ -147,6 +147,9 @@ func explicitPreemptionOverride(payload map[string]any) bool {
 }
 
 func authorizedPreemptionOverride(app *platform.App, r *http.Request) bool {
+	if app.ServiceRequestAuthorized(r) {
+		return true
+	}
 	if !app.Config.RequireAuth {
 		return false
 	}
@@ -193,38 +196,16 @@ func selectPreemptionVictims(app *platform.App, req preemptionRequest, candidate
 		eligible = append(eligible, preemptionTarget{workloadJobSnapshot: candidate})
 	}
 	sort.SliceStable(eligible, func(i, j int) bool {
-		if eligible[i].PriorityValue != eligible[j].PriorityValue {
-			return eligible[i].PriorityValue < eligible[j].PriorityValue
-		}
-		left := parsePreemptionTime(eligible[i].CreatedAt)
-		right := parsePreemptionTime(eligible[j].CreatedAt)
-		if !left.Equal(right) {
-			return left.Before(right)
-		}
-		return eligible[i].JobID < eligible[j].JobID
+		return preemptionTargetPreferred(eligible[i], eligible[j])
 	})
-	selected := make([]preemptionTarget, 0, req.MaxPreemptions)
-	freedGPU := 0.0
-	freedCPU := 0.0
-	for _, candidate := range eligible {
-		if preemptionDemandSatisfied(req, freedGPU, freedCPU) {
-			break
-		}
-		if len(selected) >= req.MaxPreemptions {
-			break
-		}
-		selected = append(selected, candidate)
-		freedGPU += candidate.RequiredGPU
-		freedCPU += candidate.RequiredCPU
-	}
-	if !preemptionDemandSatisfied(req, freedGPU, freedCPU) {
-		return nil, 0, 0
-	}
-	return selected, freedGPU, freedCPU
+	return selectMinimalPreemptionVictims(req, eligible)
 }
 
 func candidateEligibleForPreemption(app *platform.App, req preemptionRequest, candidate workloadJobSnapshot) bool {
 	if candidate.JobID == "" || candidate.JobID == req.RequesterJobID || candidate.ID == req.RequesterJobID {
+		return false
+	}
+	if req.ProjectID != "" && candidate.ProjectID != req.ProjectID {
 		return false
 	}
 	if !preemptibleWorkloadStatus(candidate.Status) || candidate.PriorityValue >= req.PriorityValue {
@@ -245,7 +226,7 @@ func candidateEligibleForPreemption(app *platform.App, req preemptionRequest, ca
 	return candidate.RequiredGPU > 0 || candidate.RequiredCPU > 0
 }
 
-func preflightPreemptionVictims(app *platform.App, r *http.Request, client workloadPreemptionClient, req preemptionRequest, victims []preemptionTarget) error {
+func preflightPreemptionVictims(app *platform.App, r *http.Request, client internalWorkloadPreemptionClient, req preemptionRequest, victims []preemptionTarget) error {
 	ctx, err := client.Context(r.Context(), req)
 	if err != nil {
 		return preemptionHTTPError{status: http.StatusServiceUnavailable, message: err.Error()}
@@ -273,8 +254,8 @@ func preflightPreemptionVictims(app *platform.App, r *http.Request, client workl
 type preemptionExecution struct {
 	app      *platform.App
 	request  *http.Request
-	client   workloadPreemptionClient
-	repo     schedulerPreemptionPriorityRepository
+	client   internalWorkloadPreemptionClient
+	repo     *recordStoreSchedulerPreemptionPriorityRepository
 	recordID string
 	req      preemptionRequest
 	victims  []preemptionTarget
@@ -358,7 +339,7 @@ func initialPreemptionRecord(id string, req preemptionRequest) map[string]any {
 
 func finishPreemptionRecord(
 	ctx context.Context,
-	repo schedulerPreemptionPriorityRepository,
+	repo *recordStoreSchedulerPreemptionPriorityRepository,
 	id, status string,
 	updates map[string]any,
 ) map[string]any {
@@ -371,14 +352,14 @@ func finishPreemptionRecord(
 	return repo.FinishPreemptionRecord(ctx, id, status, updates, time.Now().UTC())
 }
 
-func appendVictimResult(ctx context.Context, repo schedulerPreemptionPriorityRepository, id string, victim map[string]any) {
+func appendVictimResult(ctx context.Context, repo *recordStoreSchedulerPreemptionPriorityRepository, id string, victim map[string]any) {
 	if repo == nil {
 		return
 	}
 	repo.AppendPreemptionVictim(ctx, id, victim)
 }
 
-func preemptionRecordVictims(ctx context.Context, repo schedulerPreemptionPriorityRepository, id string) []map[string]any {
+func preemptionRecordVictims(ctx context.Context, repo *recordStoreSchedulerPreemptionPriorityRepository, id string) []map[string]any {
 	if repo == nil {
 		return nil
 	}
@@ -419,7 +400,7 @@ func preemptionFingerprint(req preemptionRequest) string {
 
 func (req preemptionRequest) contextQuery() url.Values {
 	query := url.Values{}
-	if req.RequesterJobID != "" {
+	if req.RequesterJobID != "" && !req.Override {
 		query.Set("requester_job_id", req.RequesterJobID)
 	}
 	if req.ProjectID != "" {
@@ -489,6 +470,71 @@ func clampMaxPreemptions(value int) int {
 		return defaultMaxPreemptions
 	}
 	return value
+}
+
+func selectMinimalPreemptionVictims(req preemptionRequest, eligible []preemptionTarget) ([]preemptionTarget, float64, float64) {
+	maxVictims := req.MaxPreemptions
+	if maxVictims > len(eligible) {
+		maxVictims = len(eligible)
+	}
+	if maxVictims <= 0 {
+		return nil, 0, 0
+	}
+	for targetSize := 1; targetSize <= maxVictims; targetSize++ {
+		selection := make([]preemptionTarget, 0, targetSize)
+		if victims, freedGPU, freedCPU, ok := findPreemptionVictimCombination(req, eligible, selection, 0, targetSize, 0, 0); ok {
+			return victims, freedGPU, freedCPU
+		}
+	}
+	return nil, 0, 0
+}
+
+func findPreemptionVictimCombination(
+	req preemptionRequest,
+	eligible []preemptionTarget,
+	selection []preemptionTarget,
+	start, remaining int,
+	freedGPU, freedCPU float64,
+) ([]preemptionTarget, float64, float64, bool) {
+	if remaining == 0 {
+		if preemptionDemandSatisfied(req, freedGPU, freedCPU) {
+			return append([]preemptionTarget{}, selection...), freedGPU, freedCPU, true
+		}
+		return nil, 0, 0, false
+	}
+	if len(eligible)-start < remaining {
+		return nil, 0, 0, false
+	}
+	for i := start; i <= len(eligible)-remaining; i++ {
+		candidate := eligible[i]
+		selection = append(selection, candidate)
+		victims, gpu, cpu, ok := findPreemptionVictimCombination(
+			req,
+			eligible,
+			selection,
+			i+1,
+			remaining-1,
+			freedGPU+candidate.RequiredGPU,
+			freedCPU+candidate.RequiredCPU,
+		)
+		if ok {
+			return victims, gpu, cpu, true
+		}
+		selection = selection[:len(selection)-1]
+	}
+	return nil, 0, 0, false
+}
+
+func preemptionTargetPreferred(left, right preemptionTarget) bool {
+	if left.PriorityValue != right.PriorityValue {
+		return left.PriorityValue < right.PriorityValue
+	}
+	leftTime := parsePreemptionTime(left.CreatedAt)
+	rightTime := parsePreemptionTime(right.CreatedAt)
+	if !leftTime.Equal(rightTime) {
+		return leftTime.After(rightTime)
+	}
+	return left.JobID < right.JobID
 }
 
 func parsePreemptionTime(value string) time.Time {

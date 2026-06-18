@@ -47,9 +47,9 @@ func findProject(app *platform.App, r *http.Request, id string) (map[string]any,
 
 func normalizeProjectRecord(data map[string]any, id string) map[string]any {
 	project := shared.CloneMap(data)
-	id = firstNonEmpty(id, projectID(project))
-	name := firstNonEmpty(shared.TextValue(project, "project_name", "ProjectName"), shared.TextValue(project, "name"))
-	ownerID := firstNonEmpty(shared.TextValue(project, "owner_id", "ownerId"), shared.TextValue(project, "g_id", "gid", "GID"))
+	id = shared.FirstNonBlank(id, projectID(project))
+	name := shared.FirstNonBlank(shared.TextValue(project, "project_name", "ProjectName"), shared.TextValue(project, "name"))
+	ownerID := shared.FirstNonBlank(shared.TextValue(project, "owner_id", "ownerId"), shared.TextValue(project, "g_id", "gid", "GID"))
 	if id != "" {
 		project["id"] = id
 		project["p_id"] = id
@@ -166,7 +166,7 @@ func decorateProjectMember(app *platform.App, r *http.Request, projectID string,
 	uid := shared.TextValue(out, "user_id", "userId", "uid", "u_id")
 	out["user_id"] = uid
 	out["project_id"] = projectID
-	out["role"] = normalizeProjectRole(firstNonEmpty(shared.TextValue(out, "role"), "user"))
+	out["role"] = normalizeProjectRole(shared.FirstNonBlank(shared.TextValue(out, "role"), "user"))
 	out["source"] = source
 	if user, found := findUser(app, r, uid); found {
 		out["username"] = shared.TextValue(user, "username", "Username")
@@ -317,7 +317,7 @@ func gpuClaimRecord(app *platform.App, r *http.Request, projectID, userID string
 	gpuCount := shared.IntValue(payload, "gpu_count", "gpuCount")
 	sm := shared.IntValue(payload, "sm_percentage", "smPercentage")
 	vram := shared.IntValue(payload, "vram_percentage", "vramPercentage")
-	policy := firstNonEmpty(shared.TextValue(payload, "vram_policy", "vramPolicy"), "elastic")
+	policy := shared.FirstNonBlank(shared.TextValue(payload, "vram_policy", "vramPolicy"), "elastic")
 	if name == "" || !dnsLabelLike(name) {
 		return nil, fmt.Errorf("name must be a valid DNS label")
 	}
@@ -338,9 +338,9 @@ func gpuClaimRecord(app *platform.App, r *http.Request, projectID, userID string
 	}
 	username := userID
 	if user, found := findUser(app, r, userID); found {
-		username = firstNonEmpty(shared.TextValue(user, "username"), userID)
+		username = shared.FirstNonBlank(shared.TextValue(user, "username"), userID)
 	}
-	namespace := firstNonEmpty(shared.TextValue(payload, "namespace"), "project-"+safeK8sPart(projectID)+"-"+safeK8sPart(username))
+	namespace := shared.FirstNonBlank(shared.TextValue(payload, "namespace"), "project-"+safeK8sPart(projectID)+"-"+safeK8sPart(username))
 	now := time.Now().UTC()
 	return map[string]any{
 		"id":                gpuClaimID(projectID, namespace, name),
@@ -369,7 +369,7 @@ func findGPUClaim(app *platform.App, r *http.Request, projectID, name, namespace
 }
 
 func applyProjectMutableFields(out, payload map[string]any, create bool) {
-	if name := firstNonEmpty(shared.TextValue(payload, "project_name", "ProjectName"), shared.TextValue(payload, "name")); name != "" {
+	if name := shared.FirstNonBlank(shared.TextValue(payload, "project_name", "ProjectName"), shared.TextValue(payload, "name")); name != "" {
 		out["project_name"] = name
 		out["ProjectName"] = name
 		out["name"] = name
@@ -378,7 +378,7 @@ func applyProjectMutableFields(out, payload map[string]any, create bool) {
 		out["description"] = description
 		out["Description"] = description
 	}
-	if ownerID := firstNonEmpty(shared.TextValue(payload, "g_id", "gid", "GID"), shared.TextValue(payload, "group_id", "owner_id", "ownerId")); ownerID != "" {
+	if ownerID := shared.FirstNonBlank(shared.TextValue(payload, "g_id", "gid", "GID"), shared.TextValue(payload, "group_id", "owner_id", "ownerId")); ownerID != "" {
 		out["owner_id"] = ownerID
 		out["GID"] = ownerID
 		out["g_id"] = ownerID
@@ -445,12 +445,12 @@ func projectMemberInputs(payload map[string]any) []projectMemberInput {
 			}
 			out = append(out, projectMemberInput{
 				UserID: shared.TextValue(row, "user_id", "userId", "uid", "id"),
-				Role:   normalizeProjectRole(firstNonEmpty(shared.TextValue(row, "role"), "user")),
+				Role:   normalizeProjectRole(shared.FirstNonBlank(shared.TextValue(row, "role"), "user")),
 			})
 		}
 		return out
 	}
-	role := normalizeProjectRole(firstNonEmpty(shared.TextValue(payload, "role"), "user"))
+	role := normalizeProjectRole(shared.FirstNonBlank(shared.TextValue(payload, "role"), "user"))
 	for _, uid := range requestUserIDs(payload) {
 		out = append(out, projectMemberInput{UserID: uid, Role: role})
 	}
@@ -548,7 +548,7 @@ func projectPathID(r *http.Request) string {
 }
 
 func projectUserPathID(r *http.Request) string {
-	return strings.TrimSpace(firstNonEmpty(r.PathValue("userId"), r.PathValue("user_id")))
+	return strings.TrimSpace(shared.FirstNonBlank(r.PathValue("userId"), r.PathValue("user_id")))
 }
 
 func projectID(project map[string]any) string {

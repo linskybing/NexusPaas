@@ -1,7 +1,6 @@
 package authorizationpolicy
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -62,12 +61,7 @@ func parseRuleInputs(value any) ([]map[string]any, error) {
 }
 
 func setPolicyRules(app *platform.App, r *http.Request, policyID string, rules []map[string]any) error {
-	repo, ok := authorizationPolicyRepo(app).(interface {
-		replacePolicyRules(context.Context, string, []map[string]any) error
-	})
-	if !ok {
-		return errAuthorizationPolicyRepositoryUnavailable
-	}
+	repo := authorizationPolicyRepo(app)
 	return repo.replacePolicyRules(r.Context(), policyID, rules)
 }
 
@@ -158,13 +152,7 @@ func findPolicy(app *platform.App, r *http.Request, id string) (map[string]any, 
 }
 
 func composePolicy(app *platform.App, r *http.Request, policy map[string]any) map[string]any {
-	repo, ok := authorizationPolicyRepo(app).(interface {
-		composePolicy(context.Context, map[string]any) map[string]any
-	})
-	if !ok {
-		return policy
-	}
-	return repo.composePolicy(r.Context(), shared.CloneMap(policy))
+	return authorizationPolicyRepo(app).composePolicy(r.Context(), shared.CloneMap(policy))
 }
 
 func requireAdmin(app *platform.App, r *http.Request) (int, any, bool) {

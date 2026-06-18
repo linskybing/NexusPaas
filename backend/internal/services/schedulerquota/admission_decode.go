@@ -94,20 +94,41 @@ func admissionDenied(req submitAdmissionRequest, reason string) map[string]any {
 	}
 }
 
+func admissionDeniedReview(req submitAdmissionRequest, review admissionReview, reason string) map[string]any {
+	review.Allowed = false
+	review.Reason = reason
+	data := admissionReviewData(review)
+	if data["project_id"] == "" {
+		data["project_id"] = req.ProjectID
+	}
+	if data["user_id"] == "" {
+		data["user_id"] = req.UserID
+	}
+	if data["queue_name"] == "" {
+		data["queue_name"] = req.QueueName
+	}
+	if req.JobID != "" {
+		data["job_id"] = req.JobID
+	}
+	return data
+}
+
 func admissionReviewData(review admissionReview) map[string]any {
 	return map[string]any{
-		"allowed":           review.Allowed,
-		"reason":            review.Reason,
-		"project_id":        review.ProjectID,
-		"user_id":           review.UserID,
-		"queue_name":        review.QueueName,
-		"priority_value":    review.QueuePriority,
-		"preemptible":       review.QueuePreemptible,
-		"is_preemptible":    review.QueuePreemptible,
-		"device_class_name": review.DeviceClassName,
-		"required_gpu":      review.RequiredGPU,
-		"required_cpu":      review.RequiredCPU,
-		"required_memory":   review.RequiredMemory,
+		"allowed":               review.Allowed,
+		"reason":                review.Reason,
+		"project_id":            review.ProjectID,
+		"user_id":               review.UserID,
+		"queue_name":            review.QueueName,
+		"priority_value":        review.QueuePriority,
+		"preemptible":           review.QueuePreemptible,
+		"is_preemptible":        review.QueuePreemptible,
+		"runtime_limit_seconds": review.RuntimeLimit,
+		"max_runtime_seconds":   review.RuntimeLimit,
+		"device_class_name":     review.DeviceClassName,
+		"required_gpu":          review.RequiredGPU,
+		"required_cpu":          review.RequiredCPU,
+		"required_memory":       review.RequiredMemory,
 		"usage": map[string]any{
 			"project_gpu":        review.Usage.ProjectGPU,
 			"project_cpu":        review.Usage.ProjectCPU,
@@ -124,7 +145,7 @@ func admissionReviewData(review admissionReview) map[string]any {
 	}
 }
 
-func persistAdmissionReview(ctx context.Context, repo schedulerQuotaRepository, review admissionReview) {
+func persistAdmissionReview(ctx context.Context, repo *recordStoreSchedulerQuotaRepository, review admissionReview) {
 	if repo == nil {
 		return
 	}

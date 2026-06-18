@@ -9,32 +9,6 @@ import (
 	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
 
-type schedulerQuotaRepository interface {
-	NextQueueID() string
-	NextPlanID() string
-	ListQueues(ctx context.Context) []contracts.Record[map[string]any]
-	GetQueue(ctx context.Context, id string) (contracts.Record[map[string]any], bool)
-	FindQueueByNameOrID(ctx context.Context, value string) (contracts.Record[map[string]any], bool)
-	CreateQueue(ctx context.Context, queue map[string]any) (contracts.Record[map[string]any], error)
-	UpdateQueue(ctx context.Context, id string, update map[string]any) (contracts.Record[map[string]any], bool)
-	DeleteQueueAndRemoveFromPlans(ctx context.Context, id string) bool
-	DeleteQueues(ctx context.Context, ids []string) schedulerDeleteResult
-
-	ListPlans(ctx context.Context) []contracts.Record[map[string]any]
-	GetPlan(ctx context.Context, id string) (contracts.Record[map[string]any], bool)
-	CreatePlan(ctx context.Context, plan map[string]any) (contracts.Record[map[string]any], error)
-	UpdatePlan(ctx context.Context, id string, update map[string]any) (contracts.Record[map[string]any], bool)
-	DeletePlan(ctx context.Context, id string) bool
-	DeletePlans(ctx context.Context, ids []string) schedulerDeleteResult
-	MissingQueues(ctx context.Context, queueIDs []string) []string
-	QueuesForPlan(ctx context.Context, planID string) (contracts.Record[map[string]any], []contracts.Record[map[string]any], bool)
-	BindPlanQueues(ctx context.Context, planID string, queueIDs []string) (contracts.Record[map[string]any], bool)
-
-	GetLiveQuota(ctx context.Context, projectID string) (contracts.Record[map[string]any], bool)
-	DerivedQuotaFromPlan(ctx context.Context, projectID, planID string, now time.Time) (contracts.Record[map[string]any], bool)
-	PersistSubmitAdmissionReview(ctx context.Context, review admissionReview) bool
-}
-
 type schedulerDeleteResult struct {
 	Succeeded int
 	Failed    int
@@ -54,18 +28,18 @@ type recordStoreSchedulerQuotaRepository struct {
 	store platform.RecordStore
 }
 
-func schedulerQuotaRepositoryForApp(app *platform.App) schedulerQuotaRepository {
+func schedulerQuotaRepositoryForApp(app *platform.App) *recordStoreSchedulerQuotaRepository {
 	if app == nil {
 		return nil
 	}
 	return schedulerQuotaRepositoryFromStore(app.Store)
 }
 
-func schedulerQuotaRepositoryFromStore(store platform.RecordStore) schedulerQuotaRepository {
+func schedulerQuotaRepositoryFromStore(store platform.RecordStore) *recordStoreSchedulerQuotaRepository {
 	if store == nil {
 		return nil
 	}
-	return recordStoreSchedulerQuotaRepository{store: store}
+	return &recordStoreSchedulerQuotaRepository{store: store}
 }
 
 func (repo recordStoreSchedulerQuotaRepository) NextQueueID() string {

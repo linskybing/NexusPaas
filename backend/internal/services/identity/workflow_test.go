@@ -174,7 +174,7 @@ func TestIdentityInternalAPITokenAuthRejectsDenylistedCredential(t *testing.T) {
 func TestIdentityOIDCRevokeViaDenylistParameters(t *testing.T) {
 	app := newIdentityTestApp()
 
-	code, data, degraded := oidcRevokeViaDenylist(app, identityRequest(http.MethodPost, "/revoke", ""), platform.RouteSpec{})
+	code, data, degraded := oidcRevokeViaDenylist(app, identityRequest(http.MethodPost, "/api/v1/oidc/revoke", ""), platform.RouteSpec{})
 	if degraded != nil || code != http.StatusBadRequest {
 		t.Fatalf("missing token revoke status=%d degraded=%v data=%#v, want 400", code, degraded, data)
 	}
@@ -183,9 +183,9 @@ func TestIdentityOIDCRevokeViaDenylistParameters(t *testing.T) {
 		name string
 		req  *http.Request
 	}{
-		{name: "form token", req: identityFormRequest(http.MethodPost, "/revoke", "token=opaque-token")},
+		{name: "form token", req: identityFormRequest(http.MethodPost, "/api/v1/oidc/revoke", "token=opaque-token")},
 		{name: "bearer token", req: func() *http.Request {
-			req := identityRequest(http.MethodPost, "/revoke", "")
+			req := identityRequest(http.MethodPost, "/api/v1/oidc/revoke", "")
 			req.Header.Set("Authorization", "Bearer opaque-token")
 			return req
 		}()},
@@ -224,11 +224,14 @@ func TestIdentityRegisterWiresDexProxyAndAuthCleanup(t *testing.T) {
 	app := platform.NewApp(platform.Config{ServiceName: "all", DexURL: "http://127.0.0.1:1", ExternalURLs: map[string]string{}})
 	Register(app)
 
-	if app.CustomHandlers["POST /api/v1/oidc/revoke"] == nil || app.CustomHandlers["POST /revoke"] == nil {
+	if app.CustomHandlers["POST /api/v1/oidc/revoke"] == nil {
 		t.Fatalf("dex revoke proxy handlers not registered: %#v", app.CustomHandlers)
 	}
-	if app.CustomHandlers["POST /oauth/token"] == nil || app.CustomHandlers["POST /device_authorization"] == nil {
-		t.Fatalf("dex token/device proxy handlers not registered: %#v", app.CustomHandlers)
+	if app.CustomHandlers["POST /api/v1/oidc/token"] == nil {
+		t.Fatalf("dex token proxy handler not registered: %#v", app.CustomHandlers)
+	}
+	if app.CustomHandlers["POST /revoke"] != nil || app.CustomHandlers["POST /oauth/token"] != nil || app.CustomHandlers["POST /device_authorization"] != nil {
+		t.Fatalf("legacy dex proxy handlers registered: %#v", app.CustomHandlers)
 	}
 	if !containsString(app.MaintenanceTaskNames(), "identity-auth-cleanup") {
 		t.Fatalf("maintenance tasks = %v, want identity-auth-cleanup", app.MaintenanceTaskNames())
@@ -469,30 +472,22 @@ func TestIdentityOIDCFailClosedDirect(t *testing.T) {
 			return oidcLogin(app, identityRequest(http.MethodPost, "/api/v1/oidc/login", `{"auth_request_id":"req","username":"alice","password":"secret"}`), platform.RouteSpec{})
 		}, status: http.StatusServiceUnavailable},
 		{name: "token form valid", call: func() (int, any, *platform.Degraded) {
-			req := identityFormRequest(http.MethodPost, "/oauth/token", "grant_type=authorization_code&client_id=grafana&code=code-1")
+			req := identityFormRequest(http.MethodPost, "/api/v1/oidc/token", "grant_type=authorization_code&client_id=grafana&code=code-1")
 			return oidcToken(app, req, platform.RouteSpec{})
 		}, status: http.StatusServiceUnavailable},
 		{name: "revoke missing token", call: func() (int, any, *platform.Degraded) {
-			return oidcRevoke(app, identityRequest(http.MethodPost, "/revoke", `{}`), platform.RouteSpec{})
+			return oidcRevoke(app, identityRequest(http.MethodPost, "/api/v1/oidc/revoke", `{}`), platform.RouteSpec{})
 		}, status: http.StatusBadRequest},
-		{name: "device auth valid", call: func() (int, any, *platform.Degraded) {
-			return oidcDeviceAuthorization(app, identityRequest(http.MethodPost, "/device_authorization?client_id=grafana", ""), platform.RouteSpec{})
-		}, status: http.StatusServiceUnavailable},
-		{name: "well-known valid", call: func() (int, any, *platform.Degraded) {
-			req := identityRequest(http.MethodGet, "/api/v1/.well-known/openid-configuration", "")
-			req.SetPathValue("path", "openid-configuration")
-			return oidcWellKnown(app, req, platform.RouteSpec{})
-		}, status: http.StatusServiceUnavailable},
 		{name: "authorize valid", call: func() (int, any, *platform.Degraded) {
-			return oidcAuthorize(app, identityRequest(http.MethodGet, "/api/v1/authorize?client_id=grafana&response_type=code&redirect_uri=https://grafana.example/callback", ""), platform.RouteSpec{})
+			return oidcAuthorize(app, identityRequest(http.MethodGet, "/api/v1/oidc/authorize?client_id=grafana&response_type=code&redirect_uri=https://grafana.example/callback", ""), platform.RouteSpec{})
 		}, status: http.StatusServiceUnavailable},
 		{name: "userinfo bearer", call: func() (int, any, *platform.Degraded) {
-			req := identityRequest(http.MethodGet, "/api/v1/userinfo", "")
+			req := identityRequest(http.MethodGet, "/api/v1/oidc/userinfo", "")
 			req.Header.Set("Authorization", "Bearer access-1")
 			return oidcUserInfo(app, req, platform.RouteSpec{})
 		}, status: http.StatusServiceUnavailable},
 		{name: "callback valid", call: func() (int, any, *platform.Degraded) {
-			return oidcCallback(app, identityRequest(http.MethodGet, "/api/v1/authorize/callback?code=code-1&state=state-1", ""), platform.RouteSpec{})
+			return oidcCallback(app, identityRequest(http.MethodGet, "/api/v1/oidc/callback?code=code-1&state=state-1", ""), platform.RouteSpec{})
 		}, status: http.StatusServiceUnavailable},
 	}
 	for _, tc := range cases {

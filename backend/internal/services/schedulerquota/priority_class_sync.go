@@ -257,7 +257,7 @@ func priorityClassSyncStatus(summary cluster.PriorityClassSyncSummary) string {
 
 func persistPriorityClassSyncSummary(
 	ctx context.Context,
-	repo schedulerPreemptionPriorityRepository,
+	repo *recordStoreSchedulerPreemptionPriorityRepository,
 	data map[string]any,
 ) error {
 	if repo == nil {

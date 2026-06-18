@@ -27,7 +27,7 @@ func publishEvent(app *platform.App, r *http.Request, name string, data map[stri
 		Name:          name,
 		Source:        serviceName,
 		OccurredAt:    time.Now().UTC(),
-		TraceID:       firstNonEmpty(r.Header.Get("X-Trace-ID"), r.Header.Get("X-Request-ID"), platform.NewUUID()),
+		TraceID:       shared.FirstNonBlank(r.Header.Get("X-Trace-ID"), r.Header.Get("X-Request-ID"), platform.NewUUID()),
 		SchemaVersion: 1,
 		Data:          data,
 	}); err != nil {
@@ -42,7 +42,7 @@ func slogError(event string, err error) {
 }
 
 func callHarbor(app *platform.App, r *http.Request, route platform.RouteSpec, fallbackOperation string) (contracts.AdapterResult, *platform.Degraded) {
-	operation := firstNonEmpty(route.OperationID, fallbackOperation)
+	operation := shared.FirstNonBlank(route.OperationID, fallbackOperation)
 	adapter := app.Adapters["harbor"]
 	if adapter == nil {
 		result := contracts.AdapterResult{Adapter: "harbor", Operation: operation, Degraded: true, Code: "adapter_not_configured", Message: "external adapter is not registered", Retryable: false}
@@ -241,8 +241,8 @@ func ruleEnabled(rule map[string]any) bool {
 
 func allowRuleFromCatalog(app *platform.App, r *http.Request, tagID, projectID, userID string) map[string]any {
 	tag := catalogByID(app, r, tagID)
-	repo := firstNonEmpty(shared.TextValue(tag, "repository", "repository_name", "image_name"), "unknown")
-	tagName := firstNonEmpty(shared.TextValue(tag, "tag", "tag_name"), defaultTag)
+	repo := shared.FirstNonBlank(shared.TextValue(tag, "repository", "repository_name", "image_name"), "unknown")
+	tagName := shared.FirstNonBlank(shared.TextValue(tag, "tag", "tag_name"), defaultTag)
 	now := time.Now().UTC()
 	return map[string]any{
 		"id":              ruleID(projectID, tagID),
@@ -280,7 +280,7 @@ func imageRequestRecord(app *platform.App, r *http.Request, projectID, userID st
 	if imageRef == "" {
 		return nil, fmt.Errorf("image reference is required")
 	}
-	id := firstNonEmpty(shared.TextValue(payload, "id", "request_id", "requestId"), app.Store.NextID(imageRequestsResource, "IR", 1, 6))
+	id := shared.FirstNonBlank(shared.TextValue(payload, "id", "request_id", "requestId"), app.Store.NextID(imageRequestsResource, "IR", 1, 6))
 	now := time.Now().UTC()
 	return map[string]any{
 		"id":              id,
@@ -325,7 +325,7 @@ func setImageRequestStatus(app *platform.App, r *http.Request, id, statusValue, 
 
 func upsertApprovedRule(app *platform.App, r *http.Request, request map[string]any, actor string) {
 	projectID := shared.TextValue(request, "project_id", "projectId")
-	tagID := firstNonEmpty(shared.TextValue(request, "tag_id", "tagId"), shared.TextValue(request, "image_reference"))
+	tagID := shared.FirstNonBlank(shared.TextValue(request, "tag_id", "tagId"), shared.TextValue(request, "image_reference"))
 	rule := map[string]any{
 		"id":              ruleID(projectID, tagID),
 		"project_id":      projectID,
@@ -445,8 +445,8 @@ func imageRefFromParts(registry, repo, tag string) string {
 	if repo == "" {
 		return ""
 	}
-	registry = firstNonEmpty(registry, defaultRegistry)
-	tag = firstNonEmpty(tag, defaultTag)
+	registry = shared.FirstNonBlank(registry, defaultRegistry)
+	tag = shared.FirstNonBlank(tag, defaultTag)
 	return registry + "/" + strings.Trim(repo, "/") + ":" + tag
 }
 
@@ -527,15 +527,6 @@ func firstStringSlice(payload map[string]any, keys ...string) []string {
 
 func idFrom(data map[string]any, keys ...string) string {
 	return shared.TextValue(data, keys...)
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }
 
 func newBody(payload map[string]any) io.ReadCloser {
@@ -644,7 +635,7 @@ func imageReadModelID(resource string, data map[string]any) string {
 	roleID := idFrom(data, "role_id", "roleId", "RoleID")
 	switch resource {
 	case imageProjectsResource:
-		return firstNonEmpty(id, projectID)
+		return shared.FirstNonBlank(id, projectID)
 	case imageProjectMembersResource:
 		if projectID != "" && userID != "" {
 			return projectID + ":" + userID
@@ -654,11 +645,11 @@ func imageReadModelID(resource string, data map[string]any) string {
 			return userID + ":" + groupID
 		}
 	case imageIdentityUsersResource:
-		return firstNonEmpty(id, userID, name)
+		return shared.FirstNonBlank(id, userID, name)
 	case imageIdentityRolesResource:
-		return firstNonEmpty(id, roleID, name)
+		return shared.FirstNonBlank(id, roleID, name)
 	}
-	return firstNonEmpty(id, projectID, userID, groupID, roleID, name)
+	return shared.FirstNonBlank(id, projectID, userID, groupID, roleID, name)
 }
 
 func mergeRows(resource string, source, local []map[string]any) []map[string]any {

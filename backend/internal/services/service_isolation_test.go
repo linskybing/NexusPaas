@@ -103,6 +103,34 @@ func TestRegisterAllServiceIsolationAllowsSchedulerQuotaWithOwnerContracts(t *te
 	}
 }
 
+func TestRegisterAllServiceIsolationFailsWorkloadWithoutContractConfig(t *testing.T) {
+	app := platform.NewApp(platform.Config{ServiceName: serviceWorkload, HTTPAddr: ":0"})
+	RegisterAll(app)
+
+	err := app.ValidateServiceIsolation()
+	if err == nil {
+		t.Fatal("workload should fail isolation validation without org-project SERVICE_URLS/SERVICE_API_KEY")
+	}
+	assertIsolationGaps(t, err, []string{
+		serviceWorkload + " -> " + serviceOrgProject + ":project_members",
+		serviceWorkload + " -> " + serviceOrgProject + ":projects",
+	})
+}
+
+func TestRegisterAllServiceIsolationAllowsWorkloadWithOwnerContracts(t *testing.T) {
+	app := platform.NewApp(platform.Config{
+		ServiceName:   serviceWorkload,
+		HTTPAddr:      ":0",
+		ServiceURLs:   map[string]string{serviceOrgProject: "http://org-project-service"},
+		ServiceAPIKey: "service-key",
+	})
+	RegisterAll(app)
+
+	if err := app.ValidateServiceIsolation(); err != nil {
+		t.Fatalf("workload with org-project owner read contracts should pass isolation: %v", err)
+	}
+}
+
 func TestRegisterAllServiceIsolationFailsSchedulerQuotaWithUnrelatedIdentityContract(t *testing.T) {
 	app := platform.NewApp(platform.Config{
 		ServiceName:   serviceSchedulerQuota,
@@ -123,12 +151,6 @@ func TestRegisterAllServiceIsolationFailsSchedulerQuotaWithUnrelatedIdentityCont
 }
 
 func TestSchedulerQuotaUsesOwnerReadDependenciesNotStoreDependencies(t *testing.T) {
-	for _, dependency := range serviceStoreDependencies() {
-		if dependency.service == serviceSchedulerQuota && resourceOwner(dependency.resource) != serviceSchedulerQuota {
-			t.Fatalf("scheduler-quota must not keep shared-store dependency %s", dependency.resource)
-		}
-	}
-
 	got := ownerReadResourcesForService(serviceSchedulerQuota)
 	want := []string{
 		serviceOrgProject + ":project_members",
@@ -139,6 +161,17 @@ func TestSchedulerQuotaUsesOwnerReadDependenciesNotStoreDependencies(t *testing.
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("scheduler-quota owner-read dependencies = %v, want %v", got, want)
+	}
+}
+
+func TestWorkloadUsesOwnerReadDependenciesNotStoreDependencies(t *testing.T) {
+	got := ownerReadResourcesForService(serviceWorkload)
+	want := []string{
+		serviceOrgProject + ":project_members",
+		serviceOrgProject + ":projects",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("workload owner-read dependencies = %v, want %v", got, want)
 	}
 }
 
@@ -163,6 +196,13 @@ func TestRegisterAllIsolatedWorkloadOwnsOnlyWorkloadSideEffects(t *testing.T) {
 		"workload-status-reconciler",
 	})
 	assertCustomHandlerPresent(t, app, http.MethodPost, "/api/v1/jobs")
+	assertCustomHandlerPresent(t, app, http.MethodGet, "/api/v1/jobs")
+	assertCustomHandlerPresent(t, app, http.MethodGet, "/api/v1/jobs/{id}")
+	assertCustomHandlerPresent(t, app, http.MethodPost, "/api/v1/jobs/{id}/cancel")
+	assertCustomHandlerPresent(t, app, http.MethodGet, "/api/v1/jobs/{id}/logs")
+	assertCustomHandlerPresent(t, app, http.MethodGet, "/api/v1/configfiles")
+	assertCustomHandlerPresent(t, app, http.MethodGet, "/api/v1/configfiles/tree")
+	assertCustomHandlerPresent(t, app, http.MethodPost, "/api/v1/configfiles/{id}/versions")
 	assertCustomHandlerAbsent(t, app, http.MethodPost, "/api/v1/login")
 	assertCustomHandlerAbsent(t, app, http.MethodGet, "/api/v1/admin/request-usage")
 }
@@ -264,16 +304,30 @@ func assertMaintenanceTasks(t *testing.T, app *platform.App, want []string) {
 
 func assertCustomHandlerPresent(t *testing.T, app *platform.App, method, pattern string) {
 	t.Helper()
-	if app.CustomHandlers[method+" "+pattern] == nil {
+	if app.CustomHandlers[method+" "+testCanonicalPattern(pattern)] == nil {
 		t.Fatalf("missing custom handler %s %s", method, pattern)
 	}
 }
 
 func assertCustomHandlerAbsent(t *testing.T, app *platform.App, method, pattern string) {
 	t.Helper()
-	if app.CustomHandlers[method+" "+pattern] != nil {
+	if app.CustomHandlers[method+" "+testCanonicalPattern(pattern)] != nil {
 		t.Fatalf("unexpected custom handler %s %s", method, pattern)
 	}
+}
+
+func testCanonicalPattern(pattern string) string {
+	parts := strings.Split(strings.Trim(pattern, "/"), "/")
+	for i, part := range parts {
+		if strings.HasPrefix(part, "{") && strings.HasSuffix(part, "...}") {
+			parts[i] = "{...}"
+			continue
+		}
+		if strings.HasPrefix(part, "{") && strings.HasSuffix(part, "}") {
+			parts[i] = "{}"
+		}
+	}
+	return "/" + strings.Join(parts, "/")
 }
 
 func assertIsolationGaps(t *testing.T, err error, want []string) {

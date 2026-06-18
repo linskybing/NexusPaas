@@ -105,7 +105,7 @@ func groupMembershipProjectionData(event contracts.Event) (map[string]any, bool)
 	return data, action == "delete" || action == "deleted"
 }
 
-func upsertProjectAccessReadModel(repo projectAccessRepository, r *http.Request, resource string, data map[string]any) error {
+func upsertProjectAccessReadModel(repo *recordStoreProjectAccessRepository, r *http.Request, resource string, data map[string]any) error {
 	switch resource {
 	case projectAccessProjects:
 		return repo.UpsertProject(r.Context(), data)
@@ -118,7 +118,7 @@ func upsertProjectAccessReadModel(repo projectAccessRepository, r *http.Request,
 	}
 }
 
-func deleteProjectAccessReadModel(repo projectAccessRepository, r *http.Request, resource string, data map[string]any) bool {
+func deleteProjectAccessReadModel(repo *recordStoreProjectAccessRepository, r *http.Request, resource string, data map[string]any) bool {
 	switch resource {
 	case projectAccessProjects:
 		return repo.DeleteProject(r.Context(), data)
@@ -131,7 +131,7 @@ func deleteProjectAccessReadModel(repo projectAccessRepository, r *http.Request,
 	}
 }
 
-func projectAccessProject(repo projectAccessRepository, ctx context.Context, projectID string) (map[string]any, bool) {
+func projectAccessProject(repo *recordStoreProjectAccessRepository, ctx context.Context, projectID string) (map[string]any, bool) {
 	for _, project := range repo.ListProjects(ctx) {
 		if valueFrom(project, "id") == projectID {
 			return project, true

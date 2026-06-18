@@ -11,23 +11,6 @@ import (
 	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
 
-type workloadJobRepository interface {
-	NextJobID() string
-	CreateSubmittedJob(ctx context.Context, job map[string]any) (contracts.Record[map[string]any], error)
-	FindJob(ctx context.Context, idOrJobID string) (contracts.Record[map[string]any], bool)
-	ListPreemptionCandidates(ctx context.Context) []contracts.Record[map[string]any]
-	MarkPreempted(ctx context.Context, recordID string, update jobPreemptionUpdate) (contracts.Record[map[string]any], bool)
-	MarkEvicted(ctx context.Context, recordID string, update jobEvictionUpdate) (contracts.Record[map[string]any], bool)
-	ListDispatchCandidates(ctx context.Context, now time.Time) []dispatchCandidate
-	MarkDispatchRunning(ctx context.Context, id string, update jobDispatchRunningUpdate) bool
-	MarkDispatchFailed(ctx context.Context, id string, update jobDispatchFailedUpdate) bool
-	DeferForInfrastructureRecovery(ctx context.Context, id string, update jobInfrastructureRecoveryUpdate) bool
-	MarkFailedIfActive(ctx context.Context, jobID, reason string) bool
-	ListStaleJobCandidates(ctx context.Context, now time.Time) []contracts.Record[map[string]any]
-	ListLifecycleReconcileCandidates(ctx context.Context) []contracts.Record[map[string]any]
-	ApplyLifecycleObservation(ctx context.Context, record contracts.Record[map[string]any], lifecycle cluster.JobLifecycle, now time.Time) bool
-}
-
 type jobPreemptionUpdate struct {
 	PreemptionID  string
 	RequesterID   string
@@ -66,18 +49,18 @@ type recordStoreWorkloadJobRepository struct {
 	store platform.RecordStore
 }
 
-func jobRepository(app *platform.App) workloadJobRepository {
+func jobRepository(app *platform.App) *recordStoreWorkloadJobRepository {
 	if app == nil {
 		return nil
 	}
 	return jobRepositoryFromStore(app.Store)
 }
 
-func jobRepositoryFromStore(store platform.RecordStore) workloadJobRepository {
+func jobRepositoryFromStore(store platform.RecordStore) *recordStoreWorkloadJobRepository {
 	if store == nil {
 		return nil
 	}
-	return recordStoreWorkloadJobRepository{store: store}
+	return &recordStoreWorkloadJobRepository{store: store}
 }
 
 func (r recordStoreWorkloadJobRepository) NextJobID() string {
@@ -101,6 +84,10 @@ func (r recordStoreWorkloadJobRepository) FindJob(ctx context.Context, idOrJobID
 		}
 	}
 	return contracts.Record[map[string]any]{}, false
+}
+
+func (r recordStoreWorkloadJobRepository) ListJobs(ctx context.Context) []contracts.Record[map[string]any] {
+	return r.store.List(ctx, jobsResource)
 }
 
 func (r recordStoreWorkloadJobRepository) ListPreemptionCandidates(ctx context.Context) []contracts.Record[map[string]any] {

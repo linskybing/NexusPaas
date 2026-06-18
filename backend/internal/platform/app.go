@@ -28,7 +28,6 @@ type App struct {
 	CustomHandlers     map[string]HandlerFunc
 	Adapters           map[string]contracts.ExternalAdapter
 	Rate               Limiter
-	Switches           *RouteSwitches
 	actions            map[string]ActionHandler
 	maintenanceTasks   []maintenanceTask
 	projections        *projectionRegistry
@@ -139,7 +138,6 @@ func newBaseApp(cfg Config) *App {
 		Adapters:           map[string]contracts.ExternalAdapter{},
 		CustomHandlers:     map[string]HandlerFunc{},
 		Rate:               NewRateLimiter(600, time.Minute),
-		Switches:           NewRouteSwitches(),
 		actions:            map[string]ActionHandler{},
 		projections:        newProjectionRegistry(),
 		instanceID:         newInstanceID(),
@@ -170,7 +168,7 @@ func (a *App) configureAdapters() {
 			a.Adapters[name] = NewExternalAdapter(name, url, a.Config.AdapterTimeout, a.Config.AdapterRetries, a.Config.AdapterThreshold, a.Config.AdapterOpenInterval)
 		}
 	}
-	for _, name := range []string{"k8s", "harbor", "minio", "pgadmin", "longhorn", "prometheus", "monolith"} {
+	for _, name := range []string{"k8s", "harbor", "minio", "pgadmin", "longhorn", "prometheus"} {
 		if a.Adapters[name] == nil {
 			a.Adapters[name] = NewExternalAdapter(name, "", a.Config.AdapterTimeout, a.Config.AdapterRetries, a.Config.AdapterThreshold, a.Config.AdapterOpenInterval)
 		}

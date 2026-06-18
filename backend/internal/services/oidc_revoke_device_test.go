@@ -1,7 +1,6 @@
 package services
 
 import (
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,33 +9,17 @@ import (
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
 )
 
-// With DEX_URL configured, the device authorization endpoint proxies to Dex's
-// /device/code endpoint, and the revoke endpoint accepts a token and returns 200
-// (RFC 7009) via the local denylist.
-func TestOIDCDeviceProxyAndRevokeWithDex(t *testing.T) {
-	var gotPath string
-	dex := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"device_code":"dc-1","user_code":"UCODE"}`)
-	}))
+// With DEX_URL configured, the canonical revoke endpoint accepts a token and
+// returns 200 (RFC 7009) via the local denylist.
+func TestOIDCRevokeWithDex(t *testing.T) {
+	dex := httptest.NewServer(http.NotFoundHandler())
 	defer dex.Close()
 
 	app := platform.NewApp(platform.Config{ServiceName: "all", RequireAuth: false, DexURL: dex.URL})
 	RegisterAll(app)
 
-	// Device authorization proxies to Dex /device/code.
-	rec := httptest.NewRecorder()
-	app.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/device_authorization?client_id=grafana", nil))
-	if rec.Code != http.StatusOK || gotPath != "/device/code" {
-		t.Fatalf("device authorization: status=%d dexPath=%q, want 200 /device/code", rec.Code, gotPath)
-	}
-	if !strings.Contains(rec.Body.String(), "device_code") {
-		t.Fatalf("device authorization body did not proxy Dex response: %s", rec.Body.String())
-	}
-
 	// Revoke without a token is a bad request.
-	rec = httptest.NewRecorder()
+	rec := httptest.NewRecorder()
 	app.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/oidc/revoke", strings.NewReader("")))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("revoke without token: status=%d, want 400", rec.Code)
@@ -52,8 +35,8 @@ func TestOIDCDeviceProxyAndRevokeWithDex(t *testing.T) {
 	}
 }
 
-// Without DEX_URL, revoke and device authorization stay fail-closed (503).
-func TestOIDCRevokeDeviceFailClosedWithoutDex(t *testing.T) {
+// Without DEX_URL, revoke stays fail-closed (503).
+func TestOIDCRevokeFailClosedWithoutDex(t *testing.T) {
 	app := platform.NewApp(platform.Config{ServiceName: "all", RequireAuth: false})
 	RegisterAll(app)
 

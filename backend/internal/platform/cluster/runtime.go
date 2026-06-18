@@ -69,7 +69,8 @@ func (c *Client) DeleteResource(ctx context.Context, kind, namespace, name strin
 	case "Pod":
 		err = c.clientset.CoreV1().Pods(namespace).Delete(ctx, name, metav1.DeleteOptions{})
 	case "Deployment":
-		err = c.clientset.AppsV1().Deployments(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+		background := metav1.DeletePropagationBackground
+		err = c.clientset.AppsV1().Deployments(namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &background})
 	case "Job":
 		background := metav1.DeletePropagationBackground
 		err = c.clientset.BatchV1().Jobs(namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &background})
