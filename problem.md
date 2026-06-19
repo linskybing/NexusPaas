@@ -182,7 +182,7 @@ remaining shared physical Postgres transition debt.
 
 ## 7. GA Architecture Roadmap Update
 
-_Updated: 2026-06-19. Branch: `feature/event-fixtures`._
+_Updated: 2026-06-19. Branch: `feature/owner-read-fixtures`._
 
 The 90-day GA architecture direction is now documented as a staged move from the
 current modular monolith to 8 coarse deployable units:
@@ -207,11 +207,14 @@ implementation, contract fixtures, staging evidence, and security hardening
 remain open until the follow-up slices produce test and runtime evidence.
 
 The Day 16-35 contract work has started with canonical v1 core event envelope
-fixtures under `backend/internal/contracts/fixtures/events/v1/` and focused
-contracts package tests. This gives reviewers versioned event-envelope evidence
-for identity, tenant, workload, scheduler, and audit events, but owner-read /
-command API fixtures, producer-specific event tests, consumer contract tests,
-and Outbox/Inbox runtime infrastructure remain open.
+fixtures under `backend/internal/contracts/fixtures/events/v1/` and scheduler
+admission owner-read fixtures under
+`backend/internal/contracts/fixtures/owner-read/v1/`, both guarded by focused
+contract tests. This gives reviewers versioned event-envelope evidence for
+identity, tenant, workload, scheduler, and audit events plus owner-read HTTP
+contract artifacts for scheduler admission dependencies. Command API fixtures,
+producer-specific event tests, broader consumer contract tests, and Outbox/Inbox
+runtime infrastructure remain open.
 
 ### GA Architecture Remaining Issues
 
@@ -219,7 +222,7 @@ and Outbox/Inbox runtime infrastructure remain open.
 | --- | --- | --- | --- | --- |
 | High | staging evidence | The 8 deployable units do not yet have captured live staging deploy, smoke, rollback, and redeploy evidence | The roadmap is documented but cannot be declared GA-ready | Build staging runtime config and capture evidence unit by unit |
 | High | data ownership | Shared physical PostgreSQL and transition owner-read contracts remain | Cross-unit boundaries are not yet GA-complete | Add Outbox/Inbox/read-model slices and retire high-risk shared-store reads |
-| High | contract testing | Core event envelope v1 fixtures exist, but internal HTTP owner-read/command contracts and producer/consumer event coverage are not yet all versioned artifacts | Consumers can drift silently during decomposition | Add owner-read/command fixtures, producer-specific event tests, and consumer contract tests before changing internal contracts |
+| High | contract testing | Core event envelope v1 fixtures and scheduler admission owner-read fixtures exist, but command API contracts, broader owner-read coverage, and producer/consumer event coverage are not yet all versioned artifacts | Consumers can drift silently during decomposition | Add remaining owner-read/command fixtures, producer-specific event tests, and consumer contract tests before changing internal contracts |
 | Medium | service identity | Static `SERVICE_API_KEY` remains the Production Beta service-to-service auth fallback | GA security posture depends on rotatable workload identity or equivalent | Introduce Kubernetes workload identity or approved equivalent in staging |
 | Medium | remote Sonar gate | GitHub-hosted Sonar still depends on repository secrets being configured | Remote PRs may not enforce Sonar even when local evidence exists | Provision reachable Sonar credentials and make the remote gate required |
 | Medium | supply chain | SBOM generation and image signing are GA goals but not yet enforced | Release provenance remains incomplete | Add SBOM and Cosign signing after staging promotion is stable |
