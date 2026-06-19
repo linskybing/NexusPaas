@@ -5,6 +5,8 @@ const (
 	metricEventConsumerLag        = "nexuspaas_event_consumer_lag"
 	metricProjectionApplied       = "nexuspaas_projection_applied_total"
 	metricProjectionDeadLetters   = "nexuspaas_projection_dead_letters_total"
+	metricProjectionRetries       = "nexuspaas_projection_retry_total"
+	metricProjectionReplays       = "nexuspaas_projection_replay_total"
 	metricLabelProjectionConsumer = "consumer"
 )
 
@@ -18,5 +20,7 @@ func (a *App) snapshotOutboxInboxMetrics() {
 		a.Metrics.SetGauge(metricEventConsumerLag, labels, int64(status.Lag))
 		a.Metrics.SetCounter(metricProjectionApplied, labels, status.Applied)
 		a.Metrics.SetCounter(metricProjectionDeadLetters, labels, status.DeadLettered)
+		a.Metrics.SetCounter(metricProjectionRetries, labels, status.RetryCount)
+		a.Metrics.SetCounter(metricProjectionReplays, labels, status.ReplayCount)
 	}
 }

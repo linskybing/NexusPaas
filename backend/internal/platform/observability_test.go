@@ -143,13 +143,54 @@ func TestOperationalEndpointsExposeOutboxInboxRuntimeEvidence(t *testing.T) {
 
 	app.RunProjection(ctx, "read-model", func(contracts.Event) error { return nil })
 	publishTestEvent(t, app, "e3", "ThingFailed")
-	app.RunProjection(ctx, "dead-letter-model", func(event contracts.Event) error {
-		if event.EventID == "e3" {
+	app.RunProjection(ctx, "dead-letter-model", failEventID("e3"))
+	app.ReplayProjection("dead-letter-model")
+	app.RunProjection(ctx, "dead-letter-model", failEventID("e3"))
+
+	statusByConsumer := projectionStatusByConsumer(t, app)
+	if statusByConsumer["read-model"].Lag != 1 || statusByConsumer["read-model"].Applied != 2 {
+		t.Fatalf("read-model projection status = %#v, want lag=1 applied=2", statusByConsumer["read-model"])
+	}
+	assertDeadLetterProjectionStatus(t, statusByConsumer["dead-letter-model"])
+
+	body := metricsBody(t, app)
+	if got := metricSampleNoLabelsInt(t, body, metricEventOutboxEvents); got != 3 {
+		t.Fatalf("outbox events gauge = %d, want 3", got)
+	}
+	if got := metricSampleInt(t, body, metricEventConsumerLag, `consumer="read-model"`); got != 1 {
+		t.Fatalf("read-model lag metric = %d, want 1", got)
+	}
+	if got := metricSampleInt(t, body, metricProjectionApplied, `consumer="read-model"`); got != 2 {
+		t.Fatalf("read-model applied metric = %d, want 2", got)
+	}
+	if got := metricSampleInt(t, body, metricProjectionDeadLetters, `consumer="dead-letter-model"`); got != 2 {
+		t.Fatalf("dead-letter metric = %d, want 2", got)
+	}
+	if got := metricSampleInt(t, body, metricProjectionRetries, `consumer="dead-letter-model"`); got != 1 {
+		t.Fatalf("retry metric = %d, want 1", got)
+	}
+	if got := metricSampleInt(t, body, metricProjectionReplays, `consumer="dead-letter-model"`); got != 1 {
+		t.Fatalf("replay metric = %d, want 1", got)
+	}
+
+	second := httptest.NewRecorder()
+	app.ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if got := metricSampleInt(t, second.Body.String(), metricProjectionApplied, `consumer="read-model"`); got != 2 {
+		t.Fatalf("read-model applied metric after second scrape = %d, want unchanged 2", got)
+	}
+}
+
+func failEventID(id string) func(contracts.Event) error {
+	return func(event contracts.Event) error {
+		if event.EventID == id {
 			return errors.New("boom")
 		}
 		return nil
-	})
+	}
+}
 
+func projectionStatusByConsumer(t *testing.T, app *App) map[string]ProjectionStatus {
+	t.Helper()
 	projections := httptest.NewRecorder()
 	app.ServeHTTP(projections, httptest.NewRequest(http.MethodGet, "/projections", nil))
 	if projections.Code != http.StatusOK {
@@ -165,37 +206,25 @@ func TestOperationalEndpointsExposeOutboxInboxRuntimeEvidence(t *testing.T) {
 	for _, status := range projectionEnvelope.Data {
 		statusByConsumer[status.Consumer] = status
 	}
-	if statusByConsumer["read-model"].Lag != 1 || statusByConsumer["read-model"].Applied != 2 {
-		t.Fatalf("read-model projection status = %#v, want lag=1 applied=2", statusByConsumer["read-model"])
-	}
-	if statusByConsumer["dead-letter-model"].Lag != 0 || statusByConsumer["dead-letter-model"].DeadLettered != 1 {
-		t.Fatalf("dead-letter projection status = %#v, want lag=0 dead_lettered=1", statusByConsumer["dead-letter-model"])
-	}
+	return statusByConsumer
+}
 
+func assertDeadLetterProjectionStatus(t *testing.T, status ProjectionStatus) {
+	t.Helper()
+	if status.Lag != 0 || status.DeadLettered != 2 || status.RetryCount != 1 ||
+		status.ReplayCount != 1 || status.ReplayPending || status.LastReplayAt.IsZero() {
+		t.Fatalf("dead-letter projection status = %#v, want lag=0 dead_lettered=2 retry=1 replay=1 pending=false", status)
+	}
+}
+
+func metricsBody(t *testing.T, app *App) string {
+	t.Helper()
 	metrics := httptest.NewRecorder()
 	app.ServeHTTP(metrics, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if metrics.Code != http.StatusOK {
 		t.Fatalf("/metrics status = %d, want 200: %s", metrics.Code, metrics.Body.String())
 	}
-	body := metrics.Body.String()
-	if got := metricSampleNoLabelsInt(t, body, metricEventOutboxEvents); got != 3 {
-		t.Fatalf("outbox events gauge = %d, want 3", got)
-	}
-	if got := metricSampleInt(t, body, metricEventConsumerLag, `consumer="read-model"`); got != 1 {
-		t.Fatalf("read-model lag metric = %d, want 1", got)
-	}
-	if got := metricSampleInt(t, body, metricProjectionApplied, `consumer="read-model"`); got != 2 {
-		t.Fatalf("read-model applied metric = %d, want 2", got)
-	}
-	if got := metricSampleInt(t, body, metricProjectionDeadLetters, `consumer="dead-letter-model"`); got != 1 {
-		t.Fatalf("dead-letter metric = %d, want 1", got)
-	}
-
-	second := httptest.NewRecorder()
-	app.ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if got := metricSampleInt(t, second.Body.String(), metricProjectionApplied, `consumer="read-model"`); got != 2 {
-		t.Fatalf("read-model applied metric after second scrape = %d, want unchanged 2", got)
-	}
+	return metrics.Body.String()
 }
 
 func TestNewAppInjectsPorts(t *testing.T) {
