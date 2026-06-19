@@ -191,6 +191,36 @@ scrape auth; the CronJob uses `nexuspaas-synthetic-smoke-secret` for smoke
 credentials. Runtime HTTP duration metrics include Prometheus histogram buckets,
 so p95 dashboard panels and alert rules use `histogram_quantile`.
 
+## GA Architecture Extension
+
+The GA architecture roadmap groups the 15 logical services into 8 deployable
+units. Observability must preserve both views:
+
+- unit-level dashboards for deployment, rollback, saturation, and dependency
+  health;
+- logical-service labels for route, event, and domain workflow ownership;
+- journey dashboards for login, authorization, tenant management, job submit,
+  queue/dispatch, IDE, storage, image, usage, audit, notification, media, and
+  proxy flows.
+
+Every Outbox/Inbox and read-model migration must add telemetry for publish lag,
+consumer lag, retry count, dead-letter count, replay progress, and drift
+comparison. Operators must be able to tell whether stale data is within a
+documented freshness target or is an incident.
+
+Each of the 8 deployable units must capture staging evidence before it can be
+called GA-ready:
+
+- applied version and configuration source;
+- `/healthz`, `/readyz`, `/metrics`, and service-registry evidence;
+- one read-only synthetic smoke endpoint for every logical service in the unit;
+- rollback, redeploy, and post-redeploy smoke evidence;
+- trace IDs and request IDs for critical cross-unit journeys.
+
+Static service keys are a Production Beta transition. GA observability should
+make the active service identity visible through safe labels or trace
+attributes, without logging raw credentials or user tokens.
+
 ## Production Beta Gaps
 
 This strategy closes the documentation, testable contract, and baseline

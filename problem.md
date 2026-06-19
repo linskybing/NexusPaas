@@ -179,3 +179,34 @@ real containers. The repository still has broader Production Beta launch
 blockers: missing reference snapshot, missing GitHub Sonar provisioning, missing
 live dashboard/alert provisioning, missing live staging rehearsal evidence, and
 remaining shared physical Postgres transition debt.
+
+## 7. GA Architecture Roadmap Update
+
+_Updated: 2026-06-19. Branch: `feature/ga-architecture-roadmap`._
+
+The 90-day GA architecture direction is now documented as a staged move from the
+current modular monolith to 8 coarse deployable units:
+
+- `platform-gateway`
+- `iam-unit`
+- `tenant-unit`
+- `collaboration-unit`
+- `platform-io-unit`
+- `usage-observability`
+- `compute-api`
+- `compute-control-plane`
+
+The accepted direction avoids a big-bang 15-service split. It prioritizes
+Outbox/Inbox, read models, versioned internal contracts, deployable-unit
+staging evidence, and compute saga hardening.
+
+### GA Architecture Remaining Issues
+
+| Priority | Area | Problem | Impact | Recommended Next Step |
+| --- | --- | --- | --- | --- |
+| High | staging evidence | The 8 deployable units do not yet have captured live staging deploy, smoke, rollback, and redeploy evidence | The roadmap is documented but cannot be declared GA-ready | Build staging runtime config and capture evidence unit by unit |
+| High | data ownership | Shared physical PostgreSQL and transition owner-read contracts remain | Cross-unit boundaries are not yet GA-complete | Add Outbox/Inbox/read-model slices and retire high-risk shared-store reads |
+| High | contract testing | Internal HTTP contracts and event schemas are not yet all versioned provider/consumer artifacts | Consumers can drift silently during decomposition | Add contract fixtures and provider/consumer tests before changing internal contracts |
+| Medium | service identity | Static `SERVICE_API_KEY` remains the Production Beta service-to-service auth fallback | GA security posture depends on rotatable workload identity or equivalent | Introduce Kubernetes workload identity or approved equivalent in staging |
+| Medium | remote Sonar gate | GitHub-hosted Sonar still depends on repository secrets being configured | Remote PRs may not enforce Sonar even when local evidence exists | Provision reachable Sonar credentials and make the remote gate required |
+| Medium | supply chain | SBOM generation and image signing are GA goals but not yet enforced | Release provenance remains incomplete | Add SBOM and Cosign signing after staging promotion is stable |
