@@ -38,6 +38,7 @@ func (a *App) registerCommonEndpoints() {
 		a.Mux.HandleFunc("POST /api/v1/dev/token", a.handleDevToken)
 	}
 	a.registerOperationalEndpoint(operationalRoute("/metrics", "metrics", "platform_runtime_metrics"), func(app *App, r *http.Request, _ RouteSpec) (int, any, *Degraded) {
+		app.snapshotOutboxInboxMetrics()
 		return app.rawHTTPResponse(app.Metrics, r)
 	})
 	a.registerOperationalEndpoint(operationalRoute("/openapi.json", "openapi", "platform_runtime_openapi"), func(app *App, _ *http.Request, _ RouteSpec) (int, any, *Degraded) {

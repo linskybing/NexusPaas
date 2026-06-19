@@ -165,6 +165,29 @@ func TestMetricsCountersAndErrorRatePercent(t *testing.T) {
 	}
 }
 
+func TestMetricsLabeledSamplesAreSnapshotsAndEscapeLabels(t *testing.T) {
+	metrics := NewMetrics()
+	labels := map[string]string{"consumer": "worker\"\\\n1"}
+	metrics.SetGauge(metricEventConsumerLag, labels, 2)
+	metrics.SetGauge(metricEventConsumerLag, labels, 5)
+	metrics.SetCounter(metricProjectionApplied, labels, 3)
+	metrics.SetCounter(metricProjectionApplied, labels, 3)
+
+	rec := httptest.NewRecorder()
+	metrics.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+	escapedLabels := "consumer=\"worker\\\"\\\\\\n1\""
+	if got := metricSampleInt(t, body, metricEventConsumerLag, escapedLabels); got != 5 {
+		t.Fatalf("consumer lag gauge = %d, want latest snapshot 5", got)
+	}
+	if got := metricSampleInt(t, body, metricProjectionApplied, escapedLabels); got != 3 {
+		t.Fatalf("projection applied counter = %d, want set snapshot 3", got)
+	}
+	if strings.Count(body, metricEventConsumerLag+"{") != 1 {
+		t.Fatalf("consumer lag should have one escaped sample, body:\n%s", body)
+	}
+}
+
 func metricSampleInt(t *testing.T, body, metric, labels string) int {
 	t.Helper()
 	value, err := strconv.Atoi(metricSampleValue(t, body, metric, labels))
@@ -183,6 +206,15 @@ func metricSampleFloat(t *testing.T, body, metric, labels string) float64 {
 	return value
 }
 
+func metricSampleNoLabelsInt(t *testing.T, body, metric string) int {
+	t.Helper()
+	value, err := strconv.Atoi(metricSampleNoLabelsValue(t, body, metric))
+	if err != nil {
+		t.Fatalf("%s value is not an int: %v", metric, err)
+	}
+	return value
+}
+
 func metricSampleValue(t *testing.T, body, metric, labels string) string {
 	t.Helper()
 	prefix := metric + "{" + labels + "} "
@@ -192,6 +224,18 @@ func metricSampleValue(t *testing.T, body, metric, labels string) string {
 		}
 	}
 	t.Fatalf("metrics body missing %s{%s}:\n%s", metric, labels, body)
+	return ""
+}
+
+func metricSampleNoLabelsValue(t *testing.T, body, metric string) string {
+	t.Helper()
+	prefix := metric + " "
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		}
+	}
+	t.Fatalf("metrics body missing %s:\n%s", metric, body)
 	return ""
 }
 

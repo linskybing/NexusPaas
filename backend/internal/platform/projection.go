@@ -20,6 +20,7 @@ type ProjectionStatus struct {
 	Consumer      string    `json:"consumer"`
 	Applied       int64     `json:"applied"`
 	DeadLettered  int64     `json:"dead_lettered"`
+	Lag           int       `json:"lag"`
 	LastEventID   string    `json:"last_event_id,omitempty"`
 	LastEventName string    `json:"last_event_name,omitempty"`
 	LastEventAt   time.Time `json:"last_event_at,omitempty"`
@@ -40,6 +41,12 @@ func (p *projectionRegistry) entry(consumer string) *ProjectionStatus {
 		p.status[consumer] = &ProjectionStatus{Consumer: consumer}
 	}
 	return p.status[consumer]
+}
+
+func (p *projectionRegistry) ensure(consumer string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.entry(consumer)
 }
 
 func (p *projectionRegistry) recordApplied(consumer string, event contracts.Event) {
@@ -78,10 +85,13 @@ func (a *App) RunProjection(ctx context.Context, consumer string, apply func(con
 	if a.Events == nil {
 		return
 	}
+	a.projections.ensure(consumer)
+	consumeFailed := false
 	for _, event := range a.Events.Outbox() {
 		processed, err := a.Events.Consume(ctx, consumer, event)
 		if err != nil {
 			slog.Warn("projection consume failed", "consumer", consumer, "event_id", event.EventID, "error", err)
+			consumeFailed = true
 			continue
 		}
 		if !processed {
@@ -93,6 +103,9 @@ func (a *App) RunProjection(ctx context.Context, consumer string, apply func(con
 			continue
 		}
 		a.projections.recordApplied(consumer, event)
+	}
+	if !consumeFailed {
+		a.Events.Checkpoint(consumer)
 	}
 }
 
@@ -120,7 +133,14 @@ func (a *App) deadLetterEvent(ctx context.Context, consumer string, event contra
 // ProjectionStatuses returns the freshness/health snapshot of every projection
 // consumer for the operational /projections endpoint.
 func (a *App) ProjectionStatuses() []ProjectionStatus {
-	return a.projections.snapshot()
+	statuses := a.projections.snapshot()
+	if a.Events == nil {
+		return statuses
+	}
+	for i := range statuses {
+		statuses[i].Lag = a.Events.Lag(statuses[i].Consumer)
+	}
+	return statuses
 }
 
 // ReplayProjection resets a consumer's idempotency state so its events are
