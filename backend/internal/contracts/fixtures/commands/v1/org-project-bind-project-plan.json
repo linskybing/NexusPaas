@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "contract_name": "org-project.bind_project_plan",
+  "owner_service": "org-project-service",
+  "consumer_service": "scheduler-quota-service",
+  "resource": "org-project-service:projects",
+  "action": "bind_plan",
+  "method": "PUT",
+  "path": "/internal/org-project/projects/{project_id}/plan",
+  "auth": "service_key",
+  "service_key_required": true,
+  "path_parameters": ["project_id"],
+  "required_request_fields": ["plan_id"],
+  "request_example": {
+    "plan_id": "plan-ga-standard"
+  },
+  "success_statuses": [200],
+  "error_statuses": [400, 401, 404, 500],
+  "idempotency": {
+    "idempotent": true,
+    "semantic_key": ["project_id", "plan_id"],
+    "behavior": "Rebinding the same project to the same plan succeeds without duplicate owner state."
+  },
+  "emits_events": ["ProjectUpdated"],
+  "response_example": {
+    "id": "project-ga-001",
+    "version": 3,
+    "created_at": "2026-06-19T00:00:00Z",
+    "updated_at": "2026-06-19T00:05:00Z",
+    "data": {
+      "id": "project-ga-001",
+      "name": "GA Standard Project",
+      "owner_user_id": "user-ga-owner",
+      "plan_id": "plan-ga-standard",
+      "resource_plan_id": "plan-ga-standard",
+      "default_queue_id": "queue-ga-standard"
+    }
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

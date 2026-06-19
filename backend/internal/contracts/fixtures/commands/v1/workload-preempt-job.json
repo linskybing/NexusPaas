@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "contract_name": "workload.preempt_job",
+  "owner_service": "workload-service",
+  "consumer_service": "scheduler-quota-service",
+  "resource": "workload-service:jobs",
+  "action": "preempt",
+  "method": "POST",
+  "path": "/internal/workload/jobs/{id}/preempt",
+  "auth": "service_key",
+  "service_key_required": true,
+  "path_parameters": ["id"],
+  "required_request_fields": ["preemption_id", "reason", "cleanup"],
+  "request_example": {
+    "preemption_id": "preempt-ga-001",
+    "requester_job_id": "job-ga-priority",
+    "reason": "higher-priority workload requires capacity",
+    "cleanup": {
+      "action": "delete_pod",
+      "namespace": "project-ga-standard",
+      "workload_name": "job-ga-preempted"
+    }
+  },
+  "success_statuses": [200],
+  "error_statuses": [400, 401, 404, 409, 500],
+  "idempotency": {
+    "idempotent": true,
+    "semantic_key": ["id", "preemption_id"],
+    "behavior": "Repeating the same preemption record for an already preempted job returns the existing job record."
+  },
+  "emits_events": [],
+  "response_example": {
+    "id": "job-ga-preempted",
+    "version": 6,
+    "created_at": "2026-06-19T00:00:00Z",
+    "updated_at": "2026-06-19T00:07:00Z",
+    "data": {
+      "id": "job-ga-preempted",
+      "job_id": "job-ga-preempted",
+      "project_id": "project-ga-001",
+      "user_id": "user-ga-owner",
+      "queue_name": "gpu-standard",
+      "namespace": "project-ga-standard",
+      "status": "preempted",
+      "preemption_record_id": "preempt-ga-001",
+      "preemption_reason": "higher-priority workload requires capacity"
+    }
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

@@ -181,6 +181,25 @@ func assertValidOwnerReadFixture(t *testing.T, name string, fixture ownerReadCon
 }
 
 func validateOwnerReadFixture(fixture ownerReadContractFixture) error {
+	if err := validateOwnerReadRequiredMetadata(fixture); err != nil {
+		return err
+	}
+	if err := validateOwnerReadRoute(fixture); err != nil {
+		return err
+	}
+	if !fixture.Compatibility.AdditiveFields || !fixture.Compatibility.TolerantReader {
+		return fmt.Errorf("owner-read fixture compatibility must allow additive fields and tolerant readers")
+	}
+	if len(fixture.RequiredRecordFields) == 0 {
+		return fmt.Errorf("owner-read fixture required_record_fields is empty")
+	}
+	if err := validateOwnerReadRecords(fixture.Records, fixture.RequiredRecordFields); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateOwnerReadRequiredMetadata(fixture ownerReadContractFixture) error {
 	missing := make([]string, 0, 8)
 	if fixture.SchemaVersion == 0 {
 		missing = append(missing, "schema_version")
@@ -209,6 +228,10 @@ func validateOwnerReadFixture(fixture ownerReadContractFixture) error {
 	if len(missing) > 0 {
 		return fmt.Errorf("owner-read fixture missing required fields: %s", strings.Join(missing, ", "))
 	}
+	return nil
+}
+
+func validateOwnerReadRoute(fixture ownerReadContractFixture) error {
 	if fixture.SchemaVersion != 1 {
 		return fmt.Errorf("owner-read fixture schema_version = %d, want 1", fixture.SchemaVersion)
 	}
@@ -227,41 +250,50 @@ func validateOwnerReadFixture(fixture ownerReadContractFixture) error {
 	if !fixture.ListOnly && fixture.GetPath == "" {
 		return fmt.Errorf("owner-read fixture get_path is required for non-list-only contract")
 	}
-	if !fixture.Compatibility.AdditiveFields || !fixture.Compatibility.TolerantReader {
-		return fmt.Errorf("owner-read fixture compatibility must allow additive fields and tolerant readers")
-	}
-	if len(fixture.RequiredRecordFields) == 0 {
-		return fmt.Errorf("owner-read fixture required_record_fields is empty")
-	}
-	if len(fixture.Records) == 0 {
+	return nil
+}
+
+func validateOwnerReadRecords(records []Record[map[string]any], requiredFields []string) error {
+	if len(records) == 0 {
 		return fmt.Errorf("owner-read fixture records is empty")
 	}
-	for index, record := range fixture.Records {
-		if record.ID == "" {
-			return fmt.Errorf("owner-read fixture records[%d].id is empty", index)
-		}
-		if record.Version <= 0 {
-			return fmt.Errorf("owner-read fixture records[%d].version = %d, want positive", index, record.Version)
-		}
-		if record.CreatedAt.IsZero() || record.UpdatedAt.IsZero() {
-			return fmt.Errorf("owner-read fixture records[%d] missing timestamps", index)
-		}
-		if len(record.Data) == 0 {
-			return fmt.Errorf("owner-read fixture records[%d].data is empty", index)
-		}
-		if dataID, ok := record.Data["id"].(string); !ok || dataID != record.ID {
-			return fmt.Errorf("owner-read fixture records[%d].data.id = %#v, want %q", index, record.Data["id"], record.ID)
-		}
-		for _, field := range fixture.RequiredRecordFields {
-			if text, ok := record.Data[field].(string); ok && strings.TrimSpace(text) == "" {
-				return fmt.Errorf("owner-read fixture records[%d].data.%s is empty", index, field)
-			}
-			if _, ok := record.Data[field]; !ok {
-				return fmt.Errorf("owner-read fixture records[%d].data missing %s", index, field)
-			}
-		}
-		if err := validateOwnerReadRecordPayload(fmt.Sprintf("records[%d].data", index), record.Data); err != nil {
+	for index, record := range records {
+		if err := validateOwnerReadRecord(index, record, requiredFields); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validateOwnerReadRecord(index int, record Record[map[string]any], requiredFields []string) error {
+	if record.ID == "" {
+		return fmt.Errorf("owner-read fixture records[%d].id is empty", index)
+	}
+	if record.Version <= 0 {
+		return fmt.Errorf("owner-read fixture records[%d].version = %d, want positive", index, record.Version)
+	}
+	if record.CreatedAt.IsZero() || record.UpdatedAt.IsZero() {
+		return fmt.Errorf("owner-read fixture records[%d] missing timestamps", index)
+	}
+	if len(record.Data) == 0 {
+		return fmt.Errorf("owner-read fixture records[%d].data is empty", index)
+	}
+	if dataID, ok := record.Data["id"].(string); !ok || dataID != record.ID {
+		return fmt.Errorf("owner-read fixture records[%d].data.id = %#v, want %q", index, record.Data["id"], record.ID)
+	}
+	if err := validateOwnerReadRecordRequiredFields(index, record.Data, requiredFields); err != nil {
+		return err
+	}
+	return validateOwnerReadRecordPayload(fmt.Sprintf("records[%d].data", index), record.Data)
+}
+
+func validateOwnerReadRecordRequiredFields(index int, data map[string]any, requiredFields []string) error {
+	for _, field := range requiredFields {
+		if text, ok := data[field].(string); ok && strings.TrimSpace(text) == "" {
+			return fmt.Errorf("owner-read fixture records[%d].data.%s is empty", index, field)
+		}
+		if _, ok := data[field]; !ok {
+			return fmt.Errorf("owner-read fixture records[%d].data missing %s", index, field)
 		}
 	}
 	return nil
