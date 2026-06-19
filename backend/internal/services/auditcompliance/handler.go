@@ -291,8 +291,8 @@ func auditLogs(app *platform.App, r *http.Request) []AuditLog {
 			continue
 		}
 		logs = append(logs, AuditLog{
-			ID:           event.EventID,
-			UserID:       shared.TextValue(event.Data, "user_id"),
+			ID:           auditEventLogID(event),
+			UserID:       auditEventActorID(event.Data),
 			ProjectID:    optionalString(shared.TextValue(event.Data, "project_id")),
 			Action:       shared.TextValue(event.Data, "action"),
 			ResourceType: shared.FirstNonEmpty(shared.TextValue(event.Data, "resource_type"), shared.TextValue(event.Data, "resource")),
@@ -312,6 +312,14 @@ func auditLogs(app *platform.App, r *http.Request) []AuditLog {
 	}
 	sort.Slice(logs, func(i, j int) bool { return logs[i].CreatedAt.After(logs[j].CreatedAt) })
 	return logs
+}
+
+func auditEventLogID(event contracts.Event) string {
+	return shared.FirstNonEmpty(shared.TextValue(event.Data, "audit_event_id", "auditEventID", "id"), event.EventID)
+}
+
+func auditEventActorID(data map[string]any) string {
+	return shared.TextValue(data, "actor_user_id", "actorUserID", "user_id", "userId")
 }
 
 func logFromMap(id string, data map[string]any, fallback time.Time) AuditLog {

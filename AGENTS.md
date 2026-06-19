@@ -29,44 +29,6 @@ See `docs/agents/workflow.md` for the full branch & PR conventions.
 
 Default rule: keep changes simple, surgical, testable, microservice-ready, SonarScanner-clean, and aligned with the backend microservice architecture documented in `backend/docs/`.
 
-## DevSpace MCP
-
-Agents may use the installed ChatGPT app/connector named **DevSpace MCP Direct** to work with this local workspace through MCP.
-
-* MCP URL: `https://mcp.sky-lab.uk/mcp`
-* Allowed workspace root: `/Users/sky/workspaces`
-* Authentication: DevSpace OAuth with Owner approval/password.
-* Local origin: `http://127.0.0.1:7676/mcp`
-* Required local sessions:
-  * `screen` session `devspace-mcp`
-  * `screen` session `cloudflared-devspace-mcp`
-
-Before relying on the connector, verify the runtime:
-
-```bash
-screen -ls
-curl -i https://mcp.sky-lab.uk/mcp
-```
-
-Expected public `/mcp` behavior is a DevSpace OAuth `401`, not a Cloudflare Access redirect. Cloudflare Access may still protect other paths on `mcp.sky-lab.uk`.
-
-Security rules:
-
-* Never print, commit, or paste `~/.devspace/auth.json`.
-* Never print, commit, or paste `~/.cloudflared/devspace-mcp.token`.
-* Treat DevSpace access as owner-approved remote filesystem and tool access to `/Users/sky/workspaces`.
-* Do not broaden Cloudflare DNS, Tunnel, Access, WAF, or bypass rules without explicit user approval.
-
-Operational commands:
-
-```bash
-# Stop the public MCP route
-screen -S cloudflared-devspace-mcp -X quit
-
-# Stop the local DevSpace server
-screen -S devspace-mcp -X quit
-```
-
 <!-- CODEGRAPH_START -->
 ## CodeGraph
 

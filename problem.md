@@ -182,7 +182,7 @@ remaining shared physical Postgres transition debt.
 
 ## 7. GA Architecture Roadmap Update
 
-_Updated: 2026-06-20. Branch: `feature/request-project-contract`._
+_Updated: 2026-06-20. Branch: `feature/audit-event-contract`._
 
 The 90-day GA architecture direction is now documented as a staged move from the
 current modular monolith to 8 coarse deployable units:
@@ -275,11 +275,20 @@ and keeps the isolated consumer from populating the org-project owner store.
 Focused consumer tests pass:
 `go -C backend test ./internal/contracts ./internal/services/requestnotification -run 'Event|Consumer|Projection|Contract|ReadModel|ProjectAccess' -count=1`.
 
+Audit-compliance audit-event consumer contract coverage now binds the existing
+event-fed audit log reader to the canonical v1 `AuditEvent` fixture. The reader
+prefers canonical `audit_event_id` and `actor_user_id` while keeping legacy event
+ID and `user_id` fallbacks. The test asserts `auditLogs` and
+`RecentAuditLogMaps` preserve the fixture ID, actor, action, resource, and
+timestamp fields, and keeps the isolated consumer from populating the audit
+owner-store resource. Focused consumer tests pass:
+`go -C backend test ./internal/contracts ./internal/services/auditcompliance -run 'Event|Audit|Consumer|Contract|RecentAudit' -count=1`.
+
 Latest local verification for this slice:
 
-- `go -C backend test ./internal/services/requestnotification -run 'Consumer|Projection|Contract|ReadModel|ProjectAccess' -count=1`:
+- `go -C backend test ./internal/services/auditcompliance -run 'AuditEvent|Consumer|Contract|RecentAudit' -count=1`:
   Pass.
-- `go -C backend test ./internal/contracts ./internal/services/requestnotification -run 'Event|Consumer|Projection|Contract|ReadModel|ProjectAccess' -count=1`:
+- `go -C backend test ./internal/contracts ./internal/services/auditcompliance -run 'Event|Audit|Consumer|Contract|RecentAudit' -count=1`:
   Pass.
 - `git diff --check`: Pass.
 - `go -C backend test ./... -count=1`: Pass.
@@ -307,7 +316,7 @@ and broader event-fed read-model adoption remain open.
 | --- | --- | --- | --- | --- |
 | High | staging evidence | The 8 deployable units do not yet have captured live staging deploy, smoke, rollback, and redeploy evidence | The roadmap is documented but cannot be declared GA-ready | Build staging runtime config and capture evidence unit by unit |
 | High | data ownership | Shared physical PostgreSQL and transition owner-read contracts remain; Outbox/Inbox runtime visibility exists but read-model adoption is not complete | Cross-unit boundaries are not yet GA-complete | Add durable relay/read-model slices and retire high-risk shared-store reads |
-| High | contract testing | Core event envelope v1 fixtures, initial producer-specific event tests, fixture-backed consumer tests for integration-proxy, cluster-read, gpuusage, authorization-policy, and request-notification, scheduler admission owner-read fixtures, scheduler/compute command fixtures, and runtime visibility tests exist, but broader owner-read/command coverage, broader route-level producer coverage, and remaining consumer event paths are not yet all versioned artifacts | Consumers can drift silently during decomposition | Add remaining owner-read/command fixtures, broader producer tests, and remaining consumer contract tests before changing internal contracts |
+| High | contract testing | Core event envelope v1 fixtures, initial producer-specific event tests, fixture-backed consumer tests for integration-proxy, cluster-read, gpuusage, authorization-policy, request-notification, and audit-compliance, scheduler admission owner-read fixtures, scheduler/compute command fixtures, and runtime visibility tests exist, but broader owner-read/command coverage, broader route-level producer coverage, and remaining consumer event paths are not yet all versioned artifacts | Consumers can drift silently during decomposition | Add remaining owner-read/command fixtures, broader producer tests, and remaining consumer contract tests before changing internal contracts |
 | High | Outbox/Inbox maturity | Runtime lag/dead-letter/projection visibility plus replay/retry progress exists, but drift metrics/comparison, durable relay/publish-lag evidence, and event-fed read-model adoption remain open | ADR 0002 cannot be declared complete and service cutovers still need stronger evidence | Add durable relay, drift comparison, and read-model adoption slices before retiring shared-store reads |
 | Medium | service identity | Static `SERVICE_API_KEY` remains the Production Beta service-to-service auth fallback | GA security posture depends on rotatable workload identity or equivalent | Introduce Kubernetes workload identity or approved equivalent in staging |
 | Medium | remote Sonar gate | GitHub-hosted Sonar still depends on repository secrets being configured | Remote PRs may not enforce Sonar even when local evidence exists | Provision reachable Sonar credentials and make the remote gate required |
