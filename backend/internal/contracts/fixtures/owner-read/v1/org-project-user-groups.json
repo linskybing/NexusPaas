@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "contract_name": "org-project user-groups owner-read v1",
+  "owner_service": "org-project-service",
+  "consumer_service": "scheduler-quota-service",
+  "resource": "org-project-service:user_groups",
+  "auth": "service_key",
+  "service_key_required": true,
+  "list_path": "/internal/org-project/user-groups",
+  "get_path": "/internal/org-project/user-groups/{id}",
+  "list_only": false,
+  "key_shape": "user_id/group_id",
+  "required_record_fields": ["id", "group_id", "user_id", "role"],
+  "records": [
+    {
+      "id": "22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333",
+      "data": {
+        "id": "22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333",
+        "group_id": "33333333-3333-4333-8333-333333333333",
+        "user_id": "22222222-2222-4222-8222-222222222222",
+        "role": "user"
+      },
+      "version": 1,
+      "created_at": "2026-06-19T00:00:00Z",
+      "updated_at": "2026-06-19T00:00:00Z"
+    }
+  ],
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}
