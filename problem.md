@@ -182,7 +182,7 @@ remaining shared physical Postgres transition debt.
 
 ## 7. GA Architecture Roadmap Update
 
-_Updated: 2026-06-19. Branch: `feature/ga-architecture-roadmap`._
+_Updated: 2026-06-19. Branch: `feature/ga-adr-baseline`._
 
 The 90-day GA architecture direction is now documented as a staged move from the
 current modular monolith to 8 coarse deployable units:
@@ -199,6 +199,12 @@ current modular monolith to 8 coarse deployable units:
 The accepted direction avoids a big-bang 15-service split. It prioritizes
 Outbox/Inbox, read models, versioned internal contracts, deployable-unit
 staging evidence, and compute saga hardening.
+
+The Day 0-15 ADR baseline is now recorded under `docs/adr/` for the 8-unit
+target, Outbox/Inbox and read-model migration, GA service identity direction,
+and deployment evidence gates. These ADRs close the decision-record gap only;
+implementation, contract fixtures, staging evidence, and security hardening
+remain open until the follow-up slices produce test and runtime evidence.
 
 ### GA Architecture Remaining Issues
 
