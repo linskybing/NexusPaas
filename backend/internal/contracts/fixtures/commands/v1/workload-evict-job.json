@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "contract_name": "workload.evict_job",
+  "owner_service": "workload-service",
+  "consumer_service": "scheduler-quota-service",
+  "resource": "workload-service:jobs",
+  "action": "evict",
+  "method": "POST",
+  "path": "/internal/workload/jobs/{id}/evict",
+  "auth": "service_key",
+  "service_key_required": true,
+  "path_parameters": ["id"],
+  "required_request_fields": ["reason"],
+  "request_example": {
+    "reason": "plan window expired"
+  },
+  "success_statuses": [200],
+  "error_statuses": [400, 401, 404, 409, 500],
+  "idempotency": {
+    "idempotent": true,
+    "semantic_key": ["id"],
+    "behavior": "Evicting an already evicted job returns the existing job record and does not overwrite other terminal states."
+  },
+  "emits_events": [],
+  "response_example": {
+    "id": "job-ga-evicted",
+    "version": 4,
+    "created_at": "2026-06-19T00:00:00Z",
+    "updated_at": "2026-06-19T00:08:00Z",
+    "data": {
+      "id": "job-ga-evicted",
+      "job_id": "job-ga-evicted",
+      "project_id": "project-ga-001",
+      "user_id": "user-ga-owner",
+      "queue_name": "gpu-standard",
+      "namespace": "project-ga-standard",
+      "status": "evicted",
+      "eviction_reason": "plan window expired"
+    }
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

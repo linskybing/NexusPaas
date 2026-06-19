@@ -66,61 +66,25 @@ func TestRemoteServiceReaderConsumesOwnerReadFixtures(t *testing.T) {
 	fixtures := ownerReadPlatformFixtures(t)
 	serviceKey := "svc-owner-read-fixtures"
 	var calls []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls = append(calls, r.URL.Path)
-		if r.Header.Get(serviceKeyHeader) != serviceKey {
-			WriteError(w, r, http.StatusUnauthorized, "unauthorized", "service authentication is required")
-			return
-		}
-		for _, fixture := range fixtures {
-			if payload, ok := fixture.payloadForPath(r.URL.Path); ok {
-				WriteJSON(w, r, http.StatusOK, payload)
-				return
-			}
-		}
-		WriteError(w, r, http.StatusNotFound, "not_found", "unexpected owner-read path")
-	}))
+	server := newOwnerReadFixtureServer(fixtures, serviceKey, &calls)
 	t.Cleanup(server.Close)
 
-	reader := NewRemoteServiceReader(Config{
-		ServiceURLs: map[string]string{
-			"org-project-service": server.URL,
-			"workload-service":    server.URL,
-		},
-		ServiceAPIKey: serviceKey,
-	})
+	reader := newOwnerReadFixtureReader(server.URL, serviceKey)
 
 	for _, fixture := range fixtures {
-		records, err := reader.List(context.Background(), fixture.Resource)
-		if err != nil {
-			t.Fatalf("List(%s): %v", fixture.Resource, err)
-		}
-		if len(records) != 1 || records[0].ID != fixture.Records[0].ID {
-			t.Fatalf("List(%s) = %#v, want fixture record %q", fixture.Resource, records, fixture.Records[0].ID)
-		}
+		assertRemoteReaderListConsumesFixture(t, reader, fixture)
 		if fixture.ListOnly {
-			if _, ok, err := reader.Get(context.Background(), fixture.Resource, fixture.Records[0].ID); err == nil || ok {
-				t.Fatalf("Get(%s) ok=%v err=%v, want list-only failure", fixture.Resource, ok, err)
-			}
+			assertRemoteReaderRejectsListOnlyGet(t, reader, fixture)
 			continue
 		}
-		record, ok, err := reader.Get(context.Background(), fixture.Resource, fixture.Records[0].ID)
-		if err != nil || !ok || record.ID != fixture.Records[0].ID {
-			t.Fatalf("Get(%s) = %#v ok=%v err=%v, want fixture record", fixture.Resource, record, ok, err)
-		}
+		assertRemoteReaderGetConsumesFixture(t, reader, fixture)
 	}
 
 	if want := len(fixtures)*2 - 1; len(calls) != want {
 		t.Fatalf("remote reader calls = %v, want %d list/get calls", calls, want)
 	}
 
-	badReader := NewRemoteServiceReader(Config{
-		ServiceURLs:   map[string]string{"org-project-service": server.URL},
-		ServiceAPIKey: serviceKey + "-wrong",
-	})
-	if _, err := badReader.List(context.Background(), "org-project-service:projects"); err == nil {
-		t.Fatal("List with bad service key error = nil, want unauthorized error")
-	}
+	assertRemoteReaderRejectsBadServiceKey(t, server.URL, serviceKey)
 }
 
 type ownerReadPlatformFixture struct {
@@ -149,6 +113,70 @@ func (fixture ownerReadPlatformFixture) payloadForPath(path string) (any, bool) 
 		return fixture.Records[0], true
 	}
 	return nil, false
+}
+
+func newOwnerReadFixtureServer(fixtures []ownerReadPlatformFixture, serviceKey string, calls *[]string) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*calls = append(*calls, r.URL.Path)
+		if r.Header.Get(serviceKeyHeader) != serviceKey {
+			WriteError(w, r, http.StatusUnauthorized, "unauthorized", "service authentication is required")
+			return
+		}
+		for _, fixture := range fixtures {
+			if payload, ok := fixture.payloadForPath(r.URL.Path); ok {
+				WriteJSON(w, r, http.StatusOK, payload)
+				return
+			}
+		}
+		WriteError(w, r, http.StatusNotFound, "not_found", "unexpected owner-read path")
+	}))
+}
+
+func newOwnerReadFixtureReader(serverURL, serviceKey string) *RemoteServiceReader {
+	return NewRemoteServiceReader(Config{
+		ServiceURLs: map[string]string{
+			"org-project-service": serverURL,
+			"workload-service":    serverURL,
+		},
+		ServiceAPIKey: serviceKey,
+	})
+}
+
+func assertRemoteReaderListConsumesFixture(t *testing.T, reader *RemoteServiceReader, fixture ownerReadPlatformFixture) {
+	t.Helper()
+	records, err := reader.List(context.Background(), fixture.Resource)
+	if err != nil {
+		t.Fatalf("List(%s): %v", fixture.Resource, err)
+	}
+	if len(records) != 1 || records[0].ID != fixture.Records[0].ID {
+		t.Fatalf("List(%s) = %#v, want fixture record %q", fixture.Resource, records, fixture.Records[0].ID)
+	}
+}
+
+func assertRemoteReaderRejectsListOnlyGet(t *testing.T, reader *RemoteServiceReader, fixture ownerReadPlatformFixture) {
+	t.Helper()
+	if _, ok, err := reader.Get(context.Background(), fixture.Resource, fixture.Records[0].ID); err == nil || ok {
+		t.Fatalf("Get(%s) ok=%v err=%v, want list-only failure", fixture.Resource, ok, err)
+	}
+}
+
+func assertRemoteReaderGetConsumesFixture(t *testing.T, reader *RemoteServiceReader, fixture ownerReadPlatformFixture) {
+	t.Helper()
+	record, ok, err := reader.Get(context.Background(), fixture.Resource, fixture.Records[0].ID)
+	if err != nil || !ok || record.ID != fixture.Records[0].ID {
+		t.Fatalf("Get(%s) = %#v ok=%v err=%v, want fixture record", fixture.Resource, record, ok, err)
+	}
+}
+
+func assertRemoteReaderRejectsBadServiceKey(t *testing.T, serverURL, serviceKey string) {
+	t.Helper()
+	badReader := NewRemoteServiceReader(Config{
+		ServiceURLs:   map[string]string{"org-project-service": serverURL},
+		ServiceAPIKey: serviceKey + "-wrong",
+	})
+	if _, err := badReader.List(context.Background(), "org-project-service:projects"); err == nil {
+		t.Fatal("List with bad service key error = nil, want unauthorized error")
+	}
 }
 
 func ownerReadPlatformFixtures(t *testing.T) []ownerReadPlatformFixture {
