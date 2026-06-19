@@ -182,7 +182,7 @@ remaining shared physical Postgres transition debt.
 
 ## 7. GA Architecture Roadmap Update
 
-_Updated: 2026-06-19. Branch: `feature/command-fixtures`._
+_Updated: 2026-06-19. Branch: `feature/outbox-inbox-foundation`._
 
 The 90-day GA architecture direction is now documented as a staged move from the
 current modular monolith to 8 coarse deployable units:
@@ -206,26 +206,54 @@ and deployment evidence gates. These ADRs close the decision-record gap only;
 implementation, contract fixtures, staging evidence, and security hardening
 remain open until the follow-up slices produce test and runtime evidence.
 
-The Day 16-35 contract work now includes canonical v1 core event envelope
-fixtures under `backend/internal/contracts/fixtures/events/v1/`, scheduler
-admission owner-read fixtures under
+The Day 16-35 contract/runtime work now includes canonical v1 core event
+envelope fixtures under `backend/internal/contracts/fixtures/events/v1/`,
+scheduler admission owner-read fixtures under
 `backend/internal/contracts/fixtures/owner-read/v1/`, and scheduler/compute
 internal command fixtures under
 `backend/internal/contracts/fixtures/commands/v1/`, all guarded by focused
 contract and drift tests. This gives reviewers versioned event-envelope evidence
 for identity, tenant, workload, scheduler, and audit events; owner-read HTTP
 contract artifacts for scheduler admission dependencies; and command artifacts
-for scheduler-quota writes into org-project and workload owners. Broader command
-coverage, broader owner-read coverage, producer-specific event tests, broader
-consumer contract tests, and Outbox/Inbox runtime infrastructure remain open.
+for scheduler-quota writes into org-project and workload owners.
+
+The Outbox/Inbox runtime visibility foundation now exposes projection lag on
+`/projections`, set-based Prometheus metrics for outbox depth, consumer lag,
+projection applied totals, and projection dead-letter totals, and checkpoint
+behavior that keeps lag visible when consumer intake fails. Focused platform
+tests pass for projection lag/checkpoint behavior, dead-letter visibility,
+runtime metric snapshot semantics, and escaped consumer metric labels:
+`go -C backend test ./internal/platform -run 'Projection|Outbox|Metrics|Observability' -count=1`.
+
+Latest local verification for this slice:
+
+- `git diff --check`: Pass.
+- `go -C backend test ./... -count=1`: Pass.
+- `go -C backend vet ./...`: Pass.
+- `go -C backend build ./...`: Pass.
+- `bash backend/scripts/ci-security-gate.sh quick`: Pass.
+- `bash backend/scripts/ci-security-gate.sh security`: Pass; govulncheck and
+  OSV found no issues, Docker image build succeeded, and Trivy reported 0
+  vulnerabilities.
+- `bash backend/scripts/ci-security-gate.sh sonar`: Pass; local SonarScanner
+  Quality Gate passed for `nexuspaas-backend`.
+
+No E2E, live Kubernetes, or staging evidence was required for this slice because
+the change is limited to in-process operational visibility and platform tests.
+
+Broader command coverage, broader owner-read coverage, producer-specific event
+tests, broader consumer contract tests, durable relay/publish-lag evidence,
+retry count, replay progress, drift metrics/comparison, and event-fed read-model
+adoption remain open.
 
 ### GA Architecture Remaining Issues
 
 | Priority | Area | Problem | Impact | Recommended Next Step |
 | --- | --- | --- | --- | --- |
 | High | staging evidence | The 8 deployable units do not yet have captured live staging deploy, smoke, rollback, and redeploy evidence | The roadmap is documented but cannot be declared GA-ready | Build staging runtime config and capture evidence unit by unit |
-| High | data ownership | Shared physical PostgreSQL and transition owner-read contracts remain | Cross-unit boundaries are not yet GA-complete | Add Outbox/Inbox/read-model slices and retire high-risk shared-store reads |
-| High | contract testing | Core event envelope v1 fixtures, scheduler admission owner-read fixtures, and scheduler/compute command fixtures exist, but broader owner-read/command coverage and producer/consumer event coverage are not yet all versioned artifacts | Consumers can drift silently during decomposition | Add remaining owner-read/command fixtures, producer-specific event tests, and consumer contract tests before changing internal contracts |
+| High | data ownership | Shared physical PostgreSQL and transition owner-read contracts remain; Outbox/Inbox runtime visibility exists but read-model adoption is not complete | Cross-unit boundaries are not yet GA-complete | Add durable relay/read-model slices and retire high-risk shared-store reads |
+| High | contract testing | Core event envelope v1 fixtures, scheduler admission owner-read fixtures, scheduler/compute command fixtures, and runtime visibility tests exist, but broader owner-read/command coverage and producer/consumer event coverage are not yet all versioned artifacts | Consumers can drift silently during decomposition | Add remaining owner-read/command fixtures, producer-specific event tests, and consumer contract tests before changing internal contracts |
+| High | Outbox/Inbox maturity | Runtime lag/dead-letter/projection visibility exists, but retry count, replay progress, drift metrics/comparison, durable relay/publish-lag evidence, and event-fed read-model adoption remain open | ADR 0002 cannot be declared complete and service cutovers still need stronger evidence | Add durable relay, retry/replay progress, drift comparison, and read-model adoption slices before retiring shared-store reads |
 | Medium | service identity | Static `SERVICE_API_KEY` remains the Production Beta service-to-service auth fallback | GA security posture depends on rotatable workload identity or equivalent | Introduce Kubernetes workload identity or approved equivalent in staging |
 | Medium | remote Sonar gate | GitHub-hosted Sonar still depends on repository secrets being configured | Remote PRs may not enforce Sonar even when local evidence exists | Provision reachable Sonar credentials and make the remote gate required |
 | Medium | supply chain | SBOM generation and image signing are GA goals but not yet enforced | Release provenance remains incomplete | Add SBOM and Cosign signing after staging promotion is stable |

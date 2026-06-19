@@ -34,8 +34,14 @@ func TestRunProjectionAppliesOnceAndRecordsFreshness(t *testing.T) {
 	}
 
 	statuses := app.ProjectionStatuses()
-	if len(statuses) != 1 || statuses[0].Consumer != "c1" || statuses[0].Applied != 1 || statuses[0].LastEventID != "e1" {
-		t.Fatalf("projection status = %#v, want c1 applied=1 last=e1", statuses)
+	if len(statuses) != 1 || statuses[0].Consumer != "c1" || statuses[0].Applied != 1 || statuses[0].LastEventID != "e1" || statuses[0].Lag != 0 {
+		t.Fatalf("projection status = %#v, want c1 applied=1 last=e1 lag=0", statuses)
+	}
+
+	publishTestEvent(t, app, "e2", "Thing")
+	statuses = app.ProjectionStatuses()
+	if len(statuses) != 1 || statuses[0].Lag != 1 {
+		t.Fatalf("projection status after new event = %#v, want lag=1", statuses)
 	}
 }
 
@@ -52,6 +58,24 @@ func TestRunProjectionDeadLettersFailedEvent(t *testing.T) {
 	}
 	if statuses := app.ProjectionStatuses(); len(statuses) != 1 || statuses[0].DeadLettered != 1 || statuses[0].Applied != 0 {
 		t.Fatalf("status = %#v, want dead_lettered=1 applied=0", statuses)
+	}
+}
+
+func TestRunProjectionKeepsLagVisibleWhenConsumeFails(t *testing.T) {
+	stream := &consumeErrorEventStream{events: []contracts.Event{testEvent(1)}}
+	app := NewApp(Config{}, WithEventBus(stream))
+
+	app.RunProjection(context.Background(), "broken-consumer", func(contracts.Event) error {
+		t.Fatal("apply must not run when Consume fails")
+		return nil
+	})
+
+	if stream.checkpointed {
+		t.Fatal("projection checkpointed after consume failure; lag would be hidden")
+	}
+	statuses := app.ProjectionStatuses()
+	if len(statuses) != 1 || statuses[0].Consumer != "broken-consumer" || statuses[0].Lag != 1 {
+		t.Fatalf("projection status after consume failure = %#v, want broken-consumer lag=1", statuses)
 	}
 }
 
@@ -94,3 +118,31 @@ func TestServiceFallbackDisabledKeepsStoreLocal(t *testing.T) {
 		t.Fatal("isolated service with SERVICE_URLS should install the cross-service fallback by default")
 	}
 }
+
+type consumeErrorEventStream struct {
+	events       []contracts.Event
+	checkpointed bool
+}
+
+func (s *consumeErrorEventStream) Publish(_ context.Context, event contracts.Event) error {
+	s.events = append(s.events, event)
+	return nil
+}
+
+func (s *consumeErrorEventStream) Consume(context.Context, string, contracts.Event) (bool, error) {
+	return false, errors.New("consume failed")
+}
+
+func (s *consumeErrorEventStream) Outbox() []contracts.Event {
+	return append([]contracts.Event(nil), s.events...)
+}
+
+func (s *consumeErrorEventStream) Checkpoint(string) {
+	s.checkpointed = true
+}
+
+func (s *consumeErrorEventStream) Lag(string) int {
+	return len(s.events)
+}
+
+func (s *consumeErrorEventStream) ResetConsumer(string) {}
