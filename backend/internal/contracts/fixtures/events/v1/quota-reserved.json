@@ -1,0 +1,22 @@
+{
+  "event_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  "schema_version": 1,
+  "event_type": "QuotaReserved",
+  "producer": "scheduler-quota-service",
+  "occurred_at": "2026-06-19T00:03:00Z",
+  "trace_id": "trace-quota-reserved-v1",
+  "request_id": "req-quota-reserved-v1",
+  "aggregate_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  "payload": {
+    "reservation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    "project_id": "55555555-5555-4555-8555-555555555555",
+    "job_id": "99999999-9999-4999-8999-999999999999",
+    "plan_id": "77777777-7777-4777-8777-777777777777",
+    "reserved": {
+      "gpu": 1,
+      "cpu_millis": 4000,
+      "memory_mib": 16384
+    },
+    "expires_at": "2026-06-19T00:08:00Z"
+  }
+}

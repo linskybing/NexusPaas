@@ -24,9 +24,23 @@ Cross-service state synchronization uses an event bus. All events are published 
 | ProxySessionStarted / ProxySessionTerminated | integration-proxy-service | audit-compliance, usage-observability | Record external tool proxy session lifecycle. |
 | MediaUploaded / MediaDeleted | media-upload-service | audit-compliance, request-notification | Track uploaded media object lifecycle. |
 
+## Versioned Fixtures
+
+Canonical v1 event envelope fixtures live under `backend/internal/contracts/fixtures/events/v1/` and are validated by `backend/internal/contracts` tests. The initial fixture set covers the first GA contract slice:
+
+| Event | Fixture | Producer | Representative Boundary |
+| --- | --- | --- | --- |
+| UserUpdated | `user-updated.json` | `identity-service` | IAM identity snapshot for downstream read models |
+| ProjectUpdated | `project-updated.json` | `org-project-service` | Tenant/project ownership and quota-plan snapshot |
+| JobSubmitted | `job-submitted.json` | `workload-service` | Compute API admission request snapshot |
+| QuotaReserved | `quota-reserved.json` | `scheduler-quota-service` | Scheduler/quota reservation state |
+| AuditEvent | `audit-event.json` | `scheduler-quota-service` | Mandatory audit trail event |
+
 ## Design Constraints
 
-- Events must carry `event_id` (UUID), `occurred_at`, `trace_id`, and `schema_version`.
+- V1 fixtures must carry `event_id` (UUID), `schema_version`, `event_type`, `producer`, `occurred_at`, `trace_id`, `aggregate_id`, and `payload`.
+- `request_id` is optional; consumers must keep `trace_id` as the required correlation key and tolerate missing `request_id`.
 - Subscribers must process idempotently (Inbox deduplication).
-- Event schema evolution is additive-only; breaking changes require a new versioned topic.
+- Event schema evolution is additive-only; consumers must tolerate unknown top-level fields and additive payload fields. Breaking changes require a new versioned topic or envelope version.
+- Payloads must carry UUIDs and safe snapshots, not internal database row IDs, raw primary keys, secrets, tokens, cookies, credentials, or private tenant data.
 - AuditEvent is mandatory: all administrative operations, permission changes, and important Job/Storage/Image state changes must publish one (NFR-SEC-05).
