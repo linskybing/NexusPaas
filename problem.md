@@ -182,7 +182,7 @@ remaining shared physical Postgres transition debt.
 
 ## 7. GA Architecture Roadmap Update
 
-_Updated: 2026-06-20. Branch: `feature/event-consumer-contracts`._
+_Updated: 2026-06-20. Branch: `feature/outbox-replay-progress`._
 
 The 90-day GA architecture direction is now documented as a staged move from the
 current modular monolith to 8 coarse deployable units:
@@ -225,6 +225,14 @@ tests pass for projection lag/checkpoint behavior, dead-letter visibility,
 runtime metric snapshot semantics, and escaped consumer metric labels:
 `go -C backend test ./internal/platform -run 'Projection|Outbox|Metrics|Observability' -count=1`.
 
+Projection replay and retry progress are now visible through additive
+`/projections` fields, Prometheus metrics, and dead-letter metadata. A replay
+request records `replay_count`, `replay_pending`, and `last_replay_at`, while
+replayed poison events update the existing dead-letter record with
+`attempt_count`, `retry_count`, and `last_failed_at`; metrics now expose
+per-consumer replay and retry totals. Focused platform tests pass:
+`go -C backend test ./internal/platform -run 'Projection|Outbox|Metrics|Observability' -count=1`.
+
 Initial producer-specific event contract coverage now binds the five canonical
 v1 event fixtures to real producer helpers or route producer paths:
 `UserUpdated` from identity, `ProjectUpdated` from org-project, `JobSubmitted`
@@ -246,9 +254,7 @@ populating owner-store resources. Focused consumer tests pass:
 
 Latest local verification for this slice:
 
-- `go -C backend test ./internal/services/integrationproxy ./internal/services/clusterread -run 'Consumer|Projection|Contract|ReadModel' -count=1`:
-  Pass.
-- `go -C backend test ./internal/contracts ./internal/services/integrationproxy ./internal/services/clusterread -run 'Event|Consumer|Projection|Contract|ReadModel' -count=1`:
+- `go -C backend test ./internal/platform -run 'Projection|Outbox|Metrics|Observability' -count=1`:
   Pass.
 - `git diff --check`: Pass.
 - `go -C backend test ./... -count=1`: Pass.
@@ -262,13 +268,13 @@ Latest local verification for this slice:
   Quality Gate passed for `nexuspaas-backend`.
 
 No E2E, live Kubernetes, or staging evidence was required for this slice because
-the change is limited to in-process consumer contract tests for existing
-event-fed read-model projection helpers.
+the change is limited to in-process projection runtime metadata, operational
+status, and metrics.
 
 Broader command coverage, broader owner-read coverage, broader route-level
 producer coverage, remaining consumer contract tests for other canonical events,
-durable relay/publish-lag evidence, retry count, replay progress, drift
-metrics/comparison, and broader event-fed read-model adoption remain open.
+durable relay/publish-lag evidence, drift metrics/comparison, and broader
+event-fed read-model adoption remain open.
 
 ### GA Architecture Remaining Issues
 
@@ -277,7 +283,7 @@ metrics/comparison, and broader event-fed read-model adoption remain open.
 | High | staging evidence | The 8 deployable units do not yet have captured live staging deploy, smoke, rollback, and redeploy evidence | The roadmap is documented but cannot be declared GA-ready | Build staging runtime config and capture evidence unit by unit |
 | High | data ownership | Shared physical PostgreSQL and transition owner-read contracts remain; Outbox/Inbox runtime visibility exists but read-model adoption is not complete | Cross-unit boundaries are not yet GA-complete | Add durable relay/read-model slices and retire high-risk shared-store reads |
 | High | contract testing | Core event envelope v1 fixtures, initial producer-specific event tests, initial fixture-backed consumer tests for integration-proxy and cluster-read, scheduler admission owner-read fixtures, scheduler/compute command fixtures, and runtime visibility tests exist, but broader owner-read/command coverage, broader route-level producer coverage, and remaining consumer event coverage are not yet all versioned artifacts | Consumers can drift silently during decomposition | Add remaining owner-read/command fixtures, broader producer tests, and remaining consumer contract tests before changing internal contracts |
-| High | Outbox/Inbox maturity | Runtime lag/dead-letter/projection visibility exists, but retry count, replay progress, drift metrics/comparison, durable relay/publish-lag evidence, and event-fed read-model adoption remain open | ADR 0002 cannot be declared complete and service cutovers still need stronger evidence | Add durable relay, retry/replay progress, drift comparison, and read-model adoption slices before retiring shared-store reads |
+| High | Outbox/Inbox maturity | Runtime lag/dead-letter/projection visibility plus replay/retry progress exists, but drift metrics/comparison, durable relay/publish-lag evidence, and event-fed read-model adoption remain open | ADR 0002 cannot be declared complete and service cutovers still need stronger evidence | Add durable relay, drift comparison, and read-model adoption slices before retiring shared-store reads |
 | Medium | service identity | Static `SERVICE_API_KEY` remains the Production Beta service-to-service auth fallback | GA security posture depends on rotatable workload identity or equivalent | Introduce Kubernetes workload identity or approved equivalent in staging |
 | Medium | remote Sonar gate | GitHub-hosted Sonar still depends on repository secrets being configured | Remote PRs may not enforce Sonar even when local evidence exists | Provision reachable Sonar credentials and make the remote gate required |
 | Medium | supply chain | SBOM generation and image signing are GA goals but not yet enforced | Release provenance remains incomplete | Add SBOM and Cosign signing after staging promotion is stable |
