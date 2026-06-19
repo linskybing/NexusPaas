@@ -232,3 +232,33 @@ bash backend/scripts/ci-security-gate.sh quick
 ```
 
 Status: Approved
+
+## 23. Remote CI Feedback Follow-Up
+
+The first PR run failed `Integration and E2E` because `TestProviderConsumerContractMatrix` parses every table in `backend/docs/event-contracts.md` as an event-contract table and expects the first column to contain catalog event names. The new versioned-fixtures table initially used `Fixture` as the first column, then used backticked event names, so the parser read invalid event names.
+
+The fix keeps the approved scope and changes only `backend/docs/event-contracts.md`: the versioned-fixtures table now uses plain event names in the first column and fixture filenames in the second column.
+
+Additional verification after the CI feedback fix:
+
+```sh
+go -C backend test -tags e2e ./internal/e2e -run TestProviderConsumerContractMatrix -count=1 -v
+# Pass: TestProviderConsumerContractMatrix
+
+git diff --check
+# Pass: no output
+
+go -C backend test ./... -count=1
+# Pass: all backend packages
+
+go -C backend vet ./...
+# Pass: no output
+
+go -C backend build ./...
+# Pass: no output
+
+bash backend/scripts/ci-security-gate.sh quick
+# Pass: Go 1.25.11 quick gate completed gofmt, vet, test, and build
+```
+
+Status: Approved

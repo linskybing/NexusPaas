@@ -28,13 +28,13 @@ Cross-service state synchronization uses an event bus. All events are published 
 
 Canonical v1 event envelope fixtures live under `backend/internal/contracts/fixtures/events/v1/` and are validated by `backend/internal/contracts` tests. The initial fixture set covers the first GA contract slice:
 
-| Fixture | Event Type | Producer | Representative Boundary |
+| Event | Fixture | Producer | Representative Boundary |
 | --- | --- | --- | --- |
-| `user-updated.json` | `UserUpdated` | `identity-service` | IAM identity snapshot for downstream read models |
-| `project-updated.json` | `ProjectUpdated` | `org-project-service` | Tenant/project ownership and quota-plan snapshot |
-| `job-submitted.json` | `JobSubmitted` | `workload-service` | Compute API admission request snapshot |
-| `quota-reserved.json` | `QuotaReserved` | `scheduler-quota-service` | Scheduler/quota reservation state |
-| `audit-event.json` | `AuditEvent` | `scheduler-quota-service` | Mandatory audit trail event |
+| UserUpdated | `user-updated.json` | `identity-service` | IAM identity snapshot for downstream read models |
+| ProjectUpdated | `project-updated.json` | `org-project-service` | Tenant/project ownership and quota-plan snapshot |
+| JobSubmitted | `job-submitted.json` | `workload-service` | Compute API admission request snapshot |
+| QuotaReserved | `quota-reserved.json` | `scheduler-quota-service` | Scheduler/quota reservation state |
+| AuditEvent | `audit-event.json` | `scheduler-quota-service` | Mandatory audit trail event |
 
 ## Design Constraints
 
