@@ -338,16 +338,45 @@ func (a *App) handleRoute(r *httpRequest, route RouteSpec) (int, any, *Degraded)
 }
 
 func (a *App) publishAudit(r *httpRequest, route RouteSpec, success bool) {
-	a.publishEvent(r, "AuditEvent", map[string]any{
-		"user_id":    firstNonEmpty(r.Header.Get(headerUserID), "anonymous"),
-		"action":     route.OperationID,
-		"resource":   route.Resource,
-		"success":    success,
-		"source_ip":  r.RemoteAddr,
-		"project_id": r.URL.Query().Get("project_id"),
-		"group_id":   r.URL.Query().Get("group_id"),
-	})
+	userID := firstNonEmpty(r.Header.Get(headerUserID), "anonymous")
+	resourceID := firstNonEmpty(pathID(r.Request, route.IDParam), r.URL.Query().Get("project_id"), r.URL.Query().Get("group_id"), r.URL.Path)
+	payload := map[string]any{
+		"audit_event_id": NewUUID(),
+		"user_id":        userID,
+		"actor_user_id":  userID,
+		"action":         route.OperationID,
+		"resource":       route.Resource,
+		"resource_type":  auditResourceType(route),
+		"resource_id":    resourceID,
+		"success":        success,
+		"outcome":        auditOutcome(success),
+		"source_ip":      r.RemoteAddr,
+		"source_service": r.Service,
+		"request_path":   r.URL.Path,
+		"project_id":     r.URL.Query().Get("project_id"),
+		"group_id":       r.URL.Query().Get("group_id"),
+	}
+	a.publishEvent(r, "AuditEvent", payload)
 	a.Metrics.Inc("audit_events")
+}
+
+func auditOutcome(success bool) string {
+	if success {
+		return "allowed"
+	}
+	return "denied"
+}
+
+func auditResourceType(route RouteSpec) string {
+	resource := route.Resource
+	if prefix := route.ServicePrefix(); prefix != "" {
+		resource = strings.TrimPrefix(resource, prefix+":")
+	}
+	resource = strings.Trim(resource, ":")
+	if resource == "" {
+		return "unknown"
+	}
+	return strings.ReplaceAll(resource, ":", "_")
 }
 
 func (a *App) publishDomainEvent(r *httpRequest, route RouteSpec, suffix string, data map[string]any) {
