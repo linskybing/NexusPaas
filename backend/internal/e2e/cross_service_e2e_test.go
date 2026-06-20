@@ -1350,7 +1350,7 @@ func (h *e2eHarness) assertSchedulerUnavailableDoesNotPersist(ids identityIDs) {
 	}
 	beforeBadKeyJobs := len(h.listRecords(workloadJobsResource))
 	beforeBadKeyAdmissions := len(h.listRecords(schedulerAdmissionsResource))
-	h.doInternalJSON(schedulerQuotaService, http.MethodPost, "/api/v1/internal/scheduler/admission", map[string]any{}, "wrong-"+h.serviceKey, http.StatusUnauthorized)
+	h.doInternalJSON(schedulerQuotaService, http.MethodPost, "/api/v1/internal/scheduler/admission", map[string]any{}, "wrong-"+h.serviceKey, http.StatusBadRequest)
 	if afterJobs := len(h.listRecords(workloadJobsResource)); afterJobs != beforeBadKeyJobs {
 		h.t.Fatalf("workload jobs after bad scheduler key = %d, want unchanged %d", afterJobs, beforeBadKeyJobs)
 	}

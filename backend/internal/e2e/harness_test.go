@@ -594,7 +594,7 @@ func (h *e2eHarness) doInternalJSON(serviceName, method, path string, payload an
 		}
 		body = bytes.NewReader(raw)
 	}
-	req := h.newRequest(serviceName, method, path, body, "")
+	req := h.newRequest(serviceName, method, path, body, h.apiKey)
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -649,6 +649,9 @@ func (h *e2eHarness) doURLInternalJSON(baseURL, method, path string, payload any
 	}
 	if serviceKey != "" {
 		req.Header.Set("X-Service-Key", serviceKey)
+	}
+	if h.apiKey != "" {
+		req.Header.Set("X-API-Key", h.apiKey)
 	}
 	req.Header.Set("X-Request-ID", "req-"+h.runID)
 	req.Header.Set("X-Trace-ID", "trace-"+h.runID)
