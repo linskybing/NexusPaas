@@ -138,7 +138,7 @@ func TestComposeCollaborationSmoke(t *testing.T) {
 	s.runStep("authorization policy bootstrap", []string{authorizationPolicyService}, func(step *composeSmokeStep) error {
 		return s.seedAuthorizationPolicies(step)
 	})
-	s.runStep("15 isolated service registry", composeSmokeServices, func(step *composeSmokeStep) error {
+	s.runStep("8 unit service registry", composeSmokeServices, func(step *composeSmokeStep) error {
 		return s.assertIsolatedServiceRegistries(step)
 	})
 
@@ -578,12 +578,41 @@ func (s *composeSmoke) assertIsolatedServiceRegistries(step *composeSmokeStep) e
 		if err := json.Unmarshal(resp.Body, &env); err != nil {
 			return fmt.Errorf("%s service registry decode: %w", service, err)
 		}
-		if len(env.Data) != 1 || env.Data[0].Name != service {
-			return fmt.Errorf("%s service-registry = %#v, want exactly %s", service, env.Data, service)
+		got := make([]string, 0, len(env.Data))
+		for _, entry := range env.Data {
+			got = append(got, entry.Name)
+		}
+		sort.Strings(got)
+		want := expectedComposeRegistryServices(service)
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			return fmt.Errorf("%s service-registry = %v, want %v", service, got, want)
 		}
 	}
-	step.Records = append(step.Records, "service-registry entries: 15 isolated single-service views")
+	step.Records = append(step.Records, "service-registry entries: 8 unit views covering 15 logical services")
 	return nil
+}
+
+func expectedComposeRegistryServices(service string) []string {
+	switch service {
+	case "platform-gateway":
+		return []string{"platform-gateway"}
+	case identityService, authorizationPolicyService:
+		return []string{authorizationPolicyService, identityService}
+	case orgProjectService:
+		return []string{orgProjectService}
+	case auditComplianceService, requestNotificationService, mediaUploadService:
+		return []string{auditComplianceService, mediaUploadService, requestNotificationService}
+	case storageService, imageRegistryService, integrationProxyService:
+		return []string{imageRegistryService, integrationProxyService, storageService}
+	case usageObservabilityService:
+		return []string{usageObservabilityService}
+	case workloadService, ideService:
+		return []string{ideService, workloadService}
+	case schedulerQuotaService, k8sControlService:
+		return []string{k8sControlService, schedulerQuotaService}
+	default:
+		return []string{service}
+	}
 }
 
 func (s *composeSmoke) seedIdentityContracts() identityIDs {
@@ -1053,13 +1082,34 @@ func (s *composeSmoke) assertSchedulerOutageFailsClosed(step *composeSmokeStep, 
 }
 
 func (s *composeSmoke) stopComposeService(service string) error {
-	cmd := exec.CommandContext(s.ctx, "docker", "compose", "-p", s.composeProject, "-f", s.composeFile, "stop", service)
+	cmd := exec.CommandContext(s.ctx, "docker", "compose", "-p", s.composeProject, "-f", s.composeFile, "stop", composePhysicalServiceName(service))
 	cmd.Env = os.Environ()
 	raw, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("stop compose service %s: %w: %s", service, err, string(raw))
 	}
 	return nil
+}
+
+func composePhysicalServiceName(service string) string {
+	switch service {
+	case identityService, authorizationPolicyService:
+		return "iam-unit"
+	case orgProjectService:
+		return "tenant-unit"
+	case auditComplianceService, requestNotificationService, mediaUploadService:
+		return "collaboration-unit"
+	case storageService, imageRegistryService, integrationProxyService:
+		return "platform-io-unit"
+	case usageObservabilityService:
+		return "usage-observability"
+	case workloadService, ideService:
+		return "compute-api"
+	case schedulerQuotaService, k8sControlService:
+		return "compute-control-plane"
+	default:
+		return service
+	}
 }
 
 func (s *composeSmoke) doJSON(req composeRequest) (composeHTTPResponse, error) {

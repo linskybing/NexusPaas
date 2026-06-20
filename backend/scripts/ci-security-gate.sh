@@ -122,7 +122,7 @@ Usage: backend/scripts/ci-security-gate.sh <quick|docker|security|sonar|beta-rc|
 
 Subcommands:
   quick     gofmt check, go vet, go test, go build from backend/
-  docker    Docker-backed migrations, integration coverage, focused E2E, full non-live E2E, routing smoke, 15-service collaboration smoke
+  docker    Docker-backed migrations, integration coverage, focused E2E, full non-live E2E, routing smoke, 8-unit collaboration smoke
   security  govulncheck, OSV source scan, backend image build, Trivy image scan
   sonar     SonarScanner with Quality Gate wait when configured or required
   beta-rc   quick, production-beta render/dry-run/rollback rehearsal, docker/routing/collaboration smoke, security, sonar, RC report
@@ -382,7 +382,12 @@ run_runtime_smoke() {
     case "${code}" in
       000|5*) die "${service} smoke endpoint returned ${code}" ;;
     esac
-  done <<'EOF'
+  done < <(smoke_endpoint_map)
+  cleanup_runtime
+}
+
+smoke_endpoint_map() {
+  cat <<'EOF'
 audit-compliance-service|/api/v1/audit/logs
 authorization-policy-service|/api/v1/permissions/policies
 ide-service|/api/v1/ide
@@ -399,27 +404,38 @@ storage-service|/api/v1/storage/options
 usage-observability-service|/api/v1/admin/usage
 workload-service|/api/v1/jobs
 EOF
-  cleanup_runtime
 }
 
 collaboration_service_names() {
-  cat <<'EOF'
-audit-compliance-service
-authorization-policy-service
-ide-service
-identity-service
-image-registry-service
-integration-proxy-service
-k8s-control-service
-media-upload-service
-org-project-service
-platform-gateway
-request-notification-service
-scheduler-quota-service
-storage-service
-usage-observability-service
-workload-service
-EOF
+  local unit services service
+  while IFS='|' read -r unit services; do
+    [ -n "${unit}" ] || continue
+    for service in ${services}; do
+      printf '%s\n' "${service}"
+    done
+  done < <(deployable_unit_services)
+}
+
+collaboration_unit_names() {
+  local unit services
+  while IFS='|' read -r unit services; do
+    [ -n "${unit}" ] && printf '%s\n' "${unit}"
+  done < <(deployable_unit_services)
+}
+
+unit_for_logical_service() {
+  local want="$1"
+  local unit services service
+  while IFS='|' read -r unit services; do
+    [ -n "${unit}" ] || continue
+    for service in ${services}; do
+      if [ "${service}" = "${want}" ]; then
+        printf '%s\n' "${unit}"
+        return 0
+      fi
+    done
+  done < <(deployable_unit_services)
+  return 1
 }
 
 json_string() {
@@ -431,17 +447,18 @@ json_string() {
 }
 
 collaboration_service_urls_json() {
-  local first=1 service
+  local first=1 service unit
   printf '{'
   while IFS= read -r service; do
     [ -n "${service}" ] || continue
+    unit="$(unit_for_logical_service "${service}")" || die "missing deployable unit for ${service}"
     if [ "${first}" = "0" ]; then
       printf ','
     fi
     first=0
     json_string "${service}"
     printf ':'
-    json_string "http://${service}:8080"
+    json_string "http://${unit}:8080"
   done < <(collaboration_service_names)
   printf '}'
 }
@@ -474,11 +491,12 @@ compose_host_port() {
 }
 
 collaboration_host_service_urls_json() {
-  local first=1 service port
+  local first=1 service unit port
   printf '{'
   while IFS= read -r service; do
     [ -n "${service}" ] || continue
-    port="$(compose_host_port "${service}" 8080)"
+    unit="$(unit_for_logical_service "${service}")" || die "missing deployable unit for ${service}"
+    port="$(compose_host_port "${unit}" 8080)"
     if [ "${first}" = "0" ]; then
       printf ','
     fi
@@ -512,19 +530,19 @@ wait_for_collaboration_services() {
     port="$(compose_host_port "${service}" 8080)"
     url="http://127.0.0.1:${port}"
     wait_for_compose_http "${service}" "${url}"
-  done < <(collaboration_service_names)
+  done < <(collaboration_unit_names)
 }
 
 run_collaboration_missing_service_urls_check() {
   local log_file="${ARTIFACT_DIR}/collaboration-missing-service-urls.log"
   local container status exit_code attempt
 
-  log "Checking isolated scheduler-quota fails closed without required SERVICE_URLS"
+  log "Checking compute-control-plane fails closed without required SERVICE_URLS"
   container="$(
     docker_compose -p "${COLLAB_COMPOSE_PROJECT}" -f "${COLLAB_COMPOSE_FILE}" run -d --no-deps \
-      -e SERVICE_NAME=scheduler-quota-service \
+      -e SERVICE_NAME=compute-control-plane \
       -e "SERVICE_URLS={}" \
-      scheduler-quota-service
+      compute-control-plane
   )"
   for attempt in $(seq 1 20); do
     status="$(docker_cli inspect -f '{{.State.Status}}' "${container}" 2>/dev/null || true)"
@@ -537,12 +555,12 @@ run_collaboration_missing_service_urls_check() {
   status="$(docker_cli inspect -f '{{.State.Status}}' "${container}" 2>/dev/null || true)"
   if [ "${status}" != "exited" ]; then
     docker_cli rm -f "${container}" >/dev/null 2>&1 || true
-    die "scheduler-quota-service started without required SERVICE_URLS"
+    die "compute-control-plane started without required SERVICE_URLS"
   fi
   exit_code="$(docker_cli inspect -f '{{.State.ExitCode}}' "${container}" 2>/dev/null || printf '0')"
   docker_cli rm -f "${container}" >/dev/null 2>&1 || true
   if [ "${exit_code}" = "0" ]; then
-    die "scheduler-quota-service exited successfully without required SERVICE_URLS"
+    die "compute-control-plane exited successfully without required SERVICE_URLS"
   fi
   grep -Eiq 'service isolation|SERVICE_URLS|owner-read|scheduler-quota-service' "${log_file}" \
     || die "missing SERVICE_URLS check failed without actionable service-isolation log"
@@ -567,7 +585,7 @@ run_compose_collaboration_smoke() {
 
   while IFS= read -r service; do
     [ -n "${service}" ] && service_array+=("${service}")
-  done < <(collaboration_service_names)
+  done < <(collaboration_unit_names)
 
   service_urls="$(collaboration_service_urls_json)"
   principals="$(collaboration_api_key_principals_json)"
@@ -596,7 +614,7 @@ run_compose_collaboration_smoke() {
 
   run_collaboration_missing_service_urls_check
 
-  log "Starting 15 isolated backend service containers"
+  log "Starting 8 backend unit containers"
   docker_compose -p "${COLLAB_COMPOSE_PROJECT}" -f "${COLLAB_COMPOSE_FILE}" up -d "${service_array[@]}"
   wait_for_collaboration_services
 
@@ -609,7 +627,7 @@ run_compose_collaboration_smoke() {
   object_store_url="http://127.0.0.1:${minio_port}"
   host_urls="$(collaboration_host_service_urls_json)"
 
-  log "Running 15-service collaboration smoke"
+  log "Running 8-unit collaboration smoke across 15 logical services"
   set +e
   run_backend env \
     COMPOSE_COLLABORATION_SMOKE=1 \
@@ -636,7 +654,7 @@ run_compose_collaboration_smoke() {
 
   docker_compose -p "${COLLAB_COMPOSE_PROJECT}" -f "${COLLAB_COMPOSE_FILE}" logs --no-color >"${compose_log}" 2>&1 || true
   if [ "${test_status}" -ne 0 ]; then
-    die "15-service collaboration smoke failed; see ${log_file} and ${summary_md}"
+    die "8-unit collaboration smoke failed; see ${log_file} and ${summary_md}"
   fi
 }
 
@@ -652,11 +670,82 @@ run_docker_gate() {
 }
 
 service_manifest_names() {
-  find "${BACKEND_DIR}" -mindepth 2 -maxdepth 3 -path '*/k8s/deployment.yaml' -type f \
-    | while IFS= read -r manifest; do
-      basename "$(dirname "$(dirname "${manifest}")")"
-    done \
-    | sort
+  local unit services
+  while IFS='|' read -r unit services; do
+    [ -n "${unit}" ] && printf '%s\n' "${unit}"
+  done < <(deployable_unit_services)
+}
+
+deployable_unit_services() {
+  cat <<'EOF'
+platform-gateway|platform-gateway
+iam-unit|identity-service authorization-policy-service
+tenant-unit|org-project-service
+collaboration-unit|audit-compliance-service request-notification-service media-upload-service
+platform-io-unit|storage-service image-registry-service integration-proxy-service
+usage-observability|usage-observability-service
+compute-api|workload-service ide-service
+compute-control-plane|scheduler-quota-service k8s-control-service
+EOF
+}
+
+smoke_endpoint_for_service() {
+  local want="$1"
+  local service path
+  while IFS='|' read -r service path; do
+    if [ "${service}" = "${want}" ]; then
+      printf '%s\n' "${path}"
+      return 0
+    fi
+  done < <(smoke_endpoint_map)
+  return 1
+}
+
+write_deployable_unit_evidence() {
+  local service_list="$1"
+  local rollback_plan="$2"
+  local report="$3"
+
+  local unit_count=0
+  local mapped_count=0
+  local physical_count
+  local unit services path service_items sep
+  physical_count="$(wc -l <"${service_list}" | tr -d '[:space:]')"
+
+  {
+    printf '# Production Beta Deployable Unit Evidence\n\n'
+    printf 'Production Beta deploys 8 physical backend units that host 15 logical services. This report maps each unit to its logical-service smoke evidence.\n\n'
+    printf '| Deployable Unit | Logical Services And Smoke | Evidence |\n'
+    printf '| --- | --- | --- |\n'
+    while IFS='|' read -r unit services; do
+      [ -n "${unit}" ] || continue
+      unit_count=$((unit_count + 1))
+      grep -Fxq "${unit}" "${service_list}" \
+        || die "production-beta deployment list is missing ${unit}"
+      grep -Fq "deployment/${unit}" "${rollback_plan}" \
+        || die "rollback plan is missing deployment/${unit}"
+      service_items=""
+      sep=""
+      for service in ${services}; do
+        mapped_count=$((mapped_count + 1))
+        path="$(smoke_endpoint_for_service "${service}")" \
+          || die "smoke endpoint map is missing ${service}"
+        service_items="${service_items}${sep}${service} (${path})"
+        sep="<br>"
+      done
+      printf '| `%s` | %s | manifest render, rollback command, smoke endpoint |\n' "${unit}" "${service_items}"
+    done < <(deployable_unit_services)
+    printf '\n- Deployable units: `%s`\n' "${unit_count}"
+    printf -- '- Mapped logical services: `%s`\n' "${mapped_count}"
+    printf -- '- Source deployment list: `%s`\n' "${service_list}"
+    printf -- '- Rollback command plan: `%s`\n' "${rollback_plan}"
+  } >"${report}"
+
+  [ "${unit_count}" = "8" ] || die "deployable unit count = ${unit_count}, want 8"
+  [ "${unit_count}" = "${physical_count}" ] \
+    || die "deployment list contains ${physical_count} units, want ${unit_count}"
+  [ "${mapped_count}" = "15" ] \
+    || die "8-unit map covers ${mapped_count} logical services, want 15"
 }
 
 rendered_has_deployment() {
@@ -707,12 +796,13 @@ run_production_beta_manifest_rehearsal() {
   local rollback_plan="${ARTIFACT_DIR}/production-beta-rollback-plan.sh"
   local redeploy_dry_run="${ARTIFACT_DIR}/production-beta-redeploy-dry-run.txt"
   local rehearsal_report="${ARTIFACT_DIR}/production-beta-manifest-rehearsal.md"
+  local unit_report="${ARTIFACT_DIR}/production-beta-deployable-units.md"
 
   service_manifest_names >"${service_list}"
   local service_count
   service_count="$(wc -l <"${service_list}" | tr -d '[:space:]')"
-  if [ "${service_count}" != "15" ]; then
-    die "production-beta service manifest count = ${service_count}, want 15"
+  if [ "${service_count}" != "8" ]; then
+    die "production-beta backend unit count = ${service_count}, want 8"
   fi
 
   log "Rendering production-beta kustomization"
@@ -749,14 +839,18 @@ run_production_beta_manifest_rehearsal() {
   log "Running production-beta re-deploy client dry-run"
   run_repo kubectl apply --dry-run=client --validate=false -f "${render_file}" >"${redeploy_dry_run}"
 
+  log "Writing 8 deployable-unit evidence report"
+  write_deployable_unit_evidence "${service_list}" "${rollback_plan}" "${unit_report}"
+
   {
     printf '# Production Beta Manifest Rehearsal\n\n'
-    printf -- '- Service deployments: %s\n' "${service_count}"
+    printf -- '- Backend unit deployments: %s\n' "${service_count}"
     printf -- '- Render artifact: `%s`\n' "${render_file}"
     printf -- '- Render SHA-256: `%s`\n' "$(file_sha256 "${render_file}")"
     printf -- '- Deploy dry-run artifact: `%s`\n' "${deploy_dry_run}"
     printf -- '- Rollback command plan: `%s`\n' "${rollback_plan}"
     printf -- '- Re-deploy dry-run artifact: `%s`\n' "${redeploy_dry_run}"
+    printf -- '- 8-unit evidence artifact: `%s`\n' "${unit_report}"
     printf -- '- All-in-one platform deployment absent: yes\n'
     printf -- '- Dev secret references absent: yes\n'
   } >"${rehearsal_report}"
@@ -916,7 +1010,8 @@ write_beta_rc_report() {
     printf -- '- Production-beta manifest deploy dry-run: passed\n'
     printf -- '- Production-beta rollback command rehearsal: passed\n'
     printf -- '- Production-beta re-deploy dry-run: passed\n'
-    printf -- '- Docker-backed migrations, integration coverage, focused E2E, full non-live E2E, routing smoke, and 15-service collaboration smoke: passed\n'
+    printf -- '- 8 deployable-unit evidence: passed\n'
+    printf -- '- Docker-backed migrations, integration coverage, focused E2E, full non-live E2E, routing smoke, and 8-unit collaboration smoke: passed\n'
     printf -- '- Security gate: passed\n'
     printf -- '- Sonar gate: %s\n\n' "${sonar_status}"
     printf '## Key Artifacts\n\n'
@@ -925,6 +1020,7 @@ write_beta_rc_report() {
     printf -- '- Deploy dry-run: `%s`\n' "${ARTIFACT_DIR}/production-beta-deploy-dry-run.txt"
     printf -- '- Rollback command plan: `%s`\n' "${ARTIFACT_DIR}/production-beta-rollback-plan.sh"
     printf -- '- Re-deploy dry-run: `%s`\n' "${ARTIFACT_DIR}/production-beta-redeploy-dry-run.txt"
+    printf -- '- 8-unit evidence: `%s`\n' "${ARTIFACT_DIR}/production-beta-deployable-units.md"
     printf -- '- Integration log: `%s`\n' "${ARTIFACT_DIR}/integration.log"
     printf -- '- Focused E2E log: `%s`\n' "${ARTIFACT_DIR}/focused-e2e.log"
     printf -- '- Full E2E log: `%s`\n' "${ARTIFACT_DIR}/full-e2e.log"
@@ -935,7 +1031,7 @@ write_beta_rc_report() {
     printf -- '- Collaboration smoke JSON: `%s`\n' "${ARTIFACT_DIR}/collaboration-smoke-summary.json"
     printf -- '- Collaboration compose log: `%s`\n\n' "${ARTIFACT_DIR}/collaboration-compose.log"
     printf '## Live Staging Caveat\n\n'
-    printf 'This gate is non-live by default. It validates the local 15-service Docker collaboration topology. External Production Beta traffic still requires a live staging rehearsal with real secrets, ready pods, 15-service health/ready/metrics smoke, rollback, and re-deploy evidence.\n'
+    printf 'This gate is non-live by default. It validates the local 8-unit Docker collaboration topology. External Production Beta traffic still requires a live staging rehearsal with real secrets, ready unit pods, logical-service smoke, rollback, and re-deploy evidence.\n'
   } >"${report}"
   log "Beta RC report written to ${report}"
 }

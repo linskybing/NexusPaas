@@ -1,9 +1,9 @@
 # Operational Readiness
 
-This document is the Production Beta operations contract for the 15 independent
-backend services. It turns the platform NFRs into SLO, telemetry, alert,
-runbook, rollback, and synthetic-smoke expectations that can be reviewed and
-tested.
+This document is the Production Beta operations contract for the 8 physical
+backend units that host 15 logical services. It turns the platform NFRs into
+SLO, telemetry, alert, runbook, rollback, and synthetic-smoke expectations that
+can be reviewed and tested.
 
 ## Beta SLO Targets
 
@@ -91,7 +91,7 @@ Every service runbook uses this minimum sequence:
    dependencies.
 5. Decide whether to degrade, roll back, replay, repair data, or escalate to a
    dependency owner.
-6. If rollback is needed, use `kubectl rollout undo deployment/<service>` or
+6. If rollback is needed, use `kubectl rollout undo deployment/<unit>` or
    reapply the previous GitOps revision; do not restore databases as the first
    response.
 7. For event-backed workflows, replay only idempotent events or run documented
@@ -103,22 +103,22 @@ Every service runbook uses this minimum sequence:
 Run this checklist after deployment, rollback, migration, or dependency
 maintenance:
 
-- `GET /healthz` returns 200 for each service.
-- `GET /readyz` returns 200 for each service after backing services are ready.
-- `GET /metrics` returns 200 and includes service labels.
+- `GET /healthz` returns 200 for each backend unit.
+- `GET /readyz` returns 200 for each backend unit after backing services are ready.
+- `GET /metrics` returns 200 and includes unit service labels.
 - `GET /openapi.json` returns 200 for the gateway contract.
-- `GET /service-registry` returns all 15 services.
-- One read-only smoke endpoint per service returns 2xx or an expected 4xx; no
-  service may return 5xx.
-- CI/local release gates must also run the 15-service collaboration smoke
+- `GET /service-registry` returns all 15 logical services.
+- One read-only smoke endpoint per logical service returns 2xx or an expected 4xx; no
+  logical service may return 5xx.
+- CI/local release gates must also run the 8-unit collaboration smoke
   topology so critical workflows prove service-to-service contracts, events,
   object storage, and fail-closed dependency behavior across independent
-  backend containers.
+  backend unit containers.
 - Capture status, latency, request_id, trace_id, and service version.
 
 The baseline scheduled monitor lives in
 `backend/deploy/observability/production-beta`. It provisions a CronJob that
-runs the same checklist every five minutes against the 15-service topology. The
+runs the same checklist every five minutes against the 8-unit topology. The
 CronJob uses the externally managed `nexuspaas-synthetic-smoke-secret`; the
 Prometheus PodMonitor uses the separate `nexuspaas-prometheus-scrape-secret` so
 authenticated `/metrics` scraping does not require committed credentials.
@@ -128,8 +128,9 @@ mean latency sentinels.
 
 The scheduled monitor remains a low-cost read-only synthetic smoke. The
 Docker-backed `ci-security-gate.sh docker` and `beta-rc` gates provide the
-heavier collaboration evidence by starting 15 backend containers and exercising
-state-changing cross-service workflows.
+heavier collaboration evidence by starting 8 backend unit containers and
+exercising state-changing cross-service workflows across all 15 logical
+services.
 
 ## Service Operations Matrix
 
@@ -156,10 +157,10 @@ state-changing cross-service workflows.
 This document establishes the reviewable contract. The baseline observability
 manifests are provisioned in `backend/deploy/observability/production-beta`:
 
-- Grafana dashboard ConfigMap for the 15-service Production Beta dashboard.
+- Grafana dashboard ConfigMap for the 8-unit Production Beta dashboard.
 - Prometheus Operator PodMonitor and PrometheusRule resources for authenticated
   scrape and baseline alerts.
-- Scheduled CronJob synthetic monitoring for the 15-service topology.
+- Scheduled CronJob synthetic monitoring for the 8-unit topology.
 
 Production Beta still needs:
 

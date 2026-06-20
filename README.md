@@ -3,26 +3,43 @@
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8.svg)](https://go.dev/)
 [![Backend Quality Gate](https://github.com/linskybing/nexuspaas/actions/workflows/backend-quality-gate.yml/badge.svg)](https://github.com/linskybing/nexuspaas/actions/workflows/backend-quality-gate.yml)
 
-**NexusPaas** is an open-source, microservices-first **Platform-as-a-Service** backend
-for running an AI/ML compute platform on Kubernetes — identity & access, organization and
-project management, workload scheduling with quota and GPU accounting, image registry,
-storage, and integration proxying, all behind a single API gateway.
+**NexusPaas** is an open-source **Platform-as-a-Service** backend for running an
+AI/ML compute platform on Kubernetes: identity and access, tenant/project
+management, workload scheduling with quota and GPU accounting, image registry,
+storage, and integration proxying behind one API surface.
 
-> Status: **v0.1** — the backend is organized as 15 bounded-context microservices sharing
-> a Go module, with k3s/Kubernetes deployment manifests and a cross-service E2E suite.
+> Status: **v0.1** — the backend is a Go-based modular monolith with
+> service-boundary awareness. It has 15 logical bounded-context services in one
+> Go module; Production Beta manifests and local smoke tests now run those
+> services as 8 physical backend units while GA isolation hardening continues.
 
 ## Architecture
 
-A single **platform-gateway** is the edge entry point; each service owns its API, domain
-logic, data model, config, tests, and deployment files. Services collaborate over HTTP
-read-contracts and a Redis Streams event bus, with PostgreSQL for persistence, MinIO for
-object storage, and Dex for OIDC.
+Current runtime:
+
+- Go standard library `net/http` / `http.ServeMux`, custom route registry,
+  middleware, policy helpers, and OpenAPI generation.
+- PostgreSQL via `pgx`, Redis Streams/in-memory events, Kubernetes `client-go`,
+  MinIO/S3-compatible object storage, Dex/OIDC integration, and Prometheus /
+  OpenTelemetry instrumentation.
+- Local development can co-host all logical services in one process with
+  `SERVICE_NAME=all`; staging and production hardening is moving toward explicit
+  deployable-unit selection.
+- Production Beta can run 8 physical backend units, each using `SERVICE_NAME`
+  for its deployable-unit alias while `SERVICE_URLS` still maps logical service
+  names to the owning unit URL.
+
+The reference distribution remains k3s + Longhorn + Harbor + MinIO + Dex +
+Redis Streams. Those products are defaults for the packaged distribution, not
+intended as permanent hard requirements in the platform core.
+
+The current 15 logical services are:
 
 | Service | Responsibility |
 |---|---|
 | `platform-gateway` | Edge routing, auth, rate limiting, CORS |
 | `identity-service` | Authentication, API tokens, OIDC |
-| `authorization-policy-service` | Permission policy / PDP (Casbin) |
+| `authorization-policy-service` | Permission policy / PDP |
 | `org-project-service` | Organizations, projects, groups, GPU repos |
 | `workload-service` | Job submission and lifecycle |
 | `scheduler-quota-service` | Scheduling, preemption, quota reservations |
@@ -36,8 +53,23 @@ object storage, and Dex for OIDC.
 | `usage-observability-service` | Usage telemetry, dashboards |
 | `audit-compliance-service` | Audit reporting |
 
+The Production Beta / GA deployment direction is 8 deployable units:
+
+| Deployable Unit | Logical Services |
+|---|---|
+| `platform-gateway` | `platform-gateway` |
+| `iam-unit` | `identity-service`, `authorization-policy-service` |
+| `tenant-unit` | `org-project-service` |
+| `collaboration-unit` | `audit-compliance-service`, `request-notification-service`, `media-upload-service` |
+| `platform-io-unit` | `storage-service`, `image-registry-service`, `integration-proxy-service` |
+| `usage-observability` | `usage-observability-service` |
+| `compute-api` | `workload-service`, `ide-service` |
+| `compute-control-plane` | `scheduler-quota-service`, `k8s-control-service` |
+
 Shared infrastructure lives under [`backend/internal/platform`](backend/internal/platform)
-(config, auth, observability, backing services, cluster adapters). Deeper design docs are in
+(config, auth, observability, backing services, cluster adapters). The current
+blocker ledger is [`problem.md`](problem.md), the remediation sequence is
+[`docs/roadmap.md`](docs/roadmap.md), and deeper backend docs are in
 [`backend/docs/`](backend/docs):
 [architecture](backend/README.md) ·
 [API route mapping](backend/docs/api-route-mapping.md) ·
@@ -48,8 +80,9 @@ Shared infrastructure lives under [`backend/internal/platform`](backend/internal
 
 ## Tech stack
 
-Go 1.25 · Gin · GORM · PostgreSQL · Redis Streams · Kubernetes (k3s) · MinIO · Dex (OIDC) ·
-Casbin · Prometheus · OpenTelemetry · Harbor
+Go 1.25 · `net/http` · `pgx` · PostgreSQL · Redis Streams · Kubernetes
+`client-go` · MinIO/S3-compatible object storage · Dex/OIDC integration ·
+Prometheus · OpenTelemetry · Harbor integration
 
 ## Quick start (local)
 

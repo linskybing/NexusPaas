@@ -194,6 +194,17 @@ const (
 	configDiagnosticJSONObject     = "JSON object"
 )
 
+var deployableUnitServices = map[string][]string{
+	"platform-gateway":      {"platform-gateway"},
+	"iam-unit":              {"identity-service", "authorization-policy-service"},
+	"tenant-unit":           {"org-project-service"},
+	"collaboration-unit":    {"audit-compliance-service", "request-notification-service", mediaUploadServiceName},
+	"platform-io-unit":      {"storage-service", "image-registry-service", "integration-proxy-service"},
+	"usage-observability":   {"usage-observability-service"},
+	"compute-api":           {"workload-service", "ide-service"},
+	"compute-control-plane": {"scheduler-quota-service", "k8s-control-service"},
+}
+
 type configParseDiagnostic struct {
 	envName string
 	kind    string
@@ -651,7 +662,16 @@ func validateRedisBackingURL(name, value string) error {
 }
 
 func (c Config) AllowsService(name string) bool {
-	return c.ServiceName == "" || c.ServiceName == "all" || c.ServiceName == name
+	serviceName := strings.TrimSpace(c.ServiceName)
+	if serviceName == "" || serviceName == "all" || serviceName == name {
+		return true
+	}
+	for _, hosted := range deployableUnitServices[serviceName] {
+		if hosted == name {
+			return true
+		}
+	}
+	return false
 }
 
 // RequiresObjectStore reports whether this process hosts the blob-owning media

@@ -1,8 +1,8 @@
 # CI/local production-like collaboration smoke topology.
 #
 # This file intentionally differs from docker-compose.yml: it starts the shared
-# backing services plus all 15 backend service containers so the gate can verify
-# service-to-service cooperation over SERVICE_URLS and X-Service-Key.
+# backing services plus all 8 backend unit containers so the gate can verify
+# service-to-service cooperation over logical SERVICE_URLS and X-Service-Key.
 
 x-backend-env: &backend-env
   HTTP_ADDR: ":8080"
@@ -21,7 +21,7 @@ x-backend-env: &backend-env
   OBJECT_STORE_ACCESS_KEY: "${TEST_OBJECT_STORE_ACCESS_KEY}"
   OBJECT_STORE_SECRET_KEY: "${TEST_OBJECT_STORE_SECRET_KEY}"
   OBJECT_STORE_BUCKET: "${TEST_OBJECT_STORE_BUCKET}"
-  AUTHORIZATION_POLICY_URL: "http://authorization-policy-service:8080"
+  AUTHORIZATION_POLICY_URL: "http://iam-unit:8080"
   AUTHORIZATION_POLICY_API_KEY: "${TEST_RUNTIME_SERVICE_KEY}"
   OTEL_EXPORTER_OTLP_ENDPOINT: ""
   OTEL_TRACES_SAMPLER: "parentbased_traceratio"
@@ -111,63 +111,9 @@ services:
     profiles: ["tasks"]
     environment:
       <<: *backend-env
-      SERVICE_NAME: "media-upload-service"
+      SERVICE_NAME: "collaboration-unit"
       ADMIN_TASK: "ensure-object-store-bucket"
     ports: []
-
-  audit-compliance-service:
-    <<: *backend-service
-    environment:
-      <<: *backend-env
-      SERVICE_NAME: "audit-compliance-service"
-
-  authorization-policy-service:
-    <<: *backend-service
-    environment:
-      <<: *backend-env
-      SERVICE_NAME: "authorization-policy-service"
-
-  ide-service:
-    <<: *backend-service
-    environment:
-      <<: *backend-env
-      SERVICE_NAME: "ide-service"
-
-  identity-service:
-    <<: *backend-service
-    environment:
-      <<: *backend-env
-      SERVICE_NAME: "identity-service"
-
-  image-registry-service:
-    <<: *backend-service
-    environment:
-      <<: *backend-env
-      SERVICE_NAME: "image-registry-service"
-
-  integration-proxy-service:
-    <<: *backend-service
-    environment:
-      <<: *backend-env
-      SERVICE_NAME: "integration-proxy-service"
-
-  k8s-control-service:
-    <<: *backend-service
-    environment:
-      <<: *backend-env
-      SERVICE_NAME: "k8s-control-service"
-
-  media-upload-service:
-    <<: *backend-service
-    environment:
-      <<: *backend-env
-      SERVICE_NAME: "media-upload-service"
-
-  org-project-service:
-    <<: *backend-service
-    environment:
-      <<: *backend-env
-      SERVICE_NAME: "org-project-service"
 
   platform-gateway:
     <<: *backend-service
@@ -175,35 +121,47 @@ services:
       <<: *backend-env
       SERVICE_NAME: "platform-gateway"
 
-  request-notification-service:
+  iam-unit:
     <<: *backend-service
     environment:
       <<: *backend-env
-      SERVICE_NAME: "request-notification-service"
+      SERVICE_NAME: "iam-unit"
 
-  scheduler-quota-service:
+  tenant-unit:
     <<: *backend-service
     environment:
       <<: *backend-env
-      SERVICE_NAME: "scheduler-quota-service"
+      SERVICE_NAME: "tenant-unit"
 
-  storage-service:
+  collaboration-unit:
     <<: *backend-service
     environment:
       <<: *backend-env
-      SERVICE_NAME: "storage-service"
+      SERVICE_NAME: "collaboration-unit"
 
-  usage-observability-service:
+  platform-io-unit:
     <<: *backend-service
     environment:
       <<: *backend-env
-      SERVICE_NAME: "usage-observability-service"
+      SERVICE_NAME: "platform-io-unit"
 
-  workload-service:
+  usage-observability:
     <<: *backend-service
     environment:
       <<: *backend-env
-      SERVICE_NAME: "workload-service"
+      SERVICE_NAME: "usage-observability"
+
+  compute-api:
+    <<: *backend-service
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: "compute-api"
+
+  compute-control-plane:
+    <<: *backend-service
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: "compute-control-plane"
 
 volumes:
   postgres-data:

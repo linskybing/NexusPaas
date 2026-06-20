@@ -481,16 +481,17 @@ bash backend/scripts/ci-security-gate.sh beta-rc
 ```
 
 This command runs the quick gate, renders `kubectl kustomize backend`, verifies
-the production-beta render contains the 15 NexusPaas service deployments and no
-all-in-one `platform` deployment, rejects `-dev-` secret references, runs
-client-side deploy dry-run, writes rollback commands for every service
-deployment, runs re-deploy dry-run, then executes Docker-backed E2E, runtime smoke,
-security, and Sonar gates. It writes `${ARTIFACT_DIR}/beta-rc-report.md` plus
-render, dry-run, rollback, E2E, and runtime-smoke artifacts.
+the production-beta render contains the 8 physical backend units that host the
+15 logical services and no all-in-one `platform` deployment, rejects `-dev-`
+secret references, runs client-side deploy dry-run, writes rollback commands
+for every backend unit deployment, runs re-deploy dry-run, then executes
+Docker-backed E2E, runtime smoke, security, and Sonar gates. It writes
+`${ARTIFACT_DIR}/beta-rc-report.md` plus render, dry-run, rollback, E2E, and
+runtime-smoke artifacts.
 
 The `beta-rc` gate is non-live by default. External Production Beta traffic
 still requires a live staging rehearsal with real staging secrets, ready pods,
-15-service health/ready/metrics smoke, critical journey E2E, rollback, and
+8-unit health/ready/metrics smoke, critical journey E2E, rollback, and
 re-deploy evidence. See `docs/beta-launch-readiness.md`.
 
 Existing manual gates remain:

@@ -1,7 +1,7 @@
 # Production Beta Observability Overlay
 
 This overlay provisions the baseline Production Beta observability resources for
-the 15-service backend topology. It is intentionally separate from the root
+the 8-unit backend topology. It is intentionally separate from the root
 `backend/kustomization.yaml` because `PodMonitor` and `PrometheusRule` require
 Prometheus Operator CRDs in the target cluster.
 
@@ -24,7 +24,7 @@ kubectl -n nexuspaas create secret generic nexuspaas-synthetic-smoke-secret \
 ```
 
 Do not commit these values. The Prometheus scrape token must be accepted by all
-15 services as a bearer credential for the admin `/metrics` route. The synthetic
+8 backend units as a bearer credential for the admin `/metrics` route. The synthetic
 smoke API key should be scoped to read operational endpoints and the listed
 read-only smoke endpoints.
 
@@ -42,8 +42,8 @@ kubectl apply -k backend/deploy/observability/production-beta
 - `PrometheusRule` adds baseline alerts for scrape loss, deployment
   unavailability, core availability burn, high p95 latency, 5xx responses, and
   synthetic smoke failures.
-- `nexuspaas-production-beta-dashboard` defines the Grafana dashboard for the 15
-  backend services and the Beta SLO targets.
+- `nexuspaas-production-beta-dashboard` defines the Grafana dashboard for the 8
+  backend units and the Beta SLO targets.
 - `nexuspaas-synthetic-smoke` runs every five minutes and checks `/healthz`,
   `/readyz`, `/metrics`, gateway `/openapi.json`, gateway `/service-registry`,
   and one read-only endpoint per service. Read-only smoke endpoints may return

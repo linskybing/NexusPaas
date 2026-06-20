@@ -1,6 +1,7 @@
-# Production Beta topology: backing services plus 15 independently deployed
-# NexusPaas services. The dev k3s kustomization under deploy/k3s intentionally
-# keeps the all-in-one platform runtime for local smoke work.
+# Production Beta topology: backing services plus 8 physical backend units that
+# host the 15 logical NexusPaas services. The dev k3s kustomization under
+# deploy/k3s intentionally keeps the all-in-one platform runtime for local smoke
+# work.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: nexuspaas
@@ -13,28 +14,8 @@ resources:
   - deploy/k3s/redis.yaml
   - deploy/k3s/minio.yaml
   - deploy/k3s/dex.yaml
-  - audit-compliance-service/k8s/deployment.yaml
-  - authorization-policy-service/k8s/deployment.yaml
-  - ide-service/k8s/deployment.yaml
-  - identity-service/k8s/deployment.yaml
-  - image-registry-service/k8s/deployment.yaml
-  - integration-proxy-service/k8s/deployment.yaml
-  - k8s-control-service/k8s/deployment.yaml
-  - media-upload-service/k8s/deployment.yaml
-  - org-project-service/k8s/deployment.yaml
-  - platform-gateway/k8s/deployment.yaml
-  - request-notification-service/k8s/deployment.yaml
-  - scheduler-quota-service/k8s/deployment.yaml
-  - storage-service/k8s/deployment.yaml
-  - usage-observability-service/k8s/deployment.yaml
-  - workload-service/k8s/deployment.yaml
+  - deploy/k3s/production-beta/backend-units.yaml
 patches:
   - path: deploy/k3s/production-beta/backing-secret-postgres-patch.yaml
   - path: deploy/k3s/production-beta/backing-secret-dex-patch.yaml
   - path: deploy/k3s/production-beta/backing-secret-minio-patch.yaml
-  - path: deploy/k3s/production-beta/runtime-config-envfrom-patch.yaml
-    target:
-      group: apps
-      version: v1
-      kind: Deployment
-      labelSelector: app in (audit-compliance-service,authorization-policy-service,ide-service,identity-service,image-registry-service,integration-proxy-service,k8s-control-service,media-upload-service,org-project-service,platform-gateway,request-notification-service,scheduler-quota-service,storage-service,usage-observability-service,workload-service)

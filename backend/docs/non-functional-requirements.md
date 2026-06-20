@@ -56,7 +56,7 @@ Production Beta operational readiness is specified in
 `../../docs/architecture/observability-strategy.md`. Those documents define the
 required SLOs, dashboard panels, alert policy, runbook template, rollback
 expectations, synthetic smoke checks, and per-service operations matrix for the
-15-service deployment topology.
+8 physical backend units hosting 15 logical services.
 
 ## Operability
 
@@ -70,7 +70,7 @@ expectations, synthetic smoke checks, and per-service operations matrix for the
 
 - `backend/deploy/k3s` remains the local development all-in-one stack.
 - `backend/kustomization.yaml` renders the Production Beta topology: shared
-  backing services plus the 15 independent service manifests. It lives at the
+  backing services plus the 8 physical backend unit manifests. It lives at the
   backend root so standard `kubectl kustomize backend` can read both
   `deploy/k3s` resources and service-owned manifests without disabling load
   restrictions.

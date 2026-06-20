@@ -2,7 +2,8 @@
 
 ## Purpose
 
-NexusPaas Production Beta runs as 15 independently deployed backend services.
+NexusPaas Production Beta runs on 8 physical backend units hosting 15 logical
+services.
 The observability goal is to let operators answer four questions during a user
 incident:
 
@@ -32,7 +33,8 @@ CNCF-aligned components.
 
 ## Signal Model
 
-Every backend service must emit the same three signal families.
+Every backend unit must emit the same three signal families while preserving
+logical-service labels for route and workflow ownership.
 
 ### Logs
 
@@ -193,7 +195,7 @@ so p95 dashboard panels and alert rules use `histogram_quantile`.
 
 ## GA Architecture Extension
 
-The GA architecture roadmap groups the 15 logical services into 8 deployable
+The Production Beta topology groups the 15 logical services into 8 deployable
 units. Observability must preserve both views:
 
 - unit-level dashboards for deployment, rollback, saturation, and dependency

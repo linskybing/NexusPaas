@@ -50,12 +50,12 @@ func TestDeploymentManifestsAreProductionHardened(t *testing.T) {
 	}
 }
 
-func TestProductionBetaKustomizationIncludesFifteenServices(t *testing.T) {
+func TestProductionBetaKustomizationIncludesEightBackendUnits(t *testing.T) {
 	path := "../../kustomization.yaml"
 	body := readTextFile(t, path)
 	requireContains(t, path, body, "deploy/k3s/production-beta/runtime-config.yaml")
 	requireContains(t, path, body, "deploy/k3s/production-beta/runtime-secret-contract.yaml")
-	requireContains(t, path, body, "deploy/k3s/production-beta/runtime-config-envfrom-patch.yaml")
+	requireContains(t, path, body, "deploy/k3s/production-beta/backend-units.yaml")
 	requireContains(t, path, body, "deploy/k3s/postgres.yaml")
 	requireContains(t, path, body, "deploy/k3s/redis.yaml")
 	requireContains(t, path, body, "deploy/k3s/minio.yaml")
@@ -64,15 +64,18 @@ func TestProductionBetaKustomizationIncludesFifteenServices(t *testing.T) {
 	requireContains(t, path, body, "deploy/k3s/production-beta/backing-secret-dex-patch.yaml")
 	requireContains(t, path, body, "deploy/k3s/production-beta/backing-secret-minio-patch.yaml")
 	requireNotContains(t, path, body, "deploy/k3s/platform.yaml")
+	requireNotContains(t, path, body, "/k8s/deployment.yaml")
 
-	deployments := serviceDeploymentManifests(t)
-	for _, deployment := range deployments {
-		service := filepath.Base(filepath.Dir(filepath.Dir(deployment)))
-		resource := fmt.Sprintf("%s/k8s/deployment.yaml", service)
-		requireContains(t, path, body, resource)
+	unitManifestPath := "../../deploy/k3s/production-beta/backend-units.yaml"
+	unitManifest := readTextFile(t, unitManifestPath)
+	for _, unit := range productionBackendUnits() {
+		requireContains(t, unitManifestPath, unitManifest, fmt.Sprintf("name: %s", unit))
+		requireContains(t, unitManifestPath, unitManifest, fmt.Sprintf("SERVICE_NAME: %q", unit))
+		requireContains(t, unitManifestPath, unitManifest, fmt.Sprintf("OTEL_SERVICE_NAME: %q", unit))
+		requireContains(t, unitManifestPath, unitManifest, fmt.Sprintf("name: %s-runtime-secret", unit))
 	}
-	if got := strings.Count(body, "/k8s/deployment.yaml"); got != 15 {
-		t.Fatalf("%s service deployment resource count = %d, want 15", path, got)
+	if got := strings.Count(unitManifest, "\nkind: Deployment\n"); got != 8 {
+		t.Fatalf("%s deployment count = %d, want 8", unitManifestPath, got)
 	}
 }
 
@@ -112,25 +115,25 @@ func TestProductionBetaRuntimeConfigAndSecretContract(t *testing.T) {
 	}
 
 	runtimePatchPath := "../../deploy/k3s/production-beta/runtime-config-envfrom-patch.yaml"
-	runtimePatch := readTextFile(t, runtimePatchPath)
-	requireContains(t, runtimePatchPath, runtimePatch, "path: /spec/template/spec/containers/0/envFrom/1")
-	requireContains(t, runtimePatchPath, runtimePatch, "name: production-beta-runtime-config")
-	requireContains(t, runtimePatchPath, runtimePatch, "optional: true")
+	if _, err := os.Stat(runtimePatchPath); !os.IsNotExist(err) {
+		t.Fatalf("%s should not exist after backend units own their envFrom wiring", runtimePatchPath)
+	}
 
 	kustomizationPath := "../../kustomization.yaml"
 	kustomization := readTextFile(t, kustomizationPath)
-	requireContains(t, kustomizationPath, kustomization, "labelSelector: app in (")
+	requireContains(t, kustomizationPath, kustomization, "deploy/k3s/production-beta/backend-units.yaml")
 
-	for _, deployment := range serviceDeploymentManifests(t) {
-		service := filepath.Base(filepath.Dir(filepath.Dir(deployment)))
-		if got := serviceURLs[service]; got != "http://"+service {
-			t.Fatalf("%s SERVICE_URLS[%s] = %q, want http://%s", configPath, service, got, service)
+	for service, unit := range logicalServiceUnits() {
+		wantURL := "http://" + unit
+		if got := serviceURLs[service]; got != wantURL {
+			t.Fatalf("%s SERVICE_URLS[%s] = %q, want %s", configPath, service, got, wantURL)
 		}
-		requireContains(t, contractPath, contract, fmt.Sprintf("`%s-runtime-secret`", service))
-		requireContains(t, kustomizationPath, kustomization, service)
 	}
 	if len(serviceURLs) != 15 {
 		t.Fatalf("%s SERVICE_URLS count = %d, want 15", configPath, len(serviceURLs))
+	}
+	for _, unit := range productionBackendUnits() {
+		requireContains(t, contractPath, contract, fmt.Sprintf("`%s-runtime-secret`", unit))
 	}
 }
 
@@ -154,14 +157,14 @@ func TestProductionOperationalReadinessDocsCoverAllServices(t *testing.T) {
 	requireContains(t, readinessPath, readiness, "Standard Runbook Template")
 	requireContains(t, readinessPath, readiness, "Synthetic Smoke Checklist")
 	requireContains(t, readinessPath, readiness, "GET /service-registry")
-	requireContains(t, readinessPath, readiness, "all 15 services")
-	requireContains(t, readinessPath, readiness, "kubectl rollout undo deployment/<service>")
+	requireContains(t, readinessPath, readiness, "all 15 logical services")
+	requireContains(t, readinessPath, readiness, "kubectl rollout undo deployment/<unit>")
 	requireContains(t, nfrPath, nfrs, "docs/operational-readiness.md")
 	requireContains(t, nfrPath, nfrs, "../../docs/architecture/observability-strategy.md")
 
 	strategyPath := "../../../docs/architecture/observability-strategy.md"
 	strategy := readTextFile(t, strategyPath)
-	requireContains(t, strategyPath, strategy, "15 independently deployed backend services")
+	requireContains(t, strategyPath, strategy, "8 physical backend units")
 	requireContains(t, strategyPath, strategy, "../../backend/docs/operational-readiness.md")
 	requireContains(t, strategyPath, strategy, "OpenTelemetry Collector")
 	requireContains(t, strategyPath, strategy, "Prometheus")
@@ -261,11 +264,29 @@ func TestProductionBetaObservabilityManifestsAreProvisioned(t *testing.T) {
 	requireContains(t, readmePath, readme, "kubectl apply -k backend/deploy/observability/production-beta")
 	requireContains(t, readmePath, readme, "expected 4xx")
 
-	for _, deployment := range serviceDeploymentManifests(t) {
-		service := filepath.Base(filepath.Dir(filepath.Dir(deployment)))
-		requireContains(t, dashboardPath, dashboard, service)
-		requireContains(t, rulesPath, rules, service)
-		requireContains(t, syntheticPath, synthetic, service)
+	for _, unit := range productionBackendUnits() {
+		requireContains(t, dashboardPath, dashboard, unit)
+		requireContains(t, rulesPath, rules, unit)
+		requireContains(t, syntheticPath, synthetic, unit)
+	}
+	for _, endpoint := range []string{
+		"/api/v1/audit/logs",
+		"/api/v1/permissions/policies",
+		"/api/v1/ide",
+		"/api/v1/users",
+		"/api/v1/image-catalog",
+		"/api/v1/admin/vpn",
+		"/api/v1/resources",
+		"/api/v1/uploads/images/nonexistent-smoke.png",
+		"/api/v1/projects",
+		"/api/v1/gateway/health",
+		"/api/v1/forms",
+		"/api/v1/plans",
+		"/api/v1/storage/options",
+		"/api/v1/admin/usage",
+		"/api/v1/jobs",
+	} {
+		requireContains(t, syntheticPath, synthetic, endpoint)
 	}
 
 	readinessPath := "../../docs/operational-readiness.md"
@@ -311,19 +332,19 @@ func TestProductionBetaReleaseCandidateGateIsDocumented(t *testing.T) {
 	requireContains(t, readinessPath, readiness, "bash backend/scripts/ci-security-gate.sh beta-rc")
 	requireContains(t, readinessPath, readiness, "production-beta manifest rehearsal")
 	requireContains(t, readinessPath, readiness, "non-live runtime smoke")
-	requireContains(t, readinessPath, readiness, "15-service collaboration smoke")
+	requireContains(t, readinessPath, readiness, "8-unit collaboration smoke")
 	requireContains(t, readinessPath, readiness, "one read-only endpoint per service")
-	requireContains(t, readinessPath, readiness, "rollback command plan for every service deployment")
+	requireContains(t, readinessPath, readiness, "rollback command plan for every backend unit deployment")
 	requireContains(t, readinessPath, readiness, "re-deploy client dry-run")
 	requireContains(t, readinessPath, readiness, "Live Staging Rehearsal")
-	requireContains(t, readinessPath, readiness, "All 15 services become ready.")
+	requireContains(t, readinessPath, readiness, "All 8 backend units become ready.")
 	requireContains(t, readinessPath, readiness, "no unaccepted launch blockers")
 
 	e2eDocsPath := "../../docs/e2e-testing.md"
 	e2eDocs := readTextFile(t, e2eDocsPath)
 	requireContains(t, e2eDocsPath, e2eDocs, "bash backend/scripts/ci-security-gate.sh beta-rc")
 	requireContains(t, e2eDocsPath, e2eDocs, "renders `kubectl kustomize backend`")
-	requireContains(t, e2eDocsPath, e2eDocs, "writes rollback commands for every service")
+	requireContains(t, e2eDocsPath, e2eDocs, "for every backend unit deployment")
 	requireContains(t, e2eDocsPath, e2eDocs, "runtime smoke")
 	requireContains(t, e2eDocsPath, e2eDocs, "re-deploy evidence")
 }
@@ -453,6 +474,39 @@ func serviceDeploymentManifests(t *testing.T) []string {
 		t.Fatal(err)
 	}
 	return deployments
+}
+
+func productionBackendUnits() []string {
+	return []string{
+		"platform-gateway",
+		"iam-unit",
+		"tenant-unit",
+		"collaboration-unit",
+		"platform-io-unit",
+		"usage-observability",
+		"compute-api",
+		"compute-control-plane",
+	}
+}
+
+func logicalServiceUnits() map[string]string {
+	return map[string]string{
+		"platform-gateway":             "platform-gateway",
+		"identity-service":             "iam-unit",
+		"authorization-policy-service": "iam-unit",
+		"org-project-service":          "tenant-unit",
+		"audit-compliance-service":     "collaboration-unit",
+		"request-notification-service": "collaboration-unit",
+		"media-upload-service":         "collaboration-unit",
+		"storage-service":              "platform-io-unit",
+		"image-registry-service":       "platform-io-unit",
+		"integration-proxy-service":    "platform-io-unit",
+		"usage-observability-service":  "usage-observability",
+		"workload-service":             "compute-api",
+		"ide-service":                  "compute-api",
+		"scheduler-quota-service":      "compute-control-plane",
+		"k8s-control-service":          "compute-control-plane",
+	}
 }
 
 func extractServiceURLs(t *testing.T, path, body string) map[string]string {
