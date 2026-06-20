@@ -18,17 +18,22 @@ type ServiceSpec struct {
 }
 
 type RouteSpec struct {
-	Method          string `json:"method"`
-	Pattern         string `json:"pattern"`
-	OperationID     string `json:"operation_id"`
-	Resource        string `json:"resource"`
-	Action          string `json:"action"`
-	IDParam         string `json:"id_param,omitempty"`
-	AuthRequired    bool   `json:"auth_required"`
-	Admin           bool   `json:"admin"`
-	StateChanging   bool   `json:"state_changing"`
-	PolicyBypass    bool   `json:"policy_bypass,omitempty"`
-	ExternalAdapter string `json:"external_adapter,omitempty"`
+	Method              string `json:"method"`
+	Pattern             string `json:"pattern"`
+	OperationID         string `json:"operation_id"`
+	Resource            string `json:"resource"`
+	Action              string `json:"action"`
+	IDParam             string `json:"id_param,omitempty"`
+	AuthRequired        bool   `json:"auth_required"`
+	Admin               bool   `json:"admin"`
+	StateChanging       bool   `json:"state_changing"`
+	PolicyBypass        bool   `json:"policy_bypass,omitempty"`
+	ExternalAdapter     string `json:"external_adapter,omitempty"`
+	ServiceAuthRequired bool   `json:"service_auth_required,omitempty"`
+	InternalPublic      bool   `json:"internal_public,omitempty"`
+	AliasOf             string `json:"alias_of,omitempty"`
+	Override            bool   `json:"override,omitempty"`
+	OverrideReason      string `json:"override_reason,omitempty"`
 }
 
 type HandlerFunc func(app *App, r *http.Request, route RouteSpec) (int, any, *Degraded)

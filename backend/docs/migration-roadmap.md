@@ -1,5 +1,16 @@
 # Decomposition Phases, Risks, and Acceptance Criteria
 
+## Current Status
+
+The backend is still a modular monolith with a shared physical PostgreSQL
+runtime. Identity has started moving toward owned records and service-local
+migrations, but most core domains still use generic `platform_records` JSONB
+storage. That store is acceptable for low-value, temporary, or compatibility
+data only.
+
+No new core domain should be added to `platform_records` unless an ADR states
+why the data is temporary, who owns it, and when it will move to a typed schema.
+
 ## 1. Decomposition Phases
 
 | Phase | Goal | Main Work | Rationale |

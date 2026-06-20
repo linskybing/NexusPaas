@@ -42,6 +42,13 @@ func ServiceInternal() func(*platform.RouteSpec) {
 	return func(spec *platform.RouteSpec) {
 		spec.AuthRequired = false
 		spec.PolicyBypass = true
+		spec.ServiceAuthRequired = true
+	}
+}
+
+func AliasOf(pattern string) func(*platform.RouteSpec) {
+	return func(spec *platform.RouteSpec) {
+		spec.AliasOf = pattern
 	}
 }
 

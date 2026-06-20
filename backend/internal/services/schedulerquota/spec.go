@@ -13,7 +13,7 @@ func Spec() platform.ServiceSpec {
 		queueID   = "/api/v1/queues/{id}"
 		planID    = "/api/v1/plans/{id}"
 	)
-	route, id, admin := shared.Route, shared.ID, shared.Admin
+	route, id, admin, serviceInternal := shared.Route, shared.ID, shared.Admin, shared.ServiceInternal
 	return platform.ServiceSpec{
 		Name:            "scheduler-quota-service",
 		Category:        "compute",
@@ -42,12 +42,12 @@ func Spec() platform.ServiceSpec {
 			route(http.MethodDelete, "/api/v1/queues/batch", "queues", "batch_delete", admin()),
 			route(http.MethodGet, "/api/v1/queues/project/{project_id}", "queues", "list_by_project", id("project_id")),
 			route(http.MethodGet, projectID+"/quota/live", "live_quotas", "get", id("id")),
-			route(http.MethodPost, "/api/v1/internal/quota/reservations", "reservations", "quota_reserve"),
-			route(http.MethodPost, "/api/v1/internal/quota/reservations/{reservationId}/commit", "reservations", "quota_commit", id("reservationId")),
-			route(http.MethodPost, "/api/v1/internal/quota/reservations/{reservationId}/release", "reservations", "quota_release", id("reservationId")),
-			route(http.MethodPost, "/api/v1/internal/scheduler/admission", "submit_admissions", "review"),
-			route(http.MethodPost, "/api/v1/internal/scheduler/preemptions", "preemptions", "command"),
-			route(http.MethodPost, "/api/v1/internal/workers/leases", "worker_leases", "worker_lease"),
+			route(http.MethodPost, "/api/v1/internal/quota/reservations", "reservations", "quota_reserve", serviceInternal()),
+			route(http.MethodPost, "/api/v1/internal/quota/reservations/{reservationId}/commit", "reservations", "quota_commit", id("reservationId"), serviceInternal()),
+			route(http.MethodPost, "/api/v1/internal/quota/reservations/{reservationId}/release", "reservations", "quota_release", id("reservationId"), serviceInternal()),
+			route(http.MethodPost, "/api/v1/internal/scheduler/admission", "submit_admissions", "review", serviceInternal()),
+			route(http.MethodPost, "/api/v1/internal/scheduler/preemptions", "preemptions", "command", serviceInternal()),
+			route(http.MethodPost, "/api/v1/internal/workers/leases", "worker_leases", "worker_lease", serviceInternal()),
 		},
 	}
 }

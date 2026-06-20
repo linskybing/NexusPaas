@@ -1,65 +1,64 @@
-# NexusPaas Roadmap
+# NexusPaaS Architecture Remediation Roadmap
 
-## 90-Day GA Architecture Roadmap
+The current goal is to turn the Go modular monolith into 8 credible deployable
+units without doing a big-bang 15-service split. `problem.md` is the blocker
+ledger; this roadmap is the implementation order.
 
-The current long-term priority is GA architecture decomposition into 8
-coarse-grained deployable units. The roadmap intentionally avoids a big-bang
-15-service split.
+## P0: Before Production/GA
 
-## Day 0-15: Architecture Baseline
+1. Merge route auth and collision hardening.
+   - Centralize internal route auth.
+   - Fail startup on undeclared same-shape route collisions.
+   - Keep route/OpenAPI/internal-auth tests in CI.
 
-- Finish and review the master architecture plan, service boundaries, package
-  strategy, data migration strategy, testing strategy, CI/CD governance, and
-  open-source quality standard.
-- Add ADRs for the 8-unit target, Outbox/Inbox/read-model migration, service
-  identity direction, and deployment evidence gates.
-- Update `problem.md` so GA blockers are explicit and owned.
-- Keep implementation docs-only until the architecture baseline is reviewed.
+2. Implement reliable transactional events.
+   - Write owner state and outbox events in the same database transaction.
+   - Add durable relay publishing, inbox dedupe, retry, dead-letter, and publish
+     lag evidence.
+   - Keep Redis Streams as a provider, not the reliability boundary.
 
-## Day 16-35: Contracts And Events
+3. Move core data away from generic JSON records.
+   - Continue from the identity first slice.
+   - Prioritize tenant/project, workload, scheduler/quota, storage bindings,
+     registry/build records, and billing-related data if added.
+   - Require an ADR for any new core domain stored in `platform_records`.
 
-- Establish versioned internal contract fixtures for owner-read and command
-  APIs.
-- Add event schema fixtures and producer/consumer contract tests for the core
-  event envelope.
-- Add Outbox/Inbox infrastructure where missing, including idempotency,
-  retry/dead-letter visibility, and lag metrics.
-- Start with identity, tenant, workload, scheduler, and audit events.
+4. Harden auth and request trust boundaries.
+   - Replace API token full-table scans with token ID lookup.
+   - Use one trusted proxy-aware client IP resolver everywhere.
+   - Add explicit `local`, `test`, `dev`, `staging`, and `production`
+     environment profiles.
+   - Fail closed in staging/production when the PDP is missing.
 
-## Day 36-55: Data Boundary Migration
+## P1: Architecture Maturity
 
-- Replace high-risk shared-store reads with owner-read APIs or read models.
-- Prioritize scheduler/workload/org-project/identity/authz dependencies.
-- Add drift comparison for read models before cutover.
-- Block new unregistered cross-service store dependencies through architecture
-  tests.
+1. Replace Beta service keys with workload identity or scoped rotatable
+   per-service credentials.
+2. Replace or wrap custom JWT/JWKS verification with a mature Go library.
+3. Adopt or harden the migration runner with version, checksum, lock, and dirty
+   state tracking.
+4. Abstract Longhorn, Harbor, MinIO, Dex, Redis Streams, and k3s behind provider
+   contracts only where replacement is a real requirement.
+5. Move critical APIs toward typed contracts and generated/fixture-backed
+   compatibility tests.
+6. Add read-model drift comparison and replay evidence before retiring
+   shared-store or owner-read paths.
+7. Capture staging deploy, smoke, rollback, and redeploy evidence for each of
+   the 8 deployable units.
 
-## Day 56-75: Deployable Unit Readiness
+## P2: Documentation And Tooling
 
-- Add staging runtime configuration for the 8 deployable units.
-- Capture health, readiness, metrics, service registry, synthetic smoke,
-  rollback, and redeploy evidence per unit.
-- Replace static service keys in the staging GA path with Kubernetes workload
-  identity or an approved equivalent where feasible.
-- Make remote Sonar Quality Gate required when GitHub credentials are
-  configured.
+1. Keep README, `problem.md`, architecture docs, and backend docs aligned with
+   the current implementation.
+2. Split the large CI/security script only when a check becomes hard to run or
+   debug independently.
+3. Consolidate service ownership docs around the 8 deployable units.
+4. Add provider ADRs when replacing reference-stack assumptions.
+5. Add SBOM generation, image signing, and release provenance after staging
+   promotion is stable.
 
-## Day 76-90: Compute Saga Stabilization
+## Acceptance Rule
 
-- Harden job submit as a saga: validate, reserve quota, resolve image/storage,
-  create Kubernetes work, commit or release quota.
-- Verify duration limit, Deployment cleanup, plan-window eviction, preemption,
-  idempotency, and compensation across compute-api and compute-control-plane.
-- Run Docker collaboration smoke, focused E2E, opt-in live Kubernetes E2E, and
-  live staging rehearsal.
-- Declare GA architecture candidate only if `problem.md` has no unaccepted
-  blockers.
-
-## Beyond 90 Days
-
-- Evaluate whether any of the 8 units should split further based on real
-  ownership, scale, release cadence, and failure isolation data.
-- Add progressive delivery after staging signals are reliable.
-- Complete SBOM generation, image signing, and release provenance.
-- Consider service mesh only when workload identity, network policy, and
-  current observability are insufficient for a concrete production need.
+NexusPaaS can be called a GA microservice architecture only when `problem.md`
+has no unaccepted P0 blockers, the 8 deployable units have staging evidence, and
+core data/event boundaries no longer depend on undocumented shared-store paths.

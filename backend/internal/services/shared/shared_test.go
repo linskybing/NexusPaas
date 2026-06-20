@@ -128,8 +128,12 @@ func TestRouteSpecHelpers(t *testing.T) {
 	if spec.Method != http.MethodPost || spec.Pattern != "/internal/demo/{id}" || spec.Resource != "demo" || spec.Action != "create" {
 		t.Fatalf("Route() = %#v, want basic fields", spec)
 	}
-	if spec.IDParam != "id" || !spec.Admin || !spec.PolicyBypass || spec.AuthRequired || spec.ExternalAdapter != "k8s" || !spec.StateChanging {
+	if spec.IDParam != "id" || !spec.Admin || !spec.PolicyBypass || !spec.ServiceAuthRequired || spec.AuthRequired || spec.ExternalAdapter != "k8s" || !spec.StateChanging {
 		t.Fatalf("Route() options = %#v, want id/admin/internal/adapter/state-changing", spec)
+	}
+	alias := Route(http.MethodGet, "/items/{item}", "items", "get", AliasOf("/items/{id}"))
+	if alias.AliasOf != "/items/{id}" {
+		t.Fatalf("AliasOf() = %#v, want alias target", alias)
 	}
 	public := Public(Route(http.MethodGet, "/public", "public", "list", PolicyBypass()))
 	if public.AuthRequired || !public.PolicyBypass || public.StateChanging {

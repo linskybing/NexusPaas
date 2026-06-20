@@ -41,3 +41,15 @@ func TestValidateAdminCoverageCoveredByCustomHandler(t *testing.T) {
 		t.Fatalf("custom handler should cover the route: %v", err)
 	}
 }
+
+func TestValidateAdminCoverageCoveredByServiceAuth(t *testing.T) {
+	app := NewApp(Config{ServiceName: "all"})
+	route := adminRoute()
+	route.Pattern = "/api/v1/internal/admin/widget"
+	route.AuthRequired = false
+	route.ServiceAuthRequired = true
+	app.CatalogRoutes = append(app.CatalogRoutes, route)
+	if err := app.ValidateAdminCoverage(); err != nil {
+		t.Fatalf("service auth should cover internal admin route: %v", err)
+	}
+}

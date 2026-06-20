@@ -13,7 +13,7 @@ Your long-term goal is to evolve NexusPaas from the current modular-monolith / m
 7. Every change must preserve or improve microservice quality, SOLID, 12-factor app compliance, cloud-native best practices, and open-source maintainability.
 8. Prefer mature open-source / CNCF Landscape products over building infrastructure from scratch.
 9. Avoid reinventing wheels unless there is a documented product reason.
-10. Package adoption is allowed, including mature Go packages such as Gin, form binding / validation packages, pgx, sqlc, OpenTelemetry, Prometheus clients, etc., but every major package decision must be justified in an ADR.
+10. Future package adoption is allowed, including mature Go packages such as Gin, form binding / validation packages, pgx, sqlc, OpenTelemetry, Prometheus clients, etc., but every major package decision must be justified in an ADR and must not be described as current runtime unless it is actually used.
 
 ## Phase 0: Create the Architecture and Roadmap Documents First
 

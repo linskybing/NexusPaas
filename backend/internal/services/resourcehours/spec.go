@@ -8,7 +8,7 @@ import (
 )
 
 func Spec() platform.ServiceSpec {
-	route, id, admin, adapter := shared.Route, shared.ID, shared.Admin, shared.Adapter
+	route, id, admin, adapter, serviceInternal := shared.Route, shared.ID, shared.Admin, shared.Adapter, shared.ServiceInternal
 	return platform.ServiceSpec{
 		Name:            "usage-observability-service",
 		Category:        "ops-read-model",
@@ -38,8 +38,8 @@ func Spec() platform.ServiceSpec {
 			route(http.MethodGet, "/api/v1/projects/gpu-usage/by-user", "project_gpu_usage", "list_by_user"),
 			route(http.MethodGet, "/api/v1/projects/{id}/gpu-usage", "project_gpu_usage", "get", id("id")),
 			route(http.MethodGet, "/api/v1/resource-hours", "resource_hours", "list"),
-			route(http.MethodPost, "/api/v1/internal/usage/snapshots", "usage_snapshots", "command", adapter("prometheus")),
-			route(http.MethodPost, "/api/v1/internal/usage/cleanup", "usage_retention", "command"),
+			route(http.MethodPost, "/api/v1/internal/usage/snapshots", "usage_snapshots", "command", adapter("prometheus"), serviceInternal()),
+			route(http.MethodPost, "/api/v1/internal/usage/cleanup", "usage_retention", "command", serviceInternal()),
 		},
 	}
 }

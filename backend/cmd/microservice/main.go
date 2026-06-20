@@ -122,6 +122,8 @@ func runMicroservice(ctx context.Context, deps microserviceDeps) int {
 		startupCheck{err: app.ValidateServiceIsolation(), failureMessage: "service isolation check failed", warningMessage: "service isolation gaps detected (non-production)"},
 		startupCheck{err: app.ValidateAdminCoverage(), failureMessage: "admin route coverage check failed", warningMessage: "admin route coverage gaps detected (non-production)"},
 		startupCheck{err: app.ValidatePolicyDecisionPoint(), failureMessage: "policy decision point check failed", warningMessage: "policy decision point is not production-ready"},
+		startupCheck{err: app.ValidateRouteCollisions(), failureMessage: "route collision check failed", warningMessage: "route collision gaps detected (non-production)"},
+		startupCheck{err: app.ValidateInternalRouteAuth(), failureMessage: "internal route auth check failed", warningMessage: "internal route auth gaps detected (non-production)"},
 	) {
 		return 1
 	}

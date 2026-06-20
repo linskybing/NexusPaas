@@ -16,6 +16,8 @@ func registerInternalReadContracts(app *platform.App) {
 	if app == nil {
 		return
 	}
+	// Raw Mux internal handlers are outside the catalog guard, so each one must
+	// call AuthorizeServiceRequest before reading credentials or owner data.
 	app.Mux.HandleFunc("GET /internal/identity/users", internalReadUsersList(app))
 	app.Mux.HandleFunc("GET /internal/identity/users/{id}", internalReadUserGet(app))
 	app.Mux.HandleFunc("GET /internal/identity/roles", internalReadRolesList(app))

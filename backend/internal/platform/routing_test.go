@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestRegisterServiceSkipsDuplicateCanonicalRoutePatterns(t *testing.T) {
+func TestValidateRouteCollisionsRejectsDuplicateCanonicalRoutePatterns(t *testing.T) {
 	app := NewApp(Config{ServiceName: "all", HTTPAddr: ":0"})
 	app.RegisterService(ServiceSpec{
 		Name: "test-service",
@@ -29,6 +29,60 @@ func TestRegisterServiceSkipsDuplicateCanonicalRoutePatterns(t *testing.T) {
 	if len(app.CatalogRoutes) != 2 {
 		t.Fatalf("catalog route count = %d, want full catalog retained", len(app.CatalogRoutes))
 	}
+	if err := app.ValidateRouteCollisions(); err == nil {
+		t.Fatal("ValidateRouteCollisions succeeded, want duplicate route error")
+	}
+}
+
+func TestValidateRouteCollisionsAcceptsAlias(t *testing.T) {
+	app := NewApp(Config{ServiceName: "all", HTTPAddr: ":0"})
+	app.RegisterService(ServiceSpec{
+		Name: "test-service",
+		Routes: []RouteSpec{
+			{Method: http.MethodGet, Pattern: "/api/v1/items/{id}", Resource: "items", Action: "get", IDParam: "id"},
+			{Method: http.MethodGet, Pattern: "/api/v1/items/{item}", Resource: "items_alias", Action: "get", IDParam: "item", AliasOf: "/api/v1/items/{id}"},
+		},
+	})
+
+	if err := app.ValidateRouteCollisions(); err != nil {
+		t.Fatalf("ValidateRouteCollisions alias = %v, want nil", err)
+	}
+	if len(app.Routes) != 1 || app.Routes[0].Resource != "test-service:items" {
+		t.Fatalf("registered routes = %#v, want alias catalog-only", app.Routes)
+	}
+}
+
+func TestRegisterServiceAllowsExplicitRouteOverride(t *testing.T) {
+	app := NewApp(Config{ServiceName: "all", HTTPAddr: ":0"})
+	app.RegisterService(ServiceSpec{
+		Name: "test-service",
+		Routes: []RouteSpec{
+			{Method: http.MethodGet, Pattern: "/api/v1/items/{id}", Resource: "items", Action: "get", IDParam: "id"},
+			{Method: http.MethodGet, Pattern: "/api/v1/items/{item}", Resource: "override_items", Action: "get", IDParam: "item", Override: true, OverrideReason: "replace generated route"},
+		},
+	})
+
+	if err := app.ValidateRouteCollisions(); err != nil {
+		t.Fatalf("ValidateRouteCollisions override = %v, want nil", err)
+	}
+	if len(app.Routes) != 1 || app.Routes[0].Resource != "test-service:override_items" {
+		t.Fatalf("registered routes = %#v, want override route", app.Routes)
+	}
+}
+
+func TestValidateRouteCollisionsRejectsOverrideWithoutReason(t *testing.T) {
+	app := NewApp(Config{ServiceName: "all", HTTPAddr: ":0"})
+	app.RegisterService(ServiceSpec{
+		Name: "test-service",
+		Routes: []RouteSpec{
+			{Method: http.MethodGet, Pattern: "/api/v1/items/{id}", Resource: "items", Action: "get", IDParam: "id"},
+			{Method: http.MethodGet, Pattern: "/api/v1/items/{item}", Resource: "override_items", Action: "get", IDParam: "item", Override: true},
+		},
+	})
+
+	if err := app.ValidateRouteCollisions(); err == nil {
+		t.Fatal("ValidateRouteCollisions succeeded, want override reason error")
+	}
 }
 
 func TestRegisterServiceKeepsDistinctMethodPatternPairs(t *testing.T) {
@@ -43,6 +97,35 @@ func TestRegisterServiceKeepsDistinctMethodPatternPairs(t *testing.T) {
 
 	if len(app.Routes) != 2 {
 		t.Fatalf("route count = %d, want GET and POST retained", len(app.Routes))
+	}
+}
+
+func TestValidateInternalRouteAuthRequiresServiceAuth(t *testing.T) {
+	app := NewApp(Config{ServiceName: "all", HTTPAddr: ":0"})
+	app.RegisterService(ServiceSpec{
+		Name: "test-service",
+		Routes: []RouteSpec{
+			{Method: http.MethodPost, Pattern: "/internal/items", Resource: "items", Action: "create", AuthRequired: true},
+		},
+	})
+
+	if err := app.ValidateInternalRouteAuth(); err == nil {
+		t.Fatal("ValidateInternalRouteAuth succeeded, want missing service auth error")
+	}
+}
+
+func TestValidateInternalRouteAuthAllowsServiceAuthOrExplicitPublic(t *testing.T) {
+	app := NewApp(Config{ServiceName: "all", HTTPAddr: ":0"})
+	app.RegisterService(ServiceSpec{
+		Name: "test-service",
+		Routes: []RouteSpec{
+			{Method: http.MethodPost, Pattern: "/internal/items", Resource: "items", Action: "create", ServiceAuthRequired: true},
+			{Method: http.MethodGet, Pattern: "/api/v1/internal/health", Resource: "health", Action: "list", InternalPublic: true},
+		},
+	})
+
+	if err := app.ValidateInternalRouteAuth(); err != nil {
+		t.Fatalf("ValidateInternalRouteAuth = %v, want nil", err)
 	}
 }
 

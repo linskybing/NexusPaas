@@ -1,164 +1,75 @@
 # Project Structure Guidelines
 
-This repository follows a **microservices-first** structure.
-
-Each service should be independently understandable, testable, buildable, deployable, observable, and rollbackable.
+This repository currently uses a Go modular-monolith backend with
+microservice-ready boundaries. The target is 8 deployable units, not a
+big-bang split into 15 physical services.
 
 ## Core Rules
 
-* Prefer `services/<domain>-service/` for each backend service.
-* Each service owns its API, data model, config, tests, and deployment files.
-* Do not share writable database tables across services.
-* Keep shared code minimal and non-business-specific.
+* Each logical service owns its API, data model, config, tests, and deployment
+  intent.
+* Do not add new cross-service writable database access.
+* Keep shared code small, stable, and non-business-specific.
 * Split files by responsibility, not arbitrary line count.
-* Keep most files under **400 lines**.
-* Review files over **400 lines** for mixed responsibilities.
-* Consider subfolders when a directory has **15–20+ files** or multiple business topics.
+* Prefer small duplication over premature shared abstractions.
 * Every structure change must be traceable to an approved plan.
 
-## Repository Shape
+## Current Repository Shape
 
 ```text
-.
-├── AGENTS.md
-├── docs/
-│   ├── agents/
-│   ├── plan/
-│   └── architecture/
-│
-├── services/
-│   ├── auth-service/
-│   ├── user-service/
-│   ├── project-service/
-│   ├── job-service/
-│   ├── artifact-service/
-│   └── notification-service/
-│
-├── packages/
-│   ├── config/
-│   ├── logger/
-│   ├── errors/
-│   └── testkit/
-│
-├── deploy/
-│   ├── k8s/
-│   ├── helm/
-│   └── docker-compose/
-│
-├── scripts/
-└── tools/
+backend/
+├── cmd/microservice/                 # shared service entrypoint
+├── internal/platform/                # shared runtime, middleware, routing, config
+├── internal/services/<service>/      # logical service packages
+├── deploy/                           # local, k3s, and production-beta manifests
+├── docs/                             # backend operational and contract docs
+└── scripts/                          # local and CI gates
+
+docs/
+├── adr/                              # durable architecture decisions
+├── architecture/                     # long-lived architecture docs
+├── agents/                           # repo workflow rules
+└── plan/                             # active or unmerged implementation plans
 ```
+
+## Target Deployable Units
+
+| Unit | Logical Services |
+| --- | --- |
+| `platform-gateway` | `platform-gateway` |
+| `iam-unit` | `identity-service`, `authorization-policy-service` |
+| `tenant-unit` | `org-project-service` |
+| `collaboration-unit` | `audit-compliance-service`, `request-notification-service`, `media-upload-service` |
+| `platform-io-unit` | `storage-service`, `image-registry-service`, `integration-proxy-service` |
+| `usage-observability` | `usage-observability-service` |
+| `compute-api` | `workload-service`, `ide-service` |
+| `compute-control-plane` | `scheduler-quota-service`, `k8s-control-service` |
 
 ## Service Shape
 
-Each service should follow this structure:
+Within `backend/internal/services/<service>/`, prefer boring ownership:
 
 ```text
-services/<service-name>/
-├── src/
-│   ├── handler/
-│   ├── usecase/
-│   ├── domain/
-│   ├── repository/
-│   ├── dto/
-│   ├── config/
-│   └── main/
-│
-├── tests/
-│   ├── unit/
-│   ├── integration/
-│   └── contract/
-│
-├── migrations/
-├── deploy/
-├── Dockerfile
-├── README.md
-└── service.yaml
+spec.go           # route and service registration
+model.go          # typed domain records when needed
+repository.go     # service-owned persistence
+*_test.go         # unit, contract, and boundary tests
+migrations/       # service-owned schema changes when applicable
 ```
 
-## Layer Responsibilities
+Do not introduce this structure speculatively. Add files only when the service
+actually owns that behavior.
 
-| Layer         | Responsibility                                     |
-| ------------- | -------------------------------------------------- |
-| `handler/`    | HTTP, RPC, CLI, or message transport input/output  |
-| `usecase/`    | Application workflow and orchestration             |
-| `domain/`     | Business rules, entities, value objects            |
-| `repository/` | Persistence interfaces and infrastructure adapters |
-| `dto/`        | Request/response and mapping objects               |
-| `config/`     | Runtime config loading and validation              |
-| `main/`       | Service bootstrap and dependency wiring            |
-
-Rules:
-
-* Handlers should be thin.
-* Domain logic must not depend on handlers.
-* Domain logic must not directly depend on database clients.
-* Usecases coordinate business flow.
-* Repositories hide persistence details.
-* DTOs must not become business objects.
-
-## Shared Packages
-
-Use `packages/` only for stable cross-cutting code.
-
-Allowed examples:
-
-```text
-packages/config
-packages/logger
-packages/errors
-packages/testkit
-```
-
-Avoid sharing:
-
-```text
-business rules
-domain models
-repositories
-service-specific DTOs
-database clients with business assumptions
-```
-
-Before adding shared code, confirm:
-
-* It is used by at least two real services.
-* It has clear ownership.
-* It does not create service coupling.
-* Small duplication would not be simpler.
-
-Prefer small duplication over premature shared abstraction.
-
-## Deployment Files
-
-Service-specific deployment files should live inside each service:
-
-```text
-services/job-service/deploy/
-```
-
-Global deployment composition may live under:
-
-```text
-deploy/
-```
-
-Use global deployment files only for local development, platform-level setup, or cross-service orchestration.
-
-## Service Boundary Rules
+## Boundary Rules
 
 A service boundary must be based on:
 
-* Business capability
-* Data ownership
-* API ownership
-* Deployment independence
-* Failure isolation
-* Observability
-* Rollback strategy
+* business capability;
+* data ownership;
+* API or event ownership;
+* deployment independence;
+* failure isolation;
+* observability;
+* rollback strategy.
 
 Do not create a service only because a folder is large.
-
-## Default Rule
-
-Each service should own its code, data, config, tests, and deployment. Keep files focused, avoid generic shared folders, and make every structure change small, reviewable, and tied to the approved plan.

@@ -8,7 +8,7 @@ import (
 )
 
 func Spec() platform.ServiceSpec {
-	route, id, admin, adapter, serviceInternal := shared.Route, shared.ID, shared.Admin, shared.Adapter, shared.ServiceInternal
+	route, id, admin, adapter, serviceInternal, aliasOf := shared.Route, shared.ID, shared.Admin, shared.Adapter, shared.ServiceInternal, shared.AliasOf
 	return platform.ServiceSpec{
 		Name:            "storage-service",
 		Category:        "data",
@@ -27,9 +27,9 @@ func Spec() platform.ServiceSpec {
 			route(http.MethodPost, "/api/v1/admin/user-storage/{username}/init", "user_storage", "command", id("username"), admin(), adapter("minio")),
 			route(http.MethodPut, "/api/v1/admin/user-storage/{username}/expand", "user_storage", "command", id("username"), admin(), adapter("minio")),
 			route(http.MethodDelete, "/api/v1/admin/user-storage/{username}", "user_storage", "command", id("username"), admin(), adapter("minio")),
-			route(http.MethodPost, "/api/v1/admin/user-storage/{id}/init", "user_storage", "command", id("id"), admin(), adapter("minio")),
+			route(http.MethodPost, "/api/v1/admin/user-storage/{id}/init", "user_storage", "command", id("id"), admin(), adapter("minio"), aliasOf("/api/v1/admin/user-storage/{username}/init")),
 			route(http.MethodPost, "/api/v1/admin/user-storage/{id}/expand", "user_storage", "command", id("id"), admin(), adapter("minio")),
-			route(http.MethodDelete, "/api/v1/admin/user-storage/{id}", "user_storage", "command", id("id"), admin(), adapter("minio")),
+			route(http.MethodDelete, "/api/v1/admin/user-storage/{id}", "user_storage", "command", id("id"), admin(), adapter("minio"), aliasOf("/api/v1/admin/user-storage/{username}")),
 			route(http.MethodGet, "/api/v1/k8s/user-storage/{id}", "user_storage", "get", id("id"), adapter("minio")),
 			route(http.MethodGet, "/api/v1/storage/group/{id}", "group_storage", "list", id("id")),
 			route(http.MethodGet, "/api/v1/storage/my-storages", "group_storage", "list_my"),

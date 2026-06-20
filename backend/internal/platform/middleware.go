@@ -43,6 +43,18 @@ var requestGuards = []routeGuard{
 		}
 		return false, 0, "", ""
 	}},
+	{"service-auth", func(a *App, r *http.Request, route RouteSpec) (bool, int, string, string) {
+		if !route.ServiceAuthRequired {
+			return false, 0, "", ""
+		}
+		if a.Config.ServiceAPIKey == "" {
+			return true, http.StatusNotFound, "not_found", "not found"
+		}
+		if !a.ServiceRequestAuthorized(r) {
+			return true, http.StatusUnauthorized, "unauthorized", "service authentication is required"
+		}
+		return false, 0, "", ""
+	}},
 	{"admin", func(a *App, r *http.Request, route RouteSpec) (bool, int, string, string) {
 		if a.Config.RequireAuth && route.AuthRequired && route.Admin && !a.adminAllowed(r) {
 			return true, http.StatusForbidden, "forbidden", "administrator privileges are required"

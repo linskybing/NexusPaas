@@ -214,6 +214,9 @@ func (a *App) ValidateAdminCoverage() error {
 		if a.CustomHandlers[route.Method+" "+canonicalPattern(route.Pattern)] != nil {
 			continue
 		}
+		if route.ServiceAuthRequired {
+			continue // internal service-auth guard covers this route
+		}
 		if a.Config.RequireAuth && route.AuthRequired {
 			continue // platform admin gate enforces RouteSpec.Admin
 		}
@@ -303,19 +306,33 @@ func (a *App) RegisterService(spec ServiceSpec) {
 		return
 	}
 	a.Services[spec.Name] = spec
-	addedRoute := false
+	changedRoute := false
 	for _, routeCopy := range catalogRoutes {
 		registerKey := routeCopy.Method + " " + canonicalPattern(routeCopy.Pattern)
 		if a.registeredPatterns[registerKey] {
+			if routeCopy.Override && strings.TrimSpace(routeCopy.OverrideReason) != "" {
+				a.replaceRegisteredRoute(registerKey, routeCopy)
+				changedRoute = true
+			}
 			continue
 		}
 		a.registeredPatterns[registerKey] = true
 		a.Routes = append(a.Routes, routeCopy)
-		addedRoute = true
+		changedRoute = true
 	}
-	if addedRoute {
+	if changedRoute {
 		a.rebuildRouteIndex()
 	}
+}
+
+func (a *App) replaceRegisteredRoute(registerKey string, route RouteSpec) {
+	for i, current := range a.Routes {
+		if current.Method+" "+canonicalPattern(current.Pattern) == registerKey {
+			a.Routes[i] = route
+			return
+		}
+	}
+	a.Routes = append(a.Routes, route)
 }
 
 func (a *App) handleRoute(r *httpRequest, route RouteSpec) (int, any, *Degraded) {

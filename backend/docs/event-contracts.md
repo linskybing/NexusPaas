@@ -1,6 +1,15 @@
 # Core Event Contracts
 
-Cross-service state synchronization uses an event bus. All events are published via the Outbox/Inbox pattern (at-least-once delivery + idempotency keys). Event payloads carry only UUIDs and necessary snapshots; internal primary keys that would enable cross-service joins are forbidden.
+Cross-service state synchronization uses an event bus. The GA target is a
+transactional Outbox/Inbox pattern: owner state and outbox rows are written in
+one database transaction, a relay publishes events, and consumers record inbox
+processing for idempotency. Current runtime has event contracts, producer and
+consumer fixture coverage, and projection lag/retry/replay/dead-letter
+visibility, but durable transactional relay/inbox delivery is still a P0
+blocker in `problem.md`.
+
+Event payloads carry only UUIDs and necessary snapshots; internal primary keys
+that would enable cross-service joins are forbidden.
 
 ## Event Catalog
 

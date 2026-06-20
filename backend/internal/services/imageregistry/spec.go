@@ -8,7 +8,7 @@ import (
 )
 
 func Spec() platform.ServiceSpec {
-	route, id, admin, adapter := shared.Route, shared.ID, shared.Admin, shared.Adapter
+	route, id, admin, adapter, aliasOf := shared.Route, shared.ID, shared.Admin, shared.Adapter, shared.AliasOf
 	return platform.ServiceSpec{
 		Name:        "image-registry-service",
 		Category:    "supply-chain",
@@ -33,7 +33,7 @@ func Spec() platform.ServiceSpec {
 			route(http.MethodPost, "/api/v1/images/build/from-storage", "image_builds", "command", adapter("harbor")),
 			route(http.MethodPost, "/api/v1/images/build/dockerfile", "image_builds", "command", adapter("harbor")),
 			route(http.MethodGet, "/api/v1/images/build/{jobName}/logs", "image_build_logs", "list", id("jobName"), adapter("harbor")),
-			route(http.MethodGet, "/api/v1/images/build/{buildId}/logs", "image_build_logs", "list", id("buildId"), adapter("harbor")),
+			route(http.MethodGet, "/api/v1/images/build/{buildId}/logs", "image_build_logs", "list", id("buildId"), adapter("harbor"), aliasOf("/api/v1/images/build/{jobName}/logs")),
 			route(http.MethodGet, "/api/v1/projects/{id}/builds", "image_builds", "list", id("id")),
 			route(http.MethodDelete, "/api/v1/projects/{id}/builds/{jobName}", "image_builds", "delete", id("jobName"), adapter("harbor")),
 			route(http.MethodGet, "/api/v1/projects/{id}/image-builds", "image_builds", "list", id("id")),

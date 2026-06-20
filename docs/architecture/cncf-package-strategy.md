@@ -48,9 +48,12 @@ standard library is insufficient.
 
 ## Near-Term Decisions
 
-- Keep Gin, GORM, PostgreSQL, Redis Streams, MinIO/S3-compatible storage,
-  Kubernetes clients, Prometheus, and OpenTelemetry-compatible telemetry as the
-  current supported baseline.
+- Keep the current backend baseline: Go standard library `net/http`,
+  `http.ServeMux`, `pgx`, PostgreSQL, Redis Streams, MinIO/S3-compatible
+  storage, Kubernetes clients, Prometheus, and OpenTelemetry-compatible
+  telemetry.
+- Treat Gin, GORM, Kafka, service mesh, or a new gateway product as future
+  choices that require a concrete need and ADR.
 - Do not introduce Kafka, a service mesh, or a new gateway product in the first
   90 days unless a blocking scale/security requirement appears.
 - Prioritize GitHub Sonar provisioning, staging GitOps evidence, and supply

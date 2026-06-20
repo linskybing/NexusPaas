@@ -8,7 +8,7 @@ import (
 )
 
 func Spec() platform.ServiceSpec {
-	route, admin := shared.Route, shared.Admin
+	route, admin, serviceInternal := shared.Route, shared.Admin, shared.ServiceInternal
 	return platform.ServiceSpec{
 		Name:        "audit-compliance-service",
 		Category:    "ops",
@@ -21,7 +21,7 @@ func Spec() platform.ServiceSpec {
 			route(http.MethodGet, "/api/v1/audit/logs", "audit_logs", "list", admin()),
 			route(http.MethodGet, "/api/v1/audit/report", "audit_reports", "list"),
 			route(http.MethodGet, "/api/v1/admin/security/posture", "security_posture", "list", admin()),
-			route(http.MethodPost, "/api/v1/internal/audit/cleanup", "audit_retention", "command", admin()),
+			route(http.MethodPost, "/api/v1/internal/audit/cleanup", "audit_retention", "command", admin(), serviceInternal()),
 		},
 	}
 }
