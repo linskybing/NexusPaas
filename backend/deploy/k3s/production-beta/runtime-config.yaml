@@ -9,5 +9,10 @@ data:
   REDIS_URL: "redis://redis:6379/0"
   EVENT_BUS_URL: "redis://redis:6379/1"
   JWT_AUDIENCE: "platform"
+  STREAM_TURN_URIS: ""
+  STREAM_TURN_CREDENTIAL_TTL: "8h"
+  STREAM_MAX_BITRATE_KBPS: "12000"
+  STREAM_MAX_CONCURRENT_SESSIONS: "64"
+  STREAM_EGRESS_BUDGET_KBPS: "800000"
   SERVICE_URLS: >-
     {"audit-compliance-service":"http://audit-compliance-service","authorization-policy-service":"http://authorization-policy-service","ide-service":"http://ide-service","identity-service":"http://identity-service","image-registry-service":"http://image-registry-service","integration-proxy-service":"http://integration-proxy-service","k8s-control-service":"http://k8s-control-service","media-upload-service":"http://media-upload-service","org-project-service":"http://org-project-service","platform-gateway":"http://platform-gateway","request-notification-service":"http://request-notification-service","scheduler-quota-service":"http://scheduler-quota-service","storage-service":"http://storage-service","usage-observability-service":"http://usage-observability-service","workload-service":"http://workload-service"}

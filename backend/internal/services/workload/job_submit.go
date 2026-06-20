@@ -165,16 +165,18 @@ func resolveJobSubmitContext(configs *recordStoreWorkloadConfigRepository, r *ht
 
 func jobAdmissionPayload(job, payload map[string]any) map[string]any {
 	admission := map[string]any{
-		"job_id":            job["job_id"],
-		"project_id":        job["project_id"],
-		"user_id":           job["user_id"],
-		"queue_name":        firstPayloadValue(payload, "queue_name", "queueName", "QueueName"),
-		"device_class_name": firstPayloadValue(payload, "device_class_name", "deviceClassName", "DeviceClassName"),
-		"required_gpu":      firstPayloadValue(payload, "required_gpu", "requiredGpu", "RequiredGPU"),
-		"required_cpu":      firstPayloadValue(payload, "required_cpu", "requiredCPU", "required_cpu_cores", "RequiredCPU"),
-		"required_memory":   firstPayloadValue(payload, "required_memory", "requiredMemory", "required_memory_mb", "RequiredMemory"),
-		"gpu_count":         firstPayloadValue(payload, "gpu_count", "gpuCount", "GPUCount"),
-		"resources":         payload["resources"],
+		"job_id":                  job["job_id"],
+		"project_id":              job["project_id"],
+		"user_id":                 job["user_id"],
+		"queue_name":              firstPayloadValue(payload, "queue_name", "queueName", "QueueName"),
+		"device_class_name":       firstPayloadValue(payload, "device_class_name", "deviceClassName", "DeviceClassName"),
+		"required_gpu":            firstPayloadValue(payload, "required_gpu", "requiredGpu", "RequiredGPU"),
+		"required_cpu":            firstPayloadValue(payload, "required_cpu", "requiredCPU", "required_cpu_cores", "RequiredCPU"),
+		"required_memory":         firstPayloadValue(payload, "required_memory", "requiredMemory", "required_memory_mb", "RequiredMemory"),
+		"gpu_count":               firstPayloadValue(payload, "gpu_count", "gpuCount", "GPUCount"),
+		"streaming_session":       firstPayloadValue(payload, "streaming_session", "streamingSession", "StreamingSession"),
+		"stream_max_bitrate_kbps": firstPayloadValue(payload, "stream_max_bitrate_kbps", "streamMaxBitrateKbps", "StreamMaxBitrateKbps"),
+		"resources":               payload["resources"],
 	}
 	if value, ok := firstPresent(payload, "sm_percentage", "smPercentage", "SMPercentage"); ok {
 		admission["sm_percentage"] = value
@@ -194,6 +196,8 @@ func applyAdmissionReview(job, review map[string]any) {
 		"required_gpu",
 		"required_cpu",
 		"required_memory",
+		"streaming_session",
+		"stream_max_bitrate_kbps",
 	} {
 		if value, ok := review[key]; ok {
 			job[key] = value

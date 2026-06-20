@@ -51,7 +51,7 @@ func (a *App) handleReservation(r *httpRequest, route RouteSpec, state string) (
 		return createErrorResponse(err)
 	}
 	if eventName := reservationFSM.eventName(state); eventName != "" {
-		a.publishEvent(r, eventName, map[string]any{"reservation_id": record.ID, "state": state})
+		a.publishEvent(r, eventName, reservationEventData(record.ID, state, record.Data))
 	}
 	return http.StatusCreated, record
 }
@@ -75,7 +75,30 @@ func (a *App) handleReservationTransition(r *httpRequest, route RouteSpec, state
 		return http.StatusInternalServerError, map[string]any{"message": "reservation update failed"}
 	}
 	if eventName := reservationFSM.eventName(state); eventName != "" {
-		a.publishEvent(r, eventName, map[string]any{"reservation_id": id, "state": state})
+		a.publishEvent(r, eventName, reservationEventData(id, state, updated.Data))
 	}
 	return http.StatusOK, updated
+}
+
+func reservationEventData(id, state string, data map[string]any) map[string]any {
+	event := map[string]any{"reservation_id": id, "state": state}
+	for _, key := range []string{"project_id", "job_id", "plan_id", "expires_at"} {
+		if value, ok := data[key]; ok {
+			event[key] = value
+		}
+	}
+	if reserved, ok := data["reserved"]; ok {
+		event["reserved"] = reserved
+		return event
+	}
+	reserved := map[string]any{}
+	for _, key := range []string{"gpu", "cpu_millis", "memory_mib"} {
+		if value, ok := data[key]; ok {
+			reserved[key] = value
+		}
+	}
+	if len(reserved) > 0 {
+		event["reserved"] = reserved
+	}
+	return event
 }

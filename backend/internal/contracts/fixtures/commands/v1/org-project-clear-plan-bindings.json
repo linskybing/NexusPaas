@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "contract_name": "org-project.clear_plan_bindings",
+  "owner_service": "org-project-service",
+  "consumer_service": "scheduler-quota-service",
+  "resource": "org-project-service:projects",
+  "action": "clear_plan_bindings",
+  "method": "DELETE",
+  "path": "/internal/org-project/plans/{plan_id}/project-bindings",
+  "auth": "service_key",
+  "service_key_required": true,
+  "path_parameters": ["plan_id"],
+  "required_request_fields": [],
+  "request_example": {},
+  "success_statuses": [200],
+  "error_statuses": [400, 401, 404],
+  "idempotency": {
+    "idempotent": true,
+    "semantic_key": ["plan_id"],
+    "behavior": "Clearing a plan with no remaining project bindings succeeds with cleared equal to zero."
+  },
+  "emits_events": ["ProjectUpdated"],
+  "response_example": {
+    "plan_id": "plan-ga-standard",
+    "cleared": 2
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

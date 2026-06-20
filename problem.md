@@ -179,3 +179,145 @@ real containers. The repository still has broader Production Beta launch
 blockers: missing reference snapshot, missing GitHub Sonar provisioning, missing
 live dashboard/alert provisioning, missing live staging rehearsal evidence, and
 remaining shared physical Postgres transition debt.
+
+## 7. GA Architecture Roadmap Update
+
+_Updated: 2026-06-20. Branch: `feature/audit-event-contract`._
+
+The 90-day GA architecture direction is now documented as a staged move from the
+current modular monolith to 8 coarse deployable units:
+
+- `platform-gateway`
+- `iam-unit`
+- `tenant-unit`
+- `collaboration-unit`
+- `platform-io-unit`
+- `usage-observability`
+- `compute-api`
+- `compute-control-plane`
+
+The accepted direction avoids a big-bang 15-service split. It prioritizes
+Outbox/Inbox, read models, versioned internal contracts, deployable-unit
+staging evidence, and compute saga hardening.
+
+The Day 0-15 ADR baseline is now recorded under `docs/adr/` for the 8-unit
+target, Outbox/Inbox and read-model migration, GA service identity direction,
+and deployment evidence gates. These ADRs close the decision-record gap only;
+implementation, contract fixtures, staging evidence, and security hardening
+remain open until the follow-up slices produce test and runtime evidence.
+
+The Day 16-35 contract/runtime work now includes canonical v1 core event
+envelope fixtures under `backend/internal/contracts/fixtures/events/v1/`,
+scheduler admission owner-read fixtures under
+`backend/internal/contracts/fixtures/owner-read/v1/`, and scheduler/compute
+internal command fixtures under
+`backend/internal/contracts/fixtures/commands/v1/`, all guarded by focused
+contract and drift tests. This gives reviewers versioned event-envelope evidence
+for identity, tenant, workload, scheduler, and audit events; owner-read HTTP
+contract artifacts for scheduler admission dependencies; and command artifacts
+for scheduler-quota writes into org-project and workload owners.
+
+The Outbox/Inbox runtime visibility foundation now exposes projection lag on
+`/projections`, set-based Prometheus metrics for outbox depth, consumer lag,
+projection applied totals, and projection dead-letter totals, and checkpoint
+behavior that keeps lag visible when consumer intake fails. Focused platform
+tests pass for projection lag/checkpoint behavior, dead-letter visibility,
+runtime metric snapshot semantics, and escaped consumer metric labels:
+`go -C backend test ./internal/platform -run 'Projection|Outbox|Metrics|Observability' -count=1`.
+
+Projection replay and retry progress are now visible through additive
+`/projections` fields, Prometheus metrics, and dead-letter metadata. A replay
+request records `replay_count`, `replay_pending`, and `last_replay_at`, while
+replayed poison events update the existing dead-letter record with
+`attempt_count`, `retry_count`, and `last_failed_at`; metrics now expose
+per-consumer replay and retry totals. Focused platform tests pass:
+`go -C backend test ./internal/platform -run 'Projection|Outbox|Metrics|Observability' -count=1`.
+
+Initial producer-specific event contract coverage now binds the five canonical
+v1 event fixtures to real producer helpers or route producer paths:
+`UserUpdated` from identity, `ProjectUpdated` from org-project, `JobSubmitted`
+from workload, `QuotaReserved` from the scheduler-quota reservation route, and
+`AuditEvent` from the platform audit hook. The platform reservation and audit
+events keep existing consumer keys while adding fixture-compatible context such
+as reservation details and normalized audit resource/outcome fields. Focused
+producer tests pass:
+`go -C backend test ./internal/contracts ./internal/platform ./internal/services/identity ./internal/services/orgproject ./internal/services/workload -run 'Event|Producer|Contract|Reservation|Audit' -count=1`.
+
+Initial fixture-backed consumer contract coverage now binds current real
+event-fed read-model consumers to canonical v1 fixtures: integration-proxy
+consumes `UserUpdated` into its local admin users read model, and cluster-read
+consumes `UserUpdated` plus `ProjectUpdated` into local identity/project read
+models. The tests assert contract IDs from `user_id` and `project_id`, preserve
+representative fixture payload fields, and keep isolated consumers from
+populating owner-store resources. Focused consumer tests pass:
+`go -C backend test ./internal/contracts ./internal/services/integrationproxy ./internal/services/clusterread -run 'Event|Consumer|Projection|Contract|ReadModel' -count=1`.
+
+GPU usage consumer contract coverage now binds the existing usage-observability
+read-model projection to the canonical v1 `JobSubmitted` fixture. The test
+asserts the GPU job read model is keyed by fixture `job_id`, preserves
+representative workload payload fields including requested resources, defaults
+`JobSubmitted` status to `submitted`, and keeps the isolated consumer from
+populating the workload owner store. Focused consumer tests pass:
+`go -C backend test ./internal/contracts ./internal/services/gpuusage -run 'Event|Consumer|Projection|Contract|ReadModel' -count=1`.
+
+Authorization-policy identity consumer contract coverage now binds the existing
+authz read-model projection to the canonical v1 `UserUpdated` fixture. The test
+asserts the policy identity users read model is keyed by fixture `user_id`,
+preserves representative identity payload fields, and keeps the isolated
+consumer from populating the identity owner store. Focused consumer tests pass:
+`go -C backend test ./internal/contracts ./internal/services/authorizationpolicy -run 'Event|Consumer|Projection|Contract|ReadModel' -count=1`.
+
+Request-notification project access consumer contract coverage now binds the
+existing collaboration read-model projection to the canonical v1 `ProjectUpdated`
+fixture. The test asserts the local project access projects read model is keyed
+by fixture `project_id`, preserves representative org-project payload fields,
+and keeps the isolated consumer from populating the org-project owner store.
+Focused consumer tests pass:
+`go -C backend test ./internal/contracts ./internal/services/requestnotification -run 'Event|Consumer|Projection|Contract|ReadModel|ProjectAccess' -count=1`.
+
+Audit-compliance audit-event consumer contract coverage now binds the existing
+event-fed audit log reader to the canonical v1 `AuditEvent` fixture. The reader
+prefers canonical `audit_event_id` and `actor_user_id` while keeping legacy event
+ID and `user_id` fallbacks. The test asserts `auditLogs` and
+`RecentAuditLogMaps` preserve the fixture ID, actor, action, resource, and
+timestamp fields, and keeps the isolated consumer from populating the audit
+owner-store resource. Focused consumer tests pass:
+`go -C backend test ./internal/contracts ./internal/services/auditcompliance -run 'Event|Audit|Consumer|Contract|RecentAudit' -count=1`.
+
+Latest local verification for this slice:
+
+- `go -C backend test ./internal/services/auditcompliance -run 'AuditEvent|Consumer|Contract|RecentAudit' -count=1`:
+  Pass.
+- `go -C backend test ./internal/contracts ./internal/services/auditcompliance -run 'Event|Audit|Consumer|Contract|RecentAudit' -count=1`:
+  Pass.
+- `git diff --check`: Pass.
+- `go -C backend test ./... -count=1`: Pass.
+- `go -C backend vet ./...`: Pass.
+- `go -C backend build ./...`: Pass.
+- `bash backend/scripts/ci-security-gate.sh quick`: Pass.
+- `bash backend/scripts/ci-security-gate.sh security`: Pass; govulncheck and
+  OSV found no issues, Docker image build succeeded, and Trivy reported 0
+  vulnerabilities.
+- `bash backend/scripts/ci-security-gate.sh sonar`: Pass; local SonarScanner
+  Quality Gate passed for `nexuspaas-backend`.
+
+No E2E, live Kubernetes, or staging evidence was required for this slice because
+the change is limited to an in-process fixture-backed consumer contract test and
+roadmap blocker tracking.
+
+Broader command coverage, broader owner-read coverage, broader route-level
+producer coverage, remaining consumer contract tests for other canonical
+consumer paths, durable relay/publish-lag evidence, drift metrics/comparison,
+and broader event-fed read-model adoption remain open.
+
+### GA Architecture Remaining Issues
+
+| Priority | Area | Problem | Impact | Recommended Next Step |
+| --- | --- | --- | --- | --- |
+| High | staging evidence | The 8 deployable units do not yet have captured live staging deploy, smoke, rollback, and redeploy evidence | The roadmap is documented but cannot be declared GA-ready | Build staging runtime config and capture evidence unit by unit |
+| High | data ownership | Shared physical PostgreSQL and transition owner-read contracts remain; Outbox/Inbox runtime visibility exists but read-model adoption is not complete | Cross-unit boundaries are not yet GA-complete | Add durable relay/read-model slices and retire high-risk shared-store reads |
+| High | contract testing | Core event envelope v1 fixtures, initial producer-specific event tests, fixture-backed consumer tests for integration-proxy, cluster-read, gpuusage, authorization-policy, request-notification, and audit-compliance, scheduler admission owner-read fixtures, scheduler/compute command fixtures, and runtime visibility tests exist, but broader owner-read/command coverage, broader route-level producer coverage, and remaining consumer event paths are not yet all versioned artifacts | Consumers can drift silently during decomposition | Add remaining owner-read/command fixtures, broader producer tests, and remaining consumer contract tests before changing internal contracts |
+| High | Outbox/Inbox maturity | Runtime lag/dead-letter/projection visibility plus replay/retry progress exists, but drift metrics/comparison, durable relay/publish-lag evidence, and event-fed read-model adoption remain open | ADR 0002 cannot be declared complete and service cutovers still need stronger evidence | Add durable relay, drift comparison, and read-model adoption slices before retiring shared-store reads |
+| Medium | service identity | Static `SERVICE_API_KEY` remains the Production Beta service-to-service auth fallback | GA security posture depends on rotatable workload identity or equivalent | Introduce Kubernetes workload identity or approved equivalent in staging |
+| Medium | remote Sonar gate | GitHub-hosted Sonar still depends on repository secrets being configured | Remote PRs may not enforce Sonar even when local evidence exists | Provision reachable Sonar credentials and make the remote gate required |
+| Medium | supply chain | SBOM generation and image signing are GA goals but not yet enforced | Release provenance remains incomplete | Add SBOM and Cosign signing after staging promotion is stable |

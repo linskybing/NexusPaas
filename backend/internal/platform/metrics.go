@@ -3,6 +3,7 @@ package platform
 import (
 	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -16,11 +17,20 @@ type Metrics struct {
 	latencyBuckets map[string][]int
 	latencyCount   map[string]int
 	counters       map[string]int
+	labeled        map[string]metricSample
 	total          int
 	errors         int
 }
 
+type metricSample struct {
+	name   string
+	kind   string
+	labels string
+	value  int64
+}
+
 var httpDurationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.3, 0.5, 1, 2, 5, 10}
+var prometheusLabelNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func NewMetrics() *Metrics {
 	return &Metrics{
@@ -29,6 +39,7 @@ func NewMetrics() *Metrics {
 		latencyBuckets: map[string][]int{},
 		latencyCount:   map[string]int{},
 		counters:       map[string]int{},
+		labeled:        map[string]metricSample{},
 	}
 }
 
@@ -80,6 +91,29 @@ func (m *Metrics) CounterSuffix(suffix string) int {
 	return total
 }
 
+func (m *Metrics) SetGauge(name string, labels map[string]string, value int64) {
+	m.setLabeledMetric(name, "gauge", labels, value)
+}
+
+func (m *Metrics) SetCounter(name string, labels map[string]string, value int64) {
+	m.setLabeledMetric(name, "counter", labels, value)
+}
+
+func (m *Metrics) setLabeledMetric(name, kind string, labels map[string]string, value int64) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return
+	}
+	labelText, ok := prometheusLabels(labels)
+	if !ok {
+		return
+	}
+	key := name + "\xff" + labelText
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.labeled[key] = metricSample{name: name, kind: kind, labels: labelText, value: value}
+}
+
 func (m *Metrics) ErrorRatePercent() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -110,6 +144,18 @@ func (m *Metrics) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	for _, key := range sortedKeys(m.counters) {
 		fmt.Fprintf(&out, "nexuspaas_%s_total %d\n", sanitizeMetricName(key), m.counters[key])
 	}
+	lastLabeledMetric := ""
+	for _, sample := range sortedMetricSamples(m.labeled) {
+		if sample.name != lastLabeledMetric {
+			writeMetricHeader(&out, sample.name, sample.kind)
+			lastLabeledMetric = sample.name
+		}
+		if sample.labels == "" {
+			fmt.Fprintf(&out, "%s %d\n", sample.name, sample.value)
+			continue
+		}
+		fmt.Fprintf(&out, "%s{%s} %d\n", sample.name, sample.labels, sample.value)
+	}
 	_, _ = w.Write([]byte(out.String()))
 }
 
@@ -130,9 +176,48 @@ func sortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
+func sortedMetricSamples(samples map[string]metricSample) []metricSample {
+	out := make([]metricSample, 0, len(samples))
+	for _, sample := range samples {
+		out = append(out, sample)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].name != out[j].name {
+			return out[i].name < out[j].name
+		}
+		return out[i].labels < out[j].labels
+	})
+	return out
+}
+
 func sanitizeMetricName(name string) string {
 	name = strings.ReplaceAll(name, "-", "_")
 	name = strings.ReplaceAll(name, ".", "_")
 	name = strings.ReplaceAll(name, "/", "_")
 	return name
+}
+
+func prometheusLabels(labels map[string]string) (string, bool) {
+	if len(labels) == 0 {
+		return "", true
+	}
+	parts := make([]string, 0, len(labels))
+	for _, name := range sortedKeys(labels) {
+		if !validPrometheusLabelName(name) {
+			return "", false
+		}
+		parts = append(parts, fmt.Sprintf(`%s="%s"`, name, escapePrometheusLabelValue(labels[name])))
+	}
+	return strings.Join(parts, ","), true
+}
+
+func validPrometheusLabelName(name string) bool {
+	return prometheusLabelNamePattern.MatchString(name)
+}
+
+func escapePrometheusLabelValue(value string) string {
+	value = strings.ReplaceAll(value, "\\", "\\\\")
+	value = strings.ReplaceAll(value, "\n", "\\n")
+	value = strings.ReplaceAll(value, "\"", "\\\"")
+	return value
 }

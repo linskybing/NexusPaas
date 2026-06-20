@@ -2,6 +2,7 @@
 # state. Before applying, create local-only secrets in namespace `nexuspaas`:
 #   kubectl -n nexuspaas create secret generic postgres-dev-password --from-literal=password=<dev password>
 #   kubectl -n nexuspaas create secret generic dex-dev-password --from-literal=bcrypt-hash=<bcrypt hash>
+#   kubectl -n nexuspaas create secret generic coturn-runtime-secret --from-literal=TURN_STATIC_AUTH_SECRET=<turn rest secret> --from-literal=TURN_REALM=<turn realm>
 # Build with:         kubectl kustomize backend/deploy/k3s
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -9,6 +10,7 @@ namespace: nexuspaas
 resources:
   - namespace.yaml
   - runtime-config.yaml
+  - coturn.yaml
   - postgres.yaml
   - redis.yaml
   - minio.yaml

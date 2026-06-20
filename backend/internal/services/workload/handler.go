@@ -38,6 +38,7 @@ func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodDelete, pathConfigFileID+"/instance", stopConfigInstance)
 	app.RegisterCustomHandler(http.MethodGet, pathConfigFileID+"/instance/pods", listConfigInstancePods)
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/jobs", submitJob)
+	app.RegisterCustomHandler(http.MethodPost, "/api/v1/stream/credentials", streamCredentials)
 	app.RegisterCustomHandler(http.MethodGet, "/internal/workload/preemption-context", workloadPreemptionContext)
 	app.RegisterCustomHandler(http.MethodPost, "/internal/workload/jobs/{id}/preempt", workloadPreemptJob)
 	app.RegisterCustomHandler(http.MethodPost, "/internal/workload/jobs/{id}/evict", workloadEvictJob)

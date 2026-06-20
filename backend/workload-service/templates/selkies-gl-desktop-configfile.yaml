@@ -1,0 +1,79 @@
+# Submit this ConfigFile content through workload-service, then submit the job
+# with streaming_session=true, gpu_count=1, sm_percentage=<share>, and
+# pinned_memory_limit=<limit>. The nvidia.com/gpu marker below is what triggers
+# the existing DRA ResourceClaimTemplate + NVIDIA MPS injection path.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: selkies-gl-desktop
+  labels:
+    app.kubernetes.io/name: selkies-gl-desktop
+    workload.nexuspaas.io/streaming-session: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: selkies-gl-desktop
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: selkies-gl-desktop
+        workload.nexuspaas.io/streaming-session: "true"
+    spec:
+      containers:
+        - name: desktop
+          image: registry.example.com/nexuspaas/selkies-gl-desktop:24.04
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: DISPLAY_SIZEW, value: "1920"}
+            - {name: DISPLAY_SIZEH, value: "1080"}
+            - {name: DISPLAY_REFRESH, value: "60"}
+            - {name: DISPLAY_DPI, value: "96"}
+            - {name: DISPLAY_CDEPTH, value: "24"}
+            - {name: STREAM_CODEC, value: "h264"}
+            - {name: STREAM_FPS, value: "60"}
+            - {name: STREAM_MAX_BITRATE_KBPS, value: "12000"}
+            - {name: SELKIES_ENCODER, value: "nvh264enc"}
+            - {name: SELKIES_VIDEO_BITRATE, value: "$(STREAM_MAX_BITRATE_KBPS)"}
+            - {name: SELKIES_FRAMERATE, value: "$(STREAM_FPS)"}
+            - {name: SELKIES_AUDIO_BITRATE, value: "128000"}
+            - {name: SELKIES_ENABLE_BASIC_AUTH, value: "false"}
+            - {name: NGINX_PORT, value: "8080"}
+            - {name: SELKIES_PORT, value: "8081"}
+            - {name: SELKIES_METRICS_HTTP_PORT, value: "9090"}
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: metrics, containerPort: 9090}
+          readinessProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: 8Gi
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - {name: shm, mountPath: /dev/shm}
+      volumes:
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: selkies-gl-desktop
+  labels:
+    app.kubernetes.io/name: selkies-gl-desktop
+spec:
+  selector:
+    app.kubernetes.io/name: selkies-gl-desktop
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
