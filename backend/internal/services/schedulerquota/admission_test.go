@@ -251,6 +251,77 @@ func TestAdmissionResourceFloorCoversControllersAndDRA(t *testing.T) {
 	}
 }
 
+func TestSubmitAdmissionStreamingGuardrails(t *testing.T) {
+	tests := []struct {
+		name    string
+		jobs    []map[string]any
+		req     submitAdmissionRequest
+		want    string
+		allowed bool
+	}{
+		{
+			name: "allowed",
+			req: submitAdmissionRequest{
+				ProjectID: "P1", UserID: "U1", QueueName: "default-batch", RequiredCPU: 1, RequiredMemory: 1024,
+				StreamingSession: true, StreamMaxBitrateKbps: 12000, StreamBitrateCapKbps: 12000, StreamSessionCap: 2, StreamEgressBudgetKbps: 24000,
+			},
+			allowed: true,
+		},
+		{
+			name: "session cap",
+			jobs: []map[string]any{{"id": "stream-1", "status": "running", "streaming_session": true, "stream_max_bitrate_kbps": 12000}},
+			req: submitAdmissionRequest{
+				ProjectID: "P1", UserID: "U1", QueueName: "default-batch", RequiredCPU: 1, RequiredMemory: 1024,
+				StreamingSession: true, StreamMaxBitrateKbps: 12000, StreamBitrateCapKbps: 12000, StreamSessionCap: 1, StreamEgressBudgetKbps: 24000,
+			},
+			want: "stream session cap exceeded",
+		},
+		{
+			name: "per session bitrate",
+			req: submitAdmissionRequest{
+				ProjectID: "P1", UserID: "U1", QueueName: "default-batch", RequiredCPU: 1, RequiredMemory: 1024,
+				StreamingSession: true, StreamMaxBitrateKbps: 13000, StreamBitrateCapKbps: 12000, StreamSessionCap: 2, StreamEgressBudgetKbps: 24000,
+			},
+			want: "stream bitrate cap exceeded",
+		},
+		{
+			name: "egress budget",
+			jobs: []map[string]any{{"id": "stream-1", "status": "running", "streaming_session": true, "stream_max_bitrate_kbps": 19000}},
+			req: submitAdmissionRequest{
+				ProjectID: "P1", UserID: "U1", QueueName: "default-batch", RequiredCPU: 1, RequiredMemory: 1024,
+				StreamingSession: true, StreamMaxBitrateKbps: 12000, StreamBitrateCapKbps: 12000, StreamSessionCap: 3, StreamEgressBudgetKbps: 30000,
+			},
+			want: "stream egress budget exceeded",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := newSchedulerQuotaTestApp()
+			seedAdmissionProject(t, app, admissionFixture{})
+			for _, job := range tt.jobs {
+				job["project_id"] = "P1"
+				job["user_id"] = "U2"
+				createSchedulerRecord(t, app, workloadJobsResource, job)
+			}
+
+			review, err := evaluateSubmitAdmission(context.Background(), newAdmissionReader(app.Store), tt.req, time.Now().UTC())
+
+			if tt.allowed {
+				if err != nil {
+					t.Fatalf("stream admission err = %v, want allowed", err)
+				}
+				if !review.StreamingSession || review.StreamMaxBitrateKbps != tt.req.StreamMaxBitrateKbps {
+					t.Fatalf("stream review = %#v, want stream metadata preserved", review)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("stream admission err = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestSubmitAdmissionRejectsUnsupportedWorkloadKind(t *testing.T) {
 	app := newSchedulerQuotaTestApp()
 	seedAdmissionProject(t, app, admissionFixture{})
@@ -277,16 +348,18 @@ func TestSubmitAdmissionRejectsUnsupportedWorkloadKind(t *testing.T) {
 
 func TestAdmissionPayloadDecodeAndQuantityHelpers(t *testing.T) {
 	req, err := decodeSubmitAdmissionRequest(map[string]any{
-		"jobId":           "J1",
-		"projectId":       "P1",
-		"userId":          "U1",
-		"queueName":       "q",
-		"requiredGpu":     1.5,
-		"requiredCPU":     2,
-		"requiredMemory":  "2Gi",
-		"gpuCount":        2,
-		"smPercentage":    50,
-		"deviceClassName": "gpu.nvidia.com",
+		"jobId":                "J1",
+		"projectId":            "P1",
+		"userId":               "U1",
+		"queueName":            "q",
+		"requiredGpu":          1.5,
+		"requiredCPU":          2,
+		"requiredMemory":       "2Gi",
+		"gpuCount":             2,
+		"smPercentage":         50,
+		"streamingSession":     true,
+		"streamMaxBitrateKbps": 9000,
+		"deviceClassName":      "gpu.nvidia.com",
 		"resources": []any{
 			map[string]any{"name": "raw", "json": map[string]any{"apiVersion": "v1", "kind": "Pod"}},
 			map[string]any{"name": "direct", "apiVersion": "v1", "kind": "Pod"},
@@ -296,7 +369,8 @@ func TestAdmissionPayloadDecodeAndQuantityHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if req.JobID != "J1" || req.RequiredMemory != 2048 || req.GPUCount != 2 || req.SMPercentage == nil || *req.SMPercentage != 50 {
+	if req.JobID != "J1" || req.RequiredMemory != 2048 || req.GPUCount != 2 || req.SMPercentage == nil || *req.SMPercentage != 50 ||
+		!req.StreamingSession || req.StreamMaxBitrateKbps != 9000 {
 		t.Fatalf("decoded request = %#v, want aliases, memory quantity, and SM percentage", req)
 	}
 	if len(req.Resources) != 2 || req.Resources[0].Kind != "Pod" || req.Resources[1].Kind != "Pod" {

@@ -2,3 +2,14 @@ references/
 .scannerwork/
 backend/coverage.out
 backend/.e2e-gate/
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Local CodeGraph index (per-machine)
+.codegraph/
+
+# Session/screenshot artifacts
+/streaming-*-proof.png

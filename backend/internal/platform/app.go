@@ -109,6 +109,18 @@ func withServiceRuntimeDefaults(cfg Config) Config {
 	if cfg.PGAdminSSOHTTPTimeout == 0 {
 		cfg.PGAdminSSOHTTPTimeout = 10 * time.Second
 	}
+	if cfg.StreamTURNCredentialTTL == 0 {
+		cfg.StreamTURNCredentialTTL = 8 * time.Hour
+	}
+	if cfg.StreamMaxBitrateKbps == 0 {
+		cfg.StreamMaxBitrateKbps = 12000
+	}
+	if cfg.StreamMaxConcurrentSessions == 0 {
+		cfg.StreamMaxConcurrentSessions = 64
+	}
+	if cfg.StreamEgressBudgetKbps == 0 {
+		cfg.StreamEgressBudgetKbps = 800000
+	}
 	if len(cfg.StorageClassOptions) == 0 {
 		cfg.StorageClassOptions = []string{"standard", "fast"}
 	}

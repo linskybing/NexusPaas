@@ -60,7 +60,9 @@ func TestProductionBetaKustomizationIncludesFifteenServices(t *testing.T) {
 	requireContains(t, path, body, "deploy/k3s/redis.yaml")
 	requireContains(t, path, body, "deploy/k3s/minio.yaml")
 	requireContains(t, path, body, "deploy/k3s/dex.yaml")
-	requireContains(t, path, body, "deploy/k3s/production-beta/backing-secret-names.yaml")
+	requireContains(t, path, body, "deploy/k3s/production-beta/backing-secret-postgres-patch.yaml")
+	requireContains(t, path, body, "deploy/k3s/production-beta/backing-secret-dex-patch.yaml")
+	requireContains(t, path, body, "deploy/k3s/production-beta/backing-secret-minio-patch.yaml")
 	requireNotContains(t, path, body, "deploy/k3s/platform.yaml")
 
 	deployments := serviceDeploymentManifests(t)
@@ -92,14 +94,22 @@ func TestProductionBetaRuntimeConfigAndSecretContract(t *testing.T) {
 	requireContains(t, contractPath, contract, "`postgres-password`")
 	requireContains(t, contractPath, contract, "`dex-password`")
 	requireContains(t, contractPath, contract, "`minio-credentials`")
+	requireContains(t, contractPath, contract, "`coturn-runtime-secret`")
+	requireContains(t, contractPath, contract, "`STREAM_TURN_SHARED_SECRET`")
 	requireNotContains(t, contractPath, contract, "-dev-")
 
-	backingPatchPath := "../../deploy/k3s/production-beta/backing-secret-names.yaml"
-	backingPatch := readTextFile(t, backingPatchPath)
-	requireContains(t, backingPatchPath, backingPatch, "name: postgres-password")
-	requireContains(t, backingPatchPath, backingPatch, "name: dex-password")
-	requireContains(t, backingPatchPath, backingPatch, "name: minio-credentials")
-	requireNotContains(t, backingPatchPath, backingPatch, "-dev-")
+	for _, patch := range []struct {
+		path string
+		name string
+	}{
+		{"../../deploy/k3s/production-beta/backing-secret-postgres-patch.yaml", "name: postgres-password"},
+		{"../../deploy/k3s/production-beta/backing-secret-dex-patch.yaml", "name: dex-password"},
+		{"../../deploy/k3s/production-beta/backing-secret-minio-patch.yaml", "name: minio-credentials"},
+	} {
+		body := readTextFile(t, patch.path)
+		requireContains(t, patch.path, body, patch.name)
+		requireNotContains(t, patch.path, body, "-dev-")
+	}
 
 	runtimePatchPath := "../../deploy/k3s/production-beta/runtime-config-envfrom-patch.yaml"
 	runtimePatch := readTextFile(t, runtimePatchPath)

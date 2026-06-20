@@ -7,7 +7,7 @@ In phase 1, platform-gateway preserves the external `/api/v1` compatibility and 
 | /api/v1/login, /logout, /refresh, /register, /captcha, /me/api-tokens, /users, /oidc/*, /cli/login, /me/cli-ca | identity-service |
 | /api/v1/permissions/*, /api/v1/admin/proxy-rbac/* | authorization-policy-service |
 | /api/v1/groups, /api/v1/user-groups, /api/v1/projects, /api/v1/projects/{id}/members, /projects/{id}/workspace-settings, /projects/{id}/gpu-claims | org-project-service |
-| /api/v1/configfiles, /api/v1/jobs | workload-service |
+| /api/v1/configfiles, /api/v1/jobs, /api/v1/stream | workload-service |
 | /api/v1/plans, /api/v1/queues, quota/preemption internal APIs | scheduler-quota-service |
 | /api/v1/k8s/*, /api/v1/resources/*, /api/v1/ws/* | k8s-control-service |
 | /api/v1/cluster/* | split between k8s-control-service / usage-observability-service |

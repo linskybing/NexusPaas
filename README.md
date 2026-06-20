@@ -1,7 +1,7 @@
 # NexusPaas
 
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8.svg)](https://go.dev/)
-[![CI](https://github.com/linskybing/nexuspaas/actions/workflows/ci.yml/badge.svg)](https://github.com/linskybing/nexuspaas/actions/workflows/ci.yml)
+[![Backend Quality Gate](https://github.com/linskybing/nexuspaas/actions/workflows/backend-quality-gate.yml/badge.svg)](https://github.com/linskybing/nexuspaas/actions/workflows/backend-quality-gate.yml)
 
 **NexusPaas** is an open-source, microservices-first **Platform-as-a-Service** backend
 for running an AI/ML compute platform on Kubernetes — identity & access, organization and
