@@ -56,6 +56,25 @@ func TestSubmitJobCallsAdmissionAndPersistsSubmittedJob(t *testing.T) {
 	}
 }
 
+func TestSubmitJobPersistsAdmittedStreamingFields(t *testing.T) {
+	app := newJobSubmitTestApp()
+	seedJobAdmissionProject(t, app, map[string]any{})
+
+	rec := serveSubmitJob(t, app, `{
+		"project_id":"P1",
+		"user_id":"U1",
+		"queue_name":"default-batch",
+		"required_cpu":1,
+		"required_memory":1024,
+		"streaming_session":true
+	}`, "U1", http.StatusCreated)
+	job := responseRecordData(t, rec)
+
+	if job["streaming_session"] != true || job["stream_max_bitrate_kbps"] != float64(12000) {
+		t.Fatalf("stream fields = %#v, want admitted streaming session with default bitrate", job)
+	}
+}
+
 func TestSubmitJobDeniedAdmissionDoesNotCreateJob(t *testing.T) {
 	app := newJobSubmitTestApp()
 	seedJobAdmissionProject(t, app, map[string]any{"max_queued_jobs_per_user": 1})

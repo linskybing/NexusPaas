@@ -44,6 +44,7 @@ func Spec() platform.ServiceSpec {
 			route(http.MethodGet, "/api/v1/jobs/{id}/gpu-summary", "job_gpu_usage", "list", id("id")),
 			route(http.MethodGet, "/api/v1/jobs/{id}/gpu-timeline", "job_gpu_usage", "list", id("id")),
 			route(http.MethodGet, "/api/v1/jobs/{id}/gpu-breakdown", "job_gpu_usage", "list", id("id")),
+			route(http.MethodPost, "/api/v1/stream/credentials", "stream_credentials", "create"),
 			route(http.MethodGet, "/internal/workload/preemption-context", "preemption_context", "internal_read", serviceInternal()),
 			route(http.MethodPost, "/internal/workload/jobs/{id}/preempt", "jobs", "preempt", id("id"), serviceInternal()),
 			route(http.MethodPost, "/internal/workload/jobs/{id}/evict", "jobs", "evict", id("id"), serviceInternal()),

@@ -31,17 +31,22 @@ var queuedAdmissionStatuses = map[string]bool{
 }
 
 type submitAdmissionRequest struct {
-	JobID           string
-	ProjectID       string
-	UserID          string
-	QueueName       string
-	DeviceClassName string
-	RequiredGPU     float64
-	RequiredCPU     float64
-	RequiredMemory  int
-	GPUCount        int
-	SMPercentage    *int
-	Resources       []admissionResourcePayload
+	JobID                  string
+	ProjectID              string
+	UserID                 string
+	QueueName              string
+	DeviceClassName        string
+	RequiredGPU            float64
+	RequiredCPU            float64
+	RequiredMemory         int
+	GPUCount               int
+	SMPercentage           *int
+	StreamingSession       bool
+	StreamMaxBitrateKbps   int
+	StreamBitrateCapKbps   int
+	StreamSessionCap       int
+	StreamEgressBudgetKbps int
+	Resources              []admissionResourcePayload
 }
 
 type admissionResourcePayload struct {
@@ -51,33 +56,38 @@ type admissionResourcePayload struct {
 }
 
 type admissionReview struct {
-	Allowed          bool
-	Reason           string
-	ProjectID        string
-	UserID           string
-	QueueName        string
-	QueuePriority    int
-	QueuePreemptible bool
-	RuntimeLimit     int
-	DeviceClassName  string
-	RequiredGPU      float64
-	RequiredCPU      float64
-	RequiredMemory   int
-	Usage            admissionUsage
+	Allowed              bool
+	Reason               string
+	ProjectID            string
+	UserID               string
+	QueueName            string
+	QueuePriority        int
+	QueuePreemptible     bool
+	RuntimeLimit         int
+	DeviceClassName      string
+	RequiredGPU          float64
+	RequiredCPU          float64
+	RequiredMemory       int
+	StreamingSession     bool
+	StreamMaxBitrateKbps int
+	Usage                admissionUsage
 }
 
 type admissionUsage struct {
-	ProjectGPU       float64
-	ProjectCPU       float64
-	ProjectMemoryMB  int
-	UserGPU          float64
-	UserCPU          float64
-	UserMemoryMB     int
-	UserRunningJobs  int
-	UserQueuedJobs   int
-	ResourceFloorGPU float64
-	ResourceFloorCPU float64
-	FloorMemoryMB    int
+	ProjectGPU              float64
+	ProjectCPU              float64
+	ProjectMemoryMB         int
+	UserGPU                 float64
+	UserCPU                 float64
+	UserMemoryMB            int
+	UserRunningJobs         int
+	UserQueuedJobs          int
+	ResourceFloorGPU        float64
+	ResourceFloorCPU        float64
+	FloorMemoryMB           int
+	ActiveStreamSessions    int
+	ActiveStreamBitrateKbps int
+	StreamEgressBudgetKbps  int
 }
 
 type admissionDeny struct {
@@ -98,6 +108,7 @@ func reviewSubmitAdmission(app *platform.App, r *http.Request, _ platform.RouteS
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(err.Error()), nil
 	}
+	applyAdmissionStreamConfig(&req, app.Config)
 	if req.QueueName == "" {
 		req.QueueName = shared.FirstNonEmpty(strings.TrimSpace(app.Config.DefaultQueueName), defaultQueueName)
 	}
@@ -124,12 +135,14 @@ func reviewSubmitAdmission(app *platform.App, r *http.Request, _ platform.RouteS
 
 func evaluateSubmitAdmission(ctx context.Context, reader admissionReader, req submitAdmissionRequest, now time.Time) (admissionReview, error) {
 	review := admissionReview{
-		Allowed:        true,
-		ProjectID:      req.ProjectID,
-		UserID:         req.UserID,
-		RequiredGPU:    req.RequiredGPU,
-		RequiredCPU:    req.RequiredCPU,
-		RequiredMemory: req.RequiredMemory,
+		Allowed:              true,
+		ProjectID:            req.ProjectID,
+		UserID:               req.UserID,
+		RequiredGPU:          req.RequiredGPU,
+		RequiredCPU:          req.RequiredCPU,
+		RequiredMemory:       req.RequiredMemory,
+		StreamingSession:     req.StreamingSession,
+		StreamMaxBitrateKbps: req.StreamMaxBitrateKbps,
 	}
 	if strings.TrimSpace(req.ProjectID) == "" {
 		return review, deny(http.StatusBadRequest, "project id is required")
@@ -180,6 +193,10 @@ func evaluateSubmitAdmission(ctx context.Context, reader admissionReader, req su
 		return review, deny(http.StatusUnprocessableEntity, err.Error())
 	}
 	review.Usage = admissionUsageForJobs(ctx, reader, req.ProjectID, req.UserID, review.Usage)
+	review.Usage.StreamEgressBudgetKbps = req.StreamEgressBudgetKbps
+	if err := enforceAdmissionStreaming(req, review.Usage); err != nil {
+		return review, err
+	}
 	if err := enforceAdmissionJobLimits(project, review.Usage); err != nil {
 		return review, err
 	}

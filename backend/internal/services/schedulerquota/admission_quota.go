@@ -110,11 +110,15 @@ func enforceAdmissionDeviceClass(plan contracts.Record[map[string]any], req *sub
 
 func admissionUsageForJobs(ctx context.Context, reader admissionReader, projectID, userID string, usage admissionUsage) admissionUsage {
 	for _, job := range reader.ListWorkloadJobs(ctx) {
-		if shared.TextValue(job.Data, "project_id", "projectId", "ProjectID") != projectID {
+		status := strings.ToLower(shared.TextValue(job.Data, "status", "Status"))
+		if !activeAdmissionStatus(status) {
 			continue
 		}
-		status := strings.ToLower(shared.TextValue(job.Data, "status", "Status"))
-		if !activeAdmissionStatuses[status] {
+		if admissionJobStreamingSession(job.Data) {
+			usage.ActiveStreamSessions++
+			usage.ActiveStreamBitrateKbps += admissionJobStreamBitrate(job.Data)
+		}
+		if shared.TextValue(job.Data, "project_id", "projectId", "ProjectID") != projectID {
 			continue
 		}
 		usage.ProjectGPU += shared.NumberValue(job.Data, "required_gpu", "requiredGpu", "RequiredGPU")

@@ -41,10 +41,17 @@ Postgres, Redis event streams, and MinIO.
 
 ## Local Kubernetes Context
 
-Feature acceptance runs on a Mac with Docker Desktop Kubernetes or a
-kubeadm-capable context available. The runtime-isolation E2E does not create,
-update, or delete Kubernetes objects, but keep the local cluster context healthy
-before running the gate:
+Feature acceptance runs against an RKE2 cluster (Kubernetes >= 1.34). Export its
+kubeconfig before running cluster tests; the cluster client reads `KUBECONFIG`,
+then in-cluster config, then `~/.kube/config`:
+
+```sh
+sudo cp /etc/rancher/rke2/rke2.yaml ~/.kube/config
+sudo chown "$(id -u):$(id -g)" ~/.kube/config   # or: export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+```
+
+The runtime-isolation E2E does not create, update, or delete Kubernetes objects,
+but keep the cluster context healthy before running the gate:
 
 ```sh
 kubectl config current-context
@@ -52,11 +59,30 @@ kubectl cluster-info
 kubectl get nodes
 ```
 
+### DRA readiness precondition
+
+`TestLiveK8sConfigFileDRADispatchE2E` (below) and browser GPU streaming dispatch
+require Dynamic Resource Allocation plus the NVIDIA DRA driver. The live test
+**skips** (it never fails) when these are absent, so confirm the cluster — not
+the code — is ready first:
+
+```sh
+kubectl api-resources | grep -E 'resourceclaimtemplates|deviceclasses'  # resource.k8s.io/v1 served
+kubectl get deviceclasses                                               # must list gpu.nvidia.com
+kubectl get pods -A | grep -i dra                                       # NVIDIA DRA driver running
+```
+
+The dispatch code expects driver `gpu.nvidia.com` and MPS opaque config
+`resource.nvidia.com/v1beta1`
+(`internal/services/workload/dispatcher_dra.go`). On Kubernetes >= 1.34 the
+`resource.k8s.io/v1` APIs are GA and on by default; the DeviceClass appears only
+after the NVIDIA DRA driver is installed.
+
 ## Start Local Backing Services
 
 ```sh
 DEX_STATIC_PASSWORD_HASH='unused-for-e2e' \
-  docker compose -f /Users/sky/workspaces/backend/deploy/local/docker-compose.yml up -d postgres redis minio
+  docker compose -f /home/lin/Desktop/NexusPaas/backend/deploy/local/docker-compose.yml up -d postgres redis minio
 ```
 
 Use a dedicated local Redis DB/container and the dedicated MinIO bucket below
@@ -101,7 +127,7 @@ harness also runs this idempotent provisioning path, but this command mirrors
 the deployment admin process:
 
 ```sh
-cd /Users/sky/workspaces/backend
+cd /home/lin/Desktop/NexusPaas/backend
 SERVICE_NAME=media-upload-service \
 PRODUCTION=false \
 REQUIRE_AUTH=false \
@@ -134,7 +160,7 @@ explicit `PASS` lines for the required tests and must not pass by skipping due t
 missing backing-service configuration:
 
 ```sh
-cd /Users/sky/workspaces/backend
+cd /home/lin/Desktop/NexusPaas/backend
 set -o pipefail
 go test -tags e2e ./internal/e2e \
   -run 'TestServiceRouteIsolationContract|TestServiceIsolationValidationE2E|TestIsolatedRuntimeRegistrationE2E|TestProviderConsumerContractMatrix|TestCriticalCrossServiceJourneys|TestSchedulerAdmissionOwnerReadContractsE2E|TestNonBlobIsolatedServiceIgnoresObjectStoreConfigE2E|TestStorageMountPlanContractE2E|TestImageBuildGovernanceE2E|TestIDELifecycleProjectAccessE2E|TestWorkloadConfigFileLifecycleE2E' \
@@ -147,14 +173,14 @@ Run the full E2E package after the focused gate when optional slice tests are
 enabled or expected to skip:
 
 ```sh
-cd /Users/sky/workspaces/backend
+cd /home/lin/Desktop/NexusPaas/backend
 go test -tags e2e ./internal/e2e -count=1 -v
 ```
 
 Run the focused runtime-isolation E2E while working on service ownership:
 
 ```sh
-cd /Users/sky/workspaces/backend
+cd /home/lin/Desktop/NexusPaas/backend
 go test -tags e2e ./internal/e2e -run 'TestIsolatedRuntimeRegistrationE2E' -count=1 -v
 ```
 
@@ -162,7 +188,7 @@ Run the focused scheduler admission owner-read E2E while working on
 `scheduler-quota-service` admission dependencies:
 
 ```sh
-cd /Users/sky/workspaces/backend
+cd /home/lin/Desktop/NexusPaas/backend
 go test -tags e2e ./internal/e2e -run '^TestSchedulerAdmissionOwnerReadContractsE2E$' -count=1 -v
 ```
 
@@ -171,7 +197,7 @@ workload-to-storage dispatch dependencies. This test requires local Postgres,
 Redis, and MinIO envs, uses a fake Kubernetes client, and must not skip:
 
 ```sh
-cd /Users/sky/workspaces/backend
+cd /home/lin/Desktop/NexusPaas/backend
 set -o pipefail
 go test -tags e2e ./internal/e2e -run '^TestStorageMountPlanContractE2E$' -count=1 -v \
   | tee /tmp/storage-mount-plan-e2e.log
@@ -184,7 +210,7 @@ image build governance, or IDE lifecycle. These tests require local Postgres,
 Redis, and MinIO envs and must not skip:
 
 ```sh
-cd /Users/sky/workspaces/backend
+cd /home/lin/Desktop/NexusPaas/backend
 go test -tags e2e ./internal/e2e \
   -run 'TestImageBuildGovernanceE2E|TestIDELifecycleProjectAccessE2E|TestWorkloadConfigFileLifecycleE2E' \
   -count=1 -v
@@ -193,7 +219,7 @@ go test -tags e2e ./internal/e2e \
 Run the focused GPU telemetry E2E while working on usage-observability workers:
 
 ```sh
-cd /Users/sky/workspaces/backend
+cd /home/lin/Desktop/NexusPaas/backend
 go test -tags e2e ./internal/e2e -run 'TestGPUUsageTelemetryCollectorE2E' -count=1 -v
 ```
 
@@ -201,7 +227,7 @@ Run the focused Longhorn RWX health worker E2E while working on storage worker
 parity. This fake-client E2E is required and must not skip:
 
 ```sh
-cd /Users/sky/workspaces/backend
+cd /home/lin/Desktop/NexusPaas/backend
 go test -tags e2e ./internal/e2e -run '^TestLonghornRWXHealthWorkerE2E$' -count=1 -v
 ```
 
@@ -212,18 +238,18 @@ reporting, summary persistence, and event publication through the maintenance
 runtime:
 
 ```sh
-cd /Users/sky/workspaces/backend
+cd /home/lin/Desktop/NexusPaas/backend
 go test -tags e2e ./internal/e2e -run '^TestPriorityClassSyncWorkerE2E$' -count=1 -v
 ```
 
 Run the live Kubernetes priority-class sync E2E only when the current local
-Docker Desktop/kubeadm cluster may be mutated. The test creates unique
+RKE2 cluster may be mutated. The test creates unique
 cluster-scoped `nexuspaas-e2e-priority-*` objects, labels them with an E2E run marker,
 deletes only those uniquely named/labeled objects, and reports leftover names if
 cleanup fails:
 
 ```sh
-cd /Users/sky/workspaces/backend
+cd /home/lin/Desktop/NexusPaas/backend
 set -o pipefail
 TEST_LIVE_K8S_PRIORITY_CLASS_SYNC=1 \
   go test -tags e2e ./internal/e2e -run '^TestPriorityClassSyncWorkerLiveK8sE2E$' -count=1 -v \
@@ -239,19 +265,19 @@ explicit `automountServiceAccountToken=false` without mutating a live cluster or
 running Docker prune:
 
 ```sh
-cd /Users/sky/workspaces/backend
+cd /home/lin/Desktop/NexusPaas/backend
 go test -tags e2e ./internal/e2e -run '^TestDockerImageCleanupCronJobProvisionerE2E$' -count=1 -v
 ```
 
 Run the live Kubernetes Docker cleanup CronJob E2E only when the current local
-Docker Desktop/kubeadm cluster may be mutated. The test creates a temporary
+RKE2 cluster may be mutated. The test creates a temporary
 namespace, creates only the `docker-image-cleanup` CronJob, verifies the pod
 template, and deletes only that E2E namespace/CronJob. The CronJob is privileged
 and mounts `/var/run/docker.sock`, but this test does not manually create a Job
 or execute `docker system prune`:
 
 ```sh
-cd /Users/sky/workspaces/backend
+cd /home/lin/Desktop/NexusPaas/backend
 set -o pipefail
 TEST_LIVE_K8S_DOCKER_CLEANUP=1 \
   go test -tags e2e ./internal/e2e -run '^TestDockerImageCleanupCronJobLiveK8sE2E$' -count=1 -v \
@@ -267,7 +293,7 @@ result is a persisted degraded/error summary rather than a healthy empty
 success:
 
 ```sh
-cd /Users/sky/workspaces/backend
+cd /home/lin/Desktop/NexusPaas/backend
 set -o pipefail
 TEST_LIVE_K8S_LONGHORN_RWX_SMOKE=1 \
   go test -tags e2e ./internal/e2e -run '^TestLonghornRWXHealthWorkerLiveK8sSmokeE2E$' -count=1 -v \
@@ -280,7 +306,7 @@ Run the optional real-Longhorn gate only when the current cluster is expected to
 have Longhorn installed and accessible:
 
 ```sh
-cd /Users/sky/workspaces/backend
+cd /home/lin/Desktop/NexusPaas/backend
 TEST_LIVE_LONGHORN_RWX=1 \
   go test -tags e2e ./internal/e2e -run '^TestLonghornRWXHealthWorkerLiveLonghornE2E$' -count=1 -v
 ```
@@ -313,7 +339,7 @@ export LDAP_MIRROR_SYNC_INTERVAL='5m'
 export TEST_LDAP_USER='ldapalice'
 export TEST_LDAP_PASSWORD='ldappass'
 
-cd /Users/sky/workspaces/backend
+cd /home/lin/Desktop/NexusPaas/backend
 set -o pipefail
 TEST_LIVE_LDAP_IDENTITY=1 \
   go test -tags e2e ./internal/e2e -run '^TestIdentityLDAPStrategyMirrorSyncE2E$' -count=1 -v \
@@ -325,14 +351,14 @@ rg '^--- PASS: TestIdentityLDAPStrategyMirrorSyncE2E' /tmp/identity-ldap-e2e.log
 Run the live LDAP + project plan + Kubernetes deploy E2E while working on the
 end-to-end user journey from identity registration through workload dispatch.
 This opt-in test needs local Postgres, Redis, MinIO, the OpenLDAP container
-above, and a mutable Docker Desktop/kubeadm Kubernetes context. When the flag is
+above, and a mutable RKE2 Kubernetes context. When the flag is
 set, missing LDAP, backing-service, or Kubernetes dependencies fail the test.
 The test creates only E2E-marked records plus one unique `proj-<project>-<user>`
 namespace, submits a minimal `batch/v1 Job`, verifies the Job object and
 workload record, and deletes that namespace during cleanup:
 
 ```sh
-cd /Users/sky/workspaces/backend
+cd /home/lin/Desktop/NexusPaas/backend
 set -o pipefail
 TEST_LIVE_K8S_USER_PROJECT_PLAN_DEPLOY=1 \
   go test -tags e2e ./internal/e2e -run '^TestLiveLDAPUserProjectPlanConfigDeployE2E$' -count=1 -v \
@@ -348,7 +374,7 @@ only unique `proj-<project>-<user>` namespaces/resources, verifies native
 deletion, plan-window eviction, and logical-quota auto-preemption:
 
 ```sh
-cd /Users/sky/workspaces/backend
+cd /home/lin/Desktop/NexusPaas/backend
 set -o pipefail
 TEST_LIVE_K8S_PLAN_WINDOW_DURATION_PREEMPTION=1 \
   go test -tags e2e ./internal/e2e -run '^TestLiveK8sPlanWindowDurationPreemptionE2E$' -count=1 -v \
@@ -366,13 +392,19 @@ verifies ResourceClaimTemplate and Pod DRA wiring, then deletes only that
 namespace:
 
 ```sh
-cd /Users/sky/workspaces/backend
+cd /home/lin/Desktop/NexusPaas/backend
 set -o pipefail
 TEST_LIVE_K8S_CONFIGFILE_DRA=1 \
   go test -tags e2e ./internal/e2e -run '^TestLiveK8sConfigFileDRADispatchE2E$' -count=1 -v \
   | tee /tmp/live-configfile-dra-e2e.log
 rg '^--- PASS: TestLiveK8sConfigFileDRADispatchE2E' /tmp/live-configfile-dra-e2e.log
 ```
+
+Use that same live DRA test for browser GPU streaming dispatch acceptance: the
+Selkies ConfigFile template still declares `nvidia.com/gpu: "1"`, so it must hit
+the existing ResourceClaimTemplate + MPS injection path. Browser WebRTC, NVENC,
+and forced-TURN relay validation are operator-run checks on a GPU cluster; see
+`docs/browser-gpu-streaming.md`.
 
 Run the optional live Harbor adapter boundary E2E only when `HARBOR_URL` points
 at a local or staging Harbor endpoint. This test verifies the existing Harbor
@@ -381,7 +413,7 @@ the non-live governance E2E because the production code is currently
 record-backed:
 
 ```sh
-cd /Users/sky/workspaces/backend
+cd /home/lin/Desktop/NexusPaas/backend
 TEST_LIVE_HARBOR_IMAGE_BUILD=1 HARBOR_URL=http://localhost:8080 \
   go test -tags e2e ./internal/e2e -run '^TestLiveHarborImageBuildE2E$' -count=1 -v
 ```
@@ -392,7 +424,7 @@ deletes a temporary namespace in the current Kubernetes context; for acceptance,
 the log must show the test passed and did not skip:
 
 ```sh
-cd /Users/sky/workspaces/backend
+cd /home/lin/Desktop/NexusPaas/backend
 set -o pipefail
 TEST_LIVE_K8S_POLICY_DATA_SYNC=1 \
   go test -tags e2e ./internal/e2e -run '^TestPolicyDataSyncConfigMapE2E$' -count=1 -v \
@@ -406,7 +438,7 @@ rg '^--- PASS: TestPolicyDataSyncConfigMapE2E' /tmp/policy-data-sync-e2e.log
 The CI workflow and local reviewers use the same gate script:
 
 ```sh
-cd /Users/sky/workspaces
+cd /home/lin/Desktop/NexusPaas
 bash backend/scripts/ci-security-gate.sh all
 ```
 
@@ -464,13 +496,13 @@ re-deploy evidence. See `docs/beta-launch-readiness.md`.
 Existing manual gates remain:
 
 ```sh
-cd /Users/sky/workspaces/backend
+cd /home/lin/Desktop/NexusPaas/backend
 go test ./...
 go vet ./...
 go test -tags integration ./...
 go test ./... -coverprofile=coverage.out
 
-cd /Users/sky/workspaces
+cd /home/lin/Desktop/NexusPaas
 sonar-scanner -Dsonar.qualitygate.wait=true
 ```
 

@@ -221,6 +221,82 @@ func TestConfigServiceEnvParsing(t *testing.T) {
 	assertStringSlice(t, cfg.GroupRegistryProfileOptions, []string{"default", "gpu"})
 }
 
+func TestConfigStreamEnvDefaultsAndParsing(t *testing.T) {
+	cfg := ConfigFromEnv()
+	if cfg.StreamTURNCredentialTTL != 8*time.Hour ||
+		cfg.StreamMaxBitrateKbps != 12000 ||
+		cfg.StreamMaxConcurrentSessions != 64 ||
+		cfg.StreamEgressBudgetKbps != 800000 {
+		t.Fatalf("stream defaults = ttl:%v bitrate:%d sessions:%d budget:%d", cfg.StreamTURNCredentialTTL, cfg.StreamMaxBitrateKbps, cfg.StreamMaxConcurrentSessions, cfg.StreamEgressBudgetKbps)
+	}
+	if len(cfg.StreamTURNURIs) != 0 || cfg.StreamTURNSharedSecret != "" {
+		t.Fatalf("stream TURN defaults = uris:%#v secret:%q, want empty", cfg.StreamTURNURIs, cfg.StreamTURNSharedSecret)
+	}
+
+	t.Setenv(envStreamTURNURIs, " turn:turn.example.com:3478?transport=udp, turns:turn.example.com:5349 ")
+	t.Setenv(envStreamTURNSharedSecret, " stream-secret ")
+	t.Setenv(envStreamTURNCredentialTTL, "2h")
+	t.Setenv(envStreamMaxBitrateKbps, "9000")
+	t.Setenv(envStreamMaxConcurrentSessions, "10")
+	t.Setenv(envStreamEgressBudgetKbps, "100000")
+
+	cfg = ConfigFromEnv()
+	assertStringSlice(t, cfg.StreamTURNURIs, []string{"turn:turn.example.com:3478?transport=udp", "turns:turn.example.com:5349"})
+	if cfg.StreamTURNSharedSecret != "stream-secret" || cfg.StreamTURNCredentialTTL != 2*time.Hour ||
+		cfg.StreamMaxBitrateKbps != 9000 || cfg.StreamMaxConcurrentSessions != 10 || cfg.StreamEgressBudgetKbps != 100000 {
+		t.Fatalf("stream env parsed incorrectly: %#v", cfg)
+	}
+}
+
+func TestConfigStreamValidation(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  Config
+		want string
+	}{
+		{name: "valid defaults", cfg: streamValidationConfig()},
+		{name: "negative ttl", cfg: streamValidationConfig(func(cfg *Config) { cfg.StreamTURNCredentialTTL = -time.Second }), want: envStreamTURNCredentialTTL},
+		{name: "ttl too long", cfg: streamValidationConfig(func(cfg *Config) { cfg.StreamTURNCredentialTTL = 13 * time.Hour }), want: envStreamTURNCredentialTTL},
+		{name: "negative bitrate", cfg: streamValidationConfig(func(cfg *Config) { cfg.StreamMaxBitrateKbps = -1 }), want: envStreamMaxBitrateKbps},
+		{name: "negative sessions", cfg: streamValidationConfig(func(cfg *Config) { cfg.StreamMaxConcurrentSessions = -1 }), want: envStreamMaxConcurrentSessions},
+		{name: "negative budget", cfg: streamValidationConfig(func(cfg *Config) { cfg.StreamEgressBudgetKbps = -1 }), want: envStreamEgressBudgetKbps},
+		{name: "budget exceeded", cfg: streamValidationConfig(func(cfg *Config) {
+			cfg.StreamMaxBitrateKbps = 12000
+			cfg.StreamMaxConcurrentSessions = 100
+			cfg.StreamEgressBudgetKbps = 800000
+		}), want: envStreamEgressBudgetKbps},
+		{name: "production turn secret required", cfg: streamProductionConfig(""), want: envStreamTURNSharedSecret},
+		{name: "production turn secret set", cfg: streamProductionConfig("shared-secret")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.cfg.Validate()
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("Validate() error = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Validate() error = %v, want containing %s", err, tc.want)
+			}
+		})
+	}
+}
+
+func streamValidationConfig(opts ...func(*Config)) Config {
+	cfg := Config{
+		RequireAuth:               true,
+		LonghornRWXHealthInterval: time.Minute,
+		LonghornRWXRepairCooldown: time.Minute,
+		PriorityClassSyncInterval: time.Minute,
+	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	return cfg
+}
+
 func TestConfigServiceEnvFallbackParsing(t *testing.T) {
 	t.Setenv(envVPNAPIURL, " http://single.test ")
 	t.Setenv(envStorageClassOptions, "standard,fast")
@@ -733,6 +809,7 @@ func TestConfigMalformedEnvFailsClosedInProduction(t *testing.T) {
 		{name: "vpn api timeout duration", envName: envVPNAPITimeout, value: "soon"},
 		{name: "minio operation timeout duration", envName: envMinIOOperationTimeout, value: "soon"},
 		{name: "pgadmin sso timeout duration", envName: envPGAdminSSOHTTPTimeout, value: "soon"},
+		{name: "stream turn credential ttl duration", envName: envStreamTURNCredentialTTL, value: "soon"},
 		{name: "vpn usage enabled bool", envName: "VPN_USAGE_ENABLED", value: "maybe"},
 		{name: "vpn usage grace duration", envName: "VPN_USAGE_GRACE", value: "soon"},
 		{name: "adapter timeout duration", envName: "ADAPTER_TIMEOUT", value: "soon"},
@@ -746,6 +823,9 @@ func TestConfigMalformedEnvFailsClosedInProduction(t *testing.T) {
 		{name: "ldap port int", envName: envLDAPPort, value: "many"},
 		{name: "longhorn snapshot warn int", envName: envLonghornRWXSnapshotWarn, value: "many"},
 		{name: "longhorn snapshot block int", envName: envLonghornRWXSnapshotBlock, value: "many"},
+		{name: "stream max bitrate int", envName: envStreamMaxBitrateKbps, value: "many"},
+		{name: "stream max sessions int", envName: envStreamMaxConcurrentSessions, value: "many"},
+		{name: "stream egress budget int", envName: envStreamEgressBudgetKbps, value: "many"},
 		{name: "service urls json", envName: envServiceURLs, value: "{bad-json"},
 		{name: "adapter config json", envName: envAdapterConfig, value: `{"pgadmin":{"auth":{"token":"secret-token"`, notContain: "secret-token"},
 		{name: "api key principals json", envName: envAPIKeyUsers, value: `{"key":{"id":"svc:test","token":"secret-token"`, notContain: "secret-token"},
@@ -952,6 +1032,13 @@ func productionConfigWithServiceURLs(includeKey bool) Config {
 	if includeKey {
 		cfg.ServiceAPIKey = "service-key"
 	}
+	return cfg
+}
+
+func streamProductionConfig(secret string) Config {
+	cfg := validProductionConfig()
+	cfg.StreamTURNURIs = []string{"turn:turn.example.com:3478?transport=udp"}
+	cfg.StreamTURNSharedSecret = secret
 	return cfg
 }
 

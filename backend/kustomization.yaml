@@ -8,6 +8,7 @@ resources:
   - deploy/k3s/namespace.yaml
   - deploy/k3s/production-beta/runtime-config.yaml
   - deploy/k3s/production-beta/runtime-secret-contract.yaml
+  - deploy/k3s/coturn.yaml
   - deploy/k3s/postgres.yaml
   - deploy/k3s/redis.yaml
   - deploy/k3s/minio.yaml
@@ -28,7 +29,9 @@ resources:
   - usage-observability-service/k8s/deployment.yaml
   - workload-service/k8s/deployment.yaml
 patches:
-  - path: deploy/k3s/production-beta/backing-secret-names.yaml
+  - path: deploy/k3s/production-beta/backing-secret-postgres-patch.yaml
+  - path: deploy/k3s/production-beta/backing-secret-dex-patch.yaml
+  - path: deploy/k3s/production-beta/backing-secret-minio-patch.yaml
   - path: deploy/k3s/production-beta/runtime-config-envfrom-patch.yaml
     target:
       group: apps

@@ -88,6 +88,12 @@ type Config struct {
 	PGAdminDefaultEmail         string
 	PGAdminDefaultPassword      string
 	PGAdminSSOHTTPTimeout       time.Duration
+	StreamTURNURIs              []string
+	StreamTURNSharedSecret      string
+	StreamTURNCredentialTTL     time.Duration
+	StreamMaxBitrateKbps        int
+	StreamMaxConcurrentSessions int
+	StreamEgressBudgetKbps      int
 	StorageClassOptions         []string
 	GroupStorageClassOptions    []string
 	GroupRegistryProfileOptions []string
@@ -175,6 +181,12 @@ const (
 	envPGAdminDefaultEmail         = "PGADMIN_DEFAULT_EMAIL"
 	envPGAdminDefaultPassword      = "PGADMIN_DEFAULT_PASSWORD"
 	envPGAdminSSOHTTPTimeout       = "PGADMIN_SSO_HTTP_TIMEOUT_SEC"
+	envStreamTURNURIs              = "STREAM_TURN_URIS"
+	envStreamTURNSharedSecret      = "STREAM_TURN_SHARED_SECRET"
+	envStreamTURNCredentialTTL     = "STREAM_TURN_CREDENTIAL_TTL"
+	envStreamMaxBitrateKbps        = "STREAM_MAX_BITRATE_KBPS"
+	envStreamMaxConcurrentSessions = "STREAM_MAX_CONCURRENT_SESSIONS"
+	envStreamEgressBudgetKbps      = "STREAM_EGRESS_BUDGET_KBPS"
 	envStorageClassOptions         = "STORAGE_CLASS_OPTIONS"
 	envGroupStorageClassOptions    = "GROUP_STORAGE_CLASS_OPTIONS"
 	envGroupRegistryProfileOptions = "GROUP_REGISTRY_PROFILE_OPTIONS"
@@ -288,6 +300,12 @@ func ConfigFromEnv() Config {
 		PGAdminDefaultEmail:         strings.TrimSpace(os.Getenv(envPGAdminDefaultEmail)),
 		PGAdminDefaultPassword:      strings.TrimSpace(os.Getenv(envPGAdminDefaultPassword)),
 		PGAdminSSOHTTPTimeout:       parser.envDurationOrSeconds(envPGAdminSSOHTTPTimeout, 10*time.Second),
+		StreamTURNURIs:              parseList(os.Getenv(envStreamTURNURIs)),
+		StreamTURNSharedSecret:      strings.TrimSpace(os.Getenv(envStreamTURNSharedSecret)),
+		StreamTURNCredentialTTL:     parser.envDuration(envStreamTURNCredentialTTL, 8*time.Hour),
+		StreamMaxBitrateKbps:        parser.envInt(envStreamMaxBitrateKbps, 12000),
+		StreamMaxConcurrentSessions: parser.envInt(envStreamMaxConcurrentSessions, 64),
+		StreamEgressBudgetKbps:      parser.envInt(envStreamEgressBudgetKbps, 800000),
 		StorageClassOptions:         parseList(env(envStorageClassOptions, "standard,fast")),
 		GroupStorageClassOptions:    firstNonEmptyList(parseList(os.Getenv(envGroupStorageClassOptions)), parseList(os.Getenv(envStorageClassOptions))),
 		GroupRegistryProfileOptions: firstNonEmptyList(parseList(os.Getenv(envGroupRegistryProfileOptions)), parseList(os.Getenv(envRegistryProfileOptions))),
@@ -362,6 +380,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.validateDockerCleanup(); err != nil {
+		return err
+	}
+	if err := c.validateStreamConfig(); err != nil {
 		return err
 	}
 	if c.Production {
@@ -444,6 +465,47 @@ func (c Config) validateDockerCleanup() error {
 	}
 	if strings.TrimSpace(c.DockerCleanupImage) == "" {
 		return errors.New(envDockerDindImage + " is required when " + envDockerCleanupEnabled + "=true")
+	}
+	return nil
+}
+
+func (c Config) validateStreamConfig() error {
+	ttl := c.StreamTURNCredentialTTL
+	if ttl == 0 {
+		ttl = 8 * time.Hour
+	}
+	maxBitrate := c.StreamMaxBitrateKbps
+	if maxBitrate == 0 {
+		maxBitrate = 12000
+	}
+	maxSessions := c.StreamMaxConcurrentSessions
+	if maxSessions == 0 {
+		maxSessions = 64
+	}
+	budget := c.StreamEgressBudgetKbps
+	if budget == 0 {
+		budget = 800000
+	}
+	if ttl <= 0 {
+		return errors.New(envStreamTURNCredentialTTL + configPositiveValidationSuffix)
+	}
+	if ttl > 12*time.Hour {
+		return errors.New(envStreamTURNCredentialTTL + " must be no more than 12h")
+	}
+	if maxBitrate <= 0 {
+		return errors.New(envStreamMaxBitrateKbps + configPositiveValidationSuffix)
+	}
+	if maxSessions <= 0 {
+		return errors.New(envStreamMaxConcurrentSessions + configPositiveValidationSuffix)
+	}
+	if budget <= 0 {
+		return errors.New(envStreamEgressBudgetKbps + configPositiveValidationSuffix)
+	}
+	if maxSessions*maxBitrate > budget {
+		return errors.New(envStreamMaxConcurrentSessions + " * " + envStreamMaxBitrateKbps + " must not exceed " + envStreamEgressBudgetKbps)
+	}
+	if c.Production && len(c.StreamTURNURIs) > 0 && strings.TrimSpace(c.StreamTURNSharedSecret) == "" {
+		return errors.New(envStreamTURNSharedSecret + " is required when " + envStreamTURNURIs + " is set in production")
 	}
 	return nil
 }
