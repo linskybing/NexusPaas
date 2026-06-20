@@ -142,7 +142,7 @@ func evaluateSubmitAdmission(ctx context.Context, reader admissionReader, req su
 		RequiredCPU:          req.RequiredCPU,
 		RequiredMemory:       req.RequiredMemory,
 		StreamingSession:     req.StreamingSession,
-		StreamMaxBitrateKbps: streamRequestBitrate(req),
+		StreamMaxBitrateKbps: req.StreamMaxBitrateKbps,
 	}
 	if strings.TrimSpace(req.ProjectID) == "" {
 		return review, deny(http.StatusBadRequest, "project id is required")
@@ -193,7 +193,7 @@ func evaluateSubmitAdmission(ctx context.Context, reader admissionReader, req su
 		return review, deny(http.StatusUnprocessableEntity, err.Error())
 	}
 	review.Usage = admissionUsageForJobs(ctx, reader, req.ProjectID, req.UserID, review.Usage)
-	review.Usage.StreamEgressBudgetKbps = streamEgressBudget(req)
+	review.Usage.StreamEgressBudgetKbps = req.StreamEgressBudgetKbps
 	if err := enforceAdmissionStreaming(req, review.Usage); err != nil {
 		return review, err
 	}
