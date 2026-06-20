@@ -20,6 +20,24 @@ func TestValidateServiceIsolationAllowsAllServices(t *testing.T) {
 	}
 }
 
+func TestValidateServiceIsolationAllowsCoHostedDeployableUnitDependencies(t *testing.T) {
+	app := NewApp(Config{ServiceName: "iam-unit"})
+	app.RegisterStoreDependencies("authorization-policy-service", testIdentityUsersResource)
+
+	if err := app.ValidateServiceIsolation(); err != nil {
+		t.Fatalf("iam-unit should allow co-hosted identity/authz dependency: %v", err)
+	}
+}
+
+func TestValidateServiceIsolationRequiresRemoteForCrossUnitDependency(t *testing.T) {
+	app := NewApp(Config{ServiceName: "compute-api"})
+	app.RegisterOwnerReadDependencies("workload-service", "org-project-service:projects")
+
+	if err := app.ValidateServiceIsolation(); err == nil {
+		t.Fatal("expected compute-api cross-unit owner read without SERVICE_URLS to fail")
+	}
+}
+
 func TestValidateServiceIsolationAllowsOwnedResources(t *testing.T) {
 	app := NewApp(Config{ServiceName: "widget-service"})
 	app.RegisterStoreDependencies("widget-service", testWidgetResource)

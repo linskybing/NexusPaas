@@ -48,12 +48,12 @@ func TestRunAdminTaskEnsureObjectStoreBucketGuards(t *testing.T) {
 		AuthorizationPolicyURL: testPolicyURL,
 	}
 	err := RunAdminTask("ensure-object-store-bucket", nonBlob)
-	if err == nil || !strings.Contains(err.Error(), "SERVICE_NAME=media-upload-service") {
+	if err == nil || !strings.Contains(err.Error(), "SERVICE_NAME=media-upload-service") || !strings.Contains(err.Error(), "SERVICE_NAME=collaboration-unit") {
 		t.Fatalf("ensure-object-store-bucket non-blob error = %v, want service guard", err)
 	}
 
 	missingURL := Config{
-		ServiceName:            mediaUploadServiceName,
+		ServiceName:            "collaboration-unit",
 		ObjectStoreAccessKey:   "access",
 		ObjectStoreSecretKey:   "secret",
 		ObjectStoreBucket:      "media",

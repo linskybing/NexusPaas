@@ -62,6 +62,40 @@ func TestConfigDevHeaderAuthRequiresExplicitOptIn(t *testing.T) {
 	}
 }
 
+func TestConfigAllowsDeployableUnitServiceAliases(t *testing.T) {
+	cases := []struct {
+		unit    string
+		allows  []string
+		denies  string
+		needsOS bool
+	}{
+		{unit: "platform-gateway", allows: []string{"platform-gateway"}, denies: "identity-service"},
+		{unit: "iam-unit", allows: []string{"identity-service", "authorization-policy-service"}, denies: "org-project-service"},
+		{unit: "tenant-unit", allows: []string{"org-project-service"}, denies: "workload-service"},
+		{unit: "collaboration-unit", allows: []string{"audit-compliance-service", "request-notification-service", "media-upload-service"}, denies: "storage-service", needsOS: true},
+		{unit: "platform-io-unit", allows: []string{"storage-service", "image-registry-service", "integration-proxy-service"}, denies: "workload-service"},
+		{unit: "usage-observability", allows: []string{"usage-observability-service"}, denies: "identity-service"},
+		{unit: "compute-api", allows: []string{"workload-service", "ide-service"}, denies: "scheduler-quota-service"},
+		{unit: "compute-control-plane", allows: []string{"scheduler-quota-service", "k8s-control-service"}, denies: "workload-service"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.unit, func(t *testing.T) {
+			cfg := Config{ServiceName: tc.unit}
+			for _, service := range tc.allows {
+				if !cfg.AllowsService(service) {
+					t.Fatalf("%s should allow %s", tc.unit, service)
+				}
+			}
+			if cfg.AllowsService(tc.denies) {
+				t.Fatalf("%s should not allow %s", tc.unit, tc.denies)
+			}
+			if cfg.RequiresObjectStore() != tc.needsOS {
+				t.Fatalf("%s RequiresObjectStore = %v, want %v", tc.unit, cfg.RequiresObjectStore(), tc.needsOS)
+			}
+		})
+	}
+}
+
 func TestConfigAllowedOriginsDeniedInProductionWhenUnset(t *testing.T) {
 	t.Setenv("PRODUCTION", "true")
 	t.Setenv("ALLOWED_ORIGINS", "")

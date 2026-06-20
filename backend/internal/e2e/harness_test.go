@@ -584,6 +584,26 @@ func (h *e2eHarness) doJSON(serviceName, method, path string, payload any, apiKe
 	return h.do(req, want)
 }
 
+func (h *e2eHarness) doInternalJSON(serviceName, method, path string, payload any, serviceKey string, want int) testResponse {
+	h.t.Helper()
+	var body io.Reader
+	if payload != nil {
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			h.t.Fatalf("marshal request: %v", err)
+		}
+		body = bytes.NewReader(raw)
+	}
+	req := h.newRequest(serviceName, method, path, body, "")
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if serviceKey != "" {
+		req.Header.Set("X-Service-Key", serviceKey)
+	}
+	return h.do(req, want)
+}
+
 func (h *e2eHarness) doURLJSON(baseURL, method, path string, payload any, apiKey string, want int) testResponse {
 	h.t.Helper()
 	var body io.Reader
@@ -603,6 +623,32 @@ func (h *e2eHarness) doURLJSON(baseURL, method, path string, payload any, apiKey
 	}
 	if apiKey != "" {
 		req.Header.Set("X-API-Key", apiKey)
+	}
+	req.Header.Set("X-Request-ID", "req-"+h.runID)
+	req.Header.Set("X-Trace-ID", "trace-"+h.runID)
+	req.Header.Set("Idempotency-Key", "idem-"+h.runID+"-"+sanitizeID(method+path))
+	return h.do(req, want)
+}
+
+func (h *e2eHarness) doURLInternalJSON(baseURL, method, path string, payload any, serviceKey string, want int) testResponse {
+	h.t.Helper()
+	var body io.Reader
+	if payload != nil {
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			h.t.Fatalf("marshal request: %v", err)
+		}
+		body = bytes.NewReader(raw)
+	}
+	req, err := http.NewRequestWithContext(h.ctx, method, baseURL+path, body)
+	if err != nil {
+		h.t.Fatalf("new request: %v", err)
+	}
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if serviceKey != "" {
+		req.Header.Set("X-Service-Key", serviceKey)
 	}
 	req.Header.Set("X-Request-ID", "req-"+h.runID)
 	req.Header.Set("X-Trace-ID", "trace-"+h.runID)

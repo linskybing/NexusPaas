@@ -24,9 +24,19 @@ type envelope struct {
 }
 
 func newTestApp() *platform.App {
-	app := platform.NewApp(platform.Config{ServiceName: "all", HTTPAddr: ":0", APIKeys: map[string]bool{"test-key": true}, ExternalURLs: map[string]string{}})
+	app := platform.NewApp(platform.Config{ServiceName: "all", HTTPAddr: ":0", APIKeys: map[string]bool{"test-key": true}, ServiceAPIKey: "svc-key", ExternalURLs: map[string]string{}})
 	RegisterAll(app)
 	return app
+}
+
+func TestCatalogRouteValidation(t *testing.T) {
+	app := newTestApp()
+	if err := app.ValidateRouteCollisions(); err != nil {
+		t.Fatalf("ValidateRouteCollisions = %v", err)
+	}
+	if err := app.ValidateInternalRouteAuth(); err != nil {
+		t.Fatalf("ValidateInternalRouteAuth = %v", err)
+	}
 }
 
 func TestServiceCatalogCoversAllServices(t *testing.T) {
@@ -55,6 +65,33 @@ func TestServiceCatalogCoversAllServices(t *testing.T) {
 		if _, ok := app.Services[name]; !ok {
 			t.Fatalf("missing service %s", name)
 		}
+	}
+}
+
+func TestDeployableUnitCatalogRegistration(t *testing.T) {
+	cases := map[string][]string{
+		"platform-gateway":      {"platform-gateway"},
+		"iam-unit":              {"identity-service", "authorization-policy-service"},
+		"tenant-unit":           {"org-project-service"},
+		"collaboration-unit":    {"audit-compliance-service", "request-notification-service", "media-upload-service"},
+		"platform-io-unit":      {"storage-service", "image-registry-service", "integration-proxy-service"},
+		"usage-observability":   {"usage-observability-service"},
+		"compute-api":           {"workload-service", "ide-service"},
+		"compute-control-plane": {"scheduler-quota-service", "k8s-control-service"},
+	}
+	for unit, want := range cases {
+		t.Run(unit, func(t *testing.T) {
+			app := platform.NewApp(platform.Config{ServiceName: unit, HTTPAddr: ":0", ServiceAPIKey: "svc-key", ExternalURLs: map[string]string{}})
+			RegisterAll(app)
+			if len(app.Services) != len(want) {
+				t.Fatalf("%s service count = %d, want %d: %#v", unit, len(app.Services), len(want), app.Services)
+			}
+			for _, service := range want {
+				if _, ok := app.Services[service]; !ok {
+					t.Fatalf("%s missing logical service %s", unit, service)
+				}
+			}
+		})
 	}
 }
 
@@ -746,7 +783,11 @@ func TestPlatformHandlersRejectMalformedJSONWithoutWrites(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			before := len(app.Store.List(context.Background(), tc.resource))
-			requestJSON(t, app, tc.method, tc.path, `{`, userHeaders("test-user"), http.StatusBadRequest)
+			headers := userHeaders("test-user")
+			if strings.Contains(tc.path, "/internal/") {
+				headers = serviceHeaders("test-user")
+			}
+			requestJSON(t, app, tc.method, tc.path, `{`, headers, http.StatusBadRequest)
 			after := len(app.Store.List(context.Background(), tc.resource))
 			if after != before {
 				t.Fatalf("%s count = %d, want unchanged %d", tc.resource, after, before)
@@ -754,8 +795,8 @@ func TestPlatformHandlersRejectMalformedJSONWithoutWrites(t *testing.T) {
 		})
 	}
 
-	requestJSON(t, app, http.MethodPost, "/api/v1/internal/workers/leases", `{`, userHeaders("test-user"), http.StatusBadRequest)
-	lease := responseMap(t, requestJSON(t, app, http.MethodPost, "/api/v1/internal/workers/leases", "", userHeaders("test-user"), http.StatusOK))
+	requestJSON(t, app, http.MethodPost, "/api/v1/internal/workers/leases", `{`, serviceHeaders("test-user"), http.StatusBadRequest)
+	lease := responseMap(t, requestJSON(t, app, http.MethodPost, "/api/v1/internal/workers/leases", "", serviceHeaders("test-user"), http.StatusOK))
 	if lease["worker"] != "worker" || lease["shard"] != "default" || lease["acquired"] != true {
 		t.Fatalf("empty-body worker lease = %#v, want default acquired lease", lease)
 	}
@@ -816,11 +857,20 @@ func postJSON(t *testing.T, app *platform.App, path, body string, want int) *htt
 	req.Header.Set("Idempotency-Key", "test-"+path)
 	req.Header.Set("X-User-ID", "test-user")
 	req.Header.Set("X-Username", "test-user")
+	if strings.Contains(path, "/internal/") {
+		req.Header.Set("X-Service-Key", "svc-key")
+	}
 	app.ServeHTTP(rec, req)
 	if rec.Code != want {
 		t.Fatalf("POST %s returned %d, want %d: %s", path, rec.Code, want, rec.Body.String())
 	}
 	return rec
+}
+
+func serviceHeaders(userID string) map[string]string {
+	headers := userHeaders(userID)
+	headers["X-Service-Key"] = "svc-key"
+	return headers
 }
 
 func decodeData(t *testing.T, rec *httptest.ResponseRecorder, out *map[string]any) {

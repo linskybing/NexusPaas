@@ -18,26 +18,27 @@ The gate must pass these phases:
    `go build ./...`.
 2. production-beta manifest rehearsal:
    - `kubectl kustomize backend`
-   - 15 NexusPaas service deployments present
+   - 8 NexusPaas backend unit deployments present
    - all-in-one `platform` deployment absent
    - no `-dev-` secret references
    - `kubectl apply --dry-run=client --validate=false`
-   - rollback command plan for every service deployment
+   - rollback command plan for every backend unit deployment
    - re-deploy client dry-run
+   - 8 deployable-unit evidence report grouping the 15 logical deployments
 3. Docker-backed migrations, integration coverage, focused E2E, and full
    non-live E2E.
 4. non-live runtime smoke (routing/process smoke):
    - `SERVICE_NAME=all` starts on `TEST_RUNTIME_PORT` (default `18080`)
    - `/healthz`, `/readyz`, `/metrics`, `/openapi.json`, and
      `/service-registry` return 200
-   - `/service-registry` lists all 15 services
+   - `/service-registry` lists all 15 logical services
    - one read-only endpoint per service returns 2xx or expected 4xx; no service
      returns 5xx
    - this proves route registration and process health only; it is not
-     accepted as 15-service collaboration evidence
-5. 15-service collaboration smoke:
-   - starts Postgres, Redis, MinIO, and 15 independent backend service
-     containers from the same backend image
+     accepted as 8-unit collaboration evidence
+5. 8-unit collaboration smoke:
+   - starts Postgres, Redis, MinIO, and 8 backend unit containers from the same
+     backend image
    - uses production-like `SERVICE_NAME`, `SERVICE_URLS`, `SERVICE_API_KEY`,
      static API-key principals, `REQUIRE_AUTH=true`, and
      `DEV_HEADER_AUTH=false`
@@ -51,6 +52,9 @@ The gate must pass these phases:
 6. govulncheck, OSV source scan, backend image build, and Trivy image scan.
 7. SonarScanner Quality Gate when configured or required.
 8. generated RC evidence report at `${ARTIFACT_DIR}/beta-rc-report.md`.
+   The report links `${ARTIFACT_DIR}/production-beta-deployable-units.md`,
+   which maps the 8 physical backend units to the 15 logical services they
+   host.
 
 The default artifact directory is under `/tmp/nexuspaas-quality-gate/<run-id>`.
 Override it with `CI_GATE_ARTIFACT_DIR` when a CI job needs to upload artifacts.
@@ -68,13 +72,13 @@ The live rehearsal must prove:
 - Required Kubernetes Secrets or ExternalSecret-managed values exist before
   workloads start.
 - Database migrations apply and validate against the staging database.
-- All 15 services become ready.
-- `/healthz`, `/readyz`, and `/metrics` pass for every service.
+- All 8 backend units become ready.
+- `/healthz`, `/readyz`, and `/metrics` pass for every backend unit.
 - Gateway `/openapi.json` and `/service-registry` return 200.
-- The service registry lists all 15 services.
+- The service registry lists all 15 logical services.
 - One read-only smoke endpoint per service returns 2xx or an expected 4xx; no
   service returns 5xx.
-- Critical 15-service collaboration journeys pass, including service-to-service
+- Critical 8-unit collaboration journeys pass, including service-to-service
   auth failure cases and unavailable dependency fail-closed checks.
 - Rollback command rehearsal is executed against staging workloads.
 - Re-deploy returns the environment to the candidate version and repeats smoke.
@@ -96,23 +100,23 @@ explicitly accepted:
 - focused E2E skip/failure,
 - integration coverage below 80%,
 - missing production secrets or default/dev credentials in the deployment path,
-- service registry missing any of the 15 services,
+- service registry missing any of the 15 logical services,
 - any smoke endpoint returning 5xx,
 - unresolved data-boundary regression that reintroduces cross-service writes or
   unvalidated shared-store reads.
 
 ## Rollback Standard
 
-Rollback defaults to service image/config rollback, not database restore:
+Rollback defaults to backend unit image/config rollback, not database restore:
 
 ```sh
-kubectl -n nexuspaas rollout undo deployment/<service>
+kubectl -n nexuspaas rollout undo deployment/<unit>
 ```
 
 For schema changes, use expand, dual-read/write, backfill, cutover, contract.
-The staging rehearsal must capture which service was rolled back, why rollback
-was safe, whether any queues/events required replay, and how re-deploy was
-validated.
+The staging rehearsal must capture which backend unit was rolled back, why
+rollback was safe, whether any queues/events required replay, and how re-deploy
+was validated.
 
 ## Beta RC Status
 

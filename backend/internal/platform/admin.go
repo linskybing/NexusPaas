@@ -35,7 +35,7 @@ func RunAdminTask(task string, cfg Config) error {
 
 func runEnsureObjectStoreBucketTask(ctx context.Context, cfg Config) error {
 	if !cfg.RequiresObjectStore() {
-		return fmt.Errorf("ADMIN_TASK=ensure-object-store-bucket requires SERVICE_NAME=%s or SERVICE_NAME=all", mediaUploadServiceName)
+		return fmt.Errorf("ADMIN_TASK=ensure-object-store-bucket requires SERVICE_NAME=%s, SERVICE_NAME=collaboration-unit, or SERVICE_NAME=all", mediaUploadServiceName)
 	}
 	if missing := missingObjectStoreConfig(cfg); len(missing) > 0 {
 		return errors.New(strings.Join(missing, ", ") + " must be set for ADMIN_TASK=ensure-object-store-bucket")

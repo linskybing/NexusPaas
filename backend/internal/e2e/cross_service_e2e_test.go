@@ -803,7 +803,7 @@ func TestSchedulerAdmissionOwnerReadContractsE2E(t *testing.T) {
 	badUserID := "badowneruser" + h.runID
 	projectID, queueName := h.seedSchedulerOwnerReadAdmissionData(userID, badUserID)
 
-	resp := h.doJSON(schedulerQuotaService, http.MethodPost, "/api/v1/internal/scheduler/admission", map[string]any{
+	resp := h.doInternalJSON(schedulerQuotaService, http.MethodPost, "/api/v1/internal/scheduler/admission", map[string]any{
 		"job_id":          "ownerjobsubmit" + h.runID,
 		"project_id":      projectID,
 		"user_id":         userID,
@@ -843,7 +843,7 @@ func TestSchedulerAdmissionOwnerReadContractsE2E(t *testing.T) {
 	}, func(cfg *platform.Config) {
 		cfg.ServiceAPIKey = "wrong-" + h.serviceKey
 	})
-	badResp := h.doURLJSON(badScheduler.url, http.MethodPost, "/api/v1/internal/scheduler/admission", map[string]any{
+	badResp := h.doURLInternalJSON(badScheduler.url, http.MethodPost, "/api/v1/internal/scheduler/admission", map[string]any{
 		"job_id":          "ownerbadjob" + h.runID,
 		"project_id":      projectID,
 		"user_id":         badUserID,
@@ -851,7 +851,7 @@ func TestSchedulerAdmissionOwnerReadContractsE2E(t *testing.T) {
 		"required_cpu":    1,
 		"required_memory": 1024,
 		"e2e_run_id":      h.runID,
-	}, h.serviceKey, http.StatusNotFound)
+	}, "wrong-"+h.serviceKey, http.StatusNotFound)
 	h.requireEnvelopeCorrelation(badResp)
 	badData := badResp.dataMap(t)
 	if badData["allowed"] != false || !strings.Contains(badData["reason"].(string), "project not found") {
@@ -1154,7 +1154,7 @@ func (h *e2eHarness) assertRemoteIdentityAuth(ids identityIDs) {
 
 func (h *e2eHarness) assertOrgProjectGroupAdmissionSnapshot() {
 	groupUserID := h.groupOnlyUserID()
-	resp := h.doJSON(schedulerQuotaService, http.MethodPost, "/api/v1/internal/scheduler/admission", map[string]any{
+	resp := h.doInternalJSON(schedulerQuotaService, http.MethodPost, "/api/v1/internal/scheduler/admission", map[string]any{
 		"job_id":          "groupjob" + h.runID,
 		"project_id":      h.projectID(),
 		"user_id":         groupUserID,
@@ -1217,12 +1217,12 @@ func (h *e2eHarness) submitJob(ids identityIDs, baseURL string, want int) testRe
 
 func (h *e2eHarness) assertQuotaReservationEvents() {
 	reservationID := "reservation" + h.runID
-	reserve := h.doJSON(schedulerQuotaService, http.MethodPost, "/api/v1/internal/quota/reservations", map[string]any{
+	reserve := h.doInternalJSON(schedulerQuotaService, http.MethodPost, "/api/v1/internal/quota/reservations", map[string]any{
 		"id":         reservationID,
 		"project_id": h.projectID(),
 		"gpu":        1,
 		"e2e_run_id": h.runID,
-	}, h.apiKey, http.StatusCreated)
+	}, h.serviceKey, http.StatusCreated)
 	h.requireEnvelopeCorrelation(reserve)
 	record := reserve.dataMap(h.t)
 	id := record["id"].(string)
@@ -1235,31 +1235,31 @@ func (h *e2eHarness) assertQuotaReservationEvents() {
 	}
 	h.updateRecord(schedulerReservations, id, map[string]any{})
 	beforeDuplicateReserve := len(h.listRecords(schedulerReservations))
-	h.doJSON(schedulerQuotaService, http.MethodPost, "/api/v1/internal/quota/reservations", map[string]any{
+	h.doInternalJSON(schedulerQuotaService, http.MethodPost, "/api/v1/internal/quota/reservations", map[string]any{
 		"id":         reservationID,
 		"project_id": h.projectID(),
 		"gpu":        1,
 		"e2e_run_id": h.runID,
-	}, h.apiKey, http.StatusConflict)
+	}, h.serviceKey, http.StatusConflict)
 	if after := len(h.listRecords(schedulerReservations)); after != beforeDuplicateReserve {
 		h.t.Fatalf("reservation count after duplicate reserve = %d, want %d", after, beforeDuplicateReserve)
 	}
 
-	h.doJSON(schedulerQuotaService, http.MethodPost, "/api/v1/internal/quota/reservations/"+id+"/commit", map[string]any{}, h.apiKey, http.StatusOK)
+	h.doInternalJSON(schedulerQuotaService, http.MethodPost, "/api/v1/internal/quota/reservations/"+id+"/commit", map[string]any{}, h.serviceKey, http.StatusOK)
 	commitEvents := h.countEvents("QuotaCommitted", func(event contracts.Event) bool {
 		return event.Source == schedulerQuotaService && event.Data["reservation_id"] == id
 	})
-	h.doJSON(schedulerQuotaService, http.MethodPost, "/api/v1/internal/quota/reservations/"+id+"/commit", map[string]any{}, h.apiKey, http.StatusOK)
+	h.doInternalJSON(schedulerQuotaService, http.MethodPost, "/api/v1/internal/quota/reservations/"+id+"/commit", map[string]any{}, h.serviceKey, http.StatusOK)
 	if replayEvents := h.countEvents("QuotaCommitted", func(event contracts.Event) bool {
 		return event.Source == schedulerQuotaService && event.Data["reservation_id"] == id
 	}); replayEvents != commitEvents {
 		h.t.Fatalf("QuotaCommitted events after replay = %d, want %d", replayEvents, commitEvents)
 	}
-	h.doJSON(schedulerQuotaService, http.MethodPost, "/api/v1/internal/quota/reservations/"+id+"/release", map[string]any{}, h.apiKey, http.StatusOK)
+	h.doInternalJSON(schedulerQuotaService, http.MethodPost, "/api/v1/internal/quota/reservations/"+id+"/release", map[string]any{}, h.serviceKey, http.StatusOK)
 	releaseEvents := h.countEvents("QuotaReleased", func(event contracts.Event) bool {
 		return event.Source == schedulerQuotaService && event.Data["reservation_id"] == id
 	})
-	h.doJSON(schedulerQuotaService, http.MethodPost, "/api/v1/internal/quota/reservations/"+id+"/release", map[string]any{}, h.apiKey, http.StatusOK)
+	h.doInternalJSON(schedulerQuotaService, http.MethodPost, "/api/v1/internal/quota/reservations/"+id+"/release", map[string]any{}, h.serviceKey, http.StatusOK)
 	if replayEvents := h.countEvents("QuotaReleased", func(event contracts.Event) bool {
 		return event.Source == schedulerQuotaService && event.Data["reservation_id"] == id
 	}); replayEvents != releaseEvents {
@@ -1350,7 +1350,7 @@ func (h *e2eHarness) assertSchedulerUnavailableDoesNotPersist(ids identityIDs) {
 	}
 	beforeBadKeyJobs := len(h.listRecords(workloadJobsResource))
 	beforeBadKeyAdmissions := len(h.listRecords(schedulerAdmissionsResource))
-	h.doJSON(schedulerQuotaService, http.MethodPost, "/api/v1/internal/scheduler/admission", map[string]any{}, "wrong-"+h.serviceKey, http.StatusUnauthorized)
+	h.doInternalJSON(schedulerQuotaService, http.MethodPost, "/api/v1/internal/scheduler/admission", map[string]any{}, "wrong-"+h.serviceKey, http.StatusUnauthorized)
 	if afterJobs := len(h.listRecords(workloadJobsResource)); afterJobs != beforeBadKeyJobs {
 		h.t.Fatalf("workload jobs after bad scheduler key = %d, want unchanged %d", afterJobs, beforeBadKeyJobs)
 	}

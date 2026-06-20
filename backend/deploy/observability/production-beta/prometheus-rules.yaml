@@ -15,21 +15,14 @@ spec:
       - key: app
         operator: In
         values:
-          - audit-compliance-service
-          - authorization-policy-service
-          - ide-service
-          - identity-service
-          - image-registry-service
-          - integration-proxy-service
-          - k8s-control-service
-          - media-upload-service
-          - org-project-service
           - platform-gateway
-          - request-notification-service
-          - scheduler-quota-service
-          - storage-service
-          - usage-observability-service
-          - workload-service
+          - iam-unit
+          - tenant-unit
+          - collaboration-unit
+          - platform-io-unit
+          - usage-observability
+          - compute-api
+          - compute-control-plane
   podMetricsEndpoints:
     - path: /metrics
       portNumber: 8080
@@ -58,7 +51,7 @@ spec:
     - name: nexuspaas.production-beta.availability
       rules:
         - alert: NexusPaasServiceUnscraped
-          expr: max by (service) (up{namespace="nexuspaas",service=~"audit-compliance-service|authorization-policy-service|ide-service|identity-service|image-registry-service|integration-proxy-service|k8s-control-service|media-upload-service|org-project-service|platform-gateway|request-notification-service|scheduler-quota-service|storage-service|usage-observability-service|workload-service"}) < 1
+          expr: max by (service) (up{namespace="nexuspaas",service=~"platform-gateway|iam-unit|tenant-unit|collaboration-unit|platform-io-unit|usage-observability|compute-api|compute-control-plane"}) < 1
           for: 5m
           labels:
             severity: page
@@ -66,7 +59,7 @@ spec:
             summary: NexusPaas service metrics are not being scraped
             runbook_url: backend/docs/operational-readiness.md
         - alert: NexusPaasDeploymentUnavailable
-          expr: kube_deployment_status_replicas_available{namespace="nexuspaas",deployment=~"audit-compliance-service|authorization-policy-service|ide-service|identity-service|image-registry-service|integration-proxy-service|k8s-control-service|media-upload-service|org-project-service|platform-gateway|request-notification-service|scheduler-quota-service|storage-service|usage-observability-service|workload-service"} < 1
+          expr: kube_deployment_status_replicas_available{namespace="nexuspaas",deployment=~"platform-gateway|iam-unit|tenant-unit|collaboration-unit|platform-io-unit|usage-observability|compute-api|compute-control-plane"} < 1
           for: 5m
           labels:
             severity: page
@@ -74,7 +67,7 @@ spec:
             summary: NexusPaas deployment has no available replicas
             runbook_url: backend/docs/operational-readiness.md
         - alert: NexusPaasCoreAvailabilityBurn
-          expr: (100 * sum(rate(nexuspaas_http_requests_total{service=~"platform-gateway|identity-service|authorization-policy-service|org-project-service|workload-service|scheduler-quota-service|k8s-control-service",status!~"5.."}[5m])) / clamp_min(sum(rate(nexuspaas_http_requests_total{service=~"platform-gateway|identity-service|authorization-policy-service|org-project-service|workload-service|scheduler-quota-service|k8s-control-service"}[5m])), 1) < 99.5) and sum(rate(nexuspaas_http_requests_total{service=~"platform-gateway|identity-service|authorization-policy-service|org-project-service|workload-service|scheduler-quota-service|k8s-control-service"}[5m])) > 0
+          expr: (100 * sum(rate(nexuspaas_http_requests_total{service=~"platform-gateway|iam-unit|tenant-unit|compute-api|compute-control-plane",status!~"5.."}[5m])) / clamp_min(sum(rate(nexuspaas_http_requests_total{service=~"platform-gateway|iam-unit|tenant-unit|compute-api|compute-control-plane"}[5m])), 1) < 99.5) and sum(rate(nexuspaas_http_requests_total{service=~"platform-gateway|iam-unit|tenant-unit|compute-api|compute-control-plane"}[5m])) > 0
           for: 10m
           labels:
             severity: page
@@ -84,7 +77,7 @@ spec:
     - name: nexuspaas.production-beta.latency
       rules:
         - alert: NexusPaasHighReadP95Latency
-          expr: histogram_quantile(0.95, sum by (service, le) (rate(nexuspaas_http_request_duration_seconds_bucket{service=~"audit-compliance-service|authorization-policy-service|ide-service|identity-service|image-registry-service|integration-proxy-service|k8s-control-service|media-upload-service|org-project-service|platform-gateway|request-notification-service|scheduler-quota-service|storage-service|usage-observability-service|workload-service",method="GET"}[5m]))) > 0.5
+          expr: histogram_quantile(0.95, sum by (service, le) (rate(nexuspaas_http_request_duration_seconds_bucket{service=~"platform-gateway|iam-unit|tenant-unit|collaboration-unit|platform-io-unit|usage-observability|compute-api|compute-control-plane",method="GET"}[5m]))) > 0.5
           for: 10m
           labels:
             severity: ticket
@@ -92,7 +85,7 @@ spec:
             summary: NexusPaas p95 read latency is above the Beta read target
             runbook_url: backend/docs/operational-readiness.md
         - alert: NexusPaasHighWriteP95Latency
-          expr: histogram_quantile(0.95, sum by (service, le) (rate(nexuspaas_http_request_duration_seconds_bucket{service=~"audit-compliance-service|authorization-policy-service|ide-service|identity-service|image-registry-service|integration-proxy-service|k8s-control-service|media-upload-service|org-project-service|platform-gateway|request-notification-service|scheduler-quota-service|storage-service|usage-observability-service|workload-service",method=~"POST|PUT|PATCH|DELETE"}[5m]))) > 1
+          expr: histogram_quantile(0.95, sum by (service, le) (rate(nexuspaas_http_request_duration_seconds_bucket{service=~"platform-gateway|iam-unit|tenant-unit|collaboration-unit|platform-io-unit|usage-observability|compute-api|compute-control-plane",method=~"POST|PUT|PATCH|DELETE"}[5m]))) > 1
           for: 10m
           labels:
             severity: ticket
@@ -102,7 +95,7 @@ spec:
     - name: nexuspaas.production-beta.errors
       rules:
         - alert: NexusPaasService5xx
-          expr: sum by (service) (rate(nexuspaas_http_requests_total{service=~"audit-compliance-service|authorization-policy-service|ide-service|identity-service|image-registry-service|integration-proxy-service|k8s-control-service|media-upload-service|org-project-service|platform-gateway|request-notification-service|scheduler-quota-service|storage-service|usage-observability-service|workload-service",status=~"5.."}[5m])) > 0
+          expr: sum by (service) (rate(nexuspaas_http_requests_total{service=~"platform-gateway|iam-unit|tenant-unit|collaboration-unit|platform-io-unit|usage-observability|compute-api|compute-control-plane",status=~"5.."}[5m])) > 0
           for: 5m
           labels:
             severity: page

@@ -21,7 +21,7 @@ data:
             "name": "service",
             "type": "custom",
             "label": "Service",
-            "query": "audit-compliance-service,authorization-policy-service,ide-service,identity-service,image-registry-service,integration-proxy-service,k8s-control-service,media-upload-service,org-project-service,platform-gateway,request-notification-service,scheduler-quota-service,storage-service,usage-observability-service,workload-service",
+            "query": "platform-gateway,iam-unit,tenant-unit,collaboration-unit,platform-io-unit,usage-observability,compute-api,compute-control-plane",
             "current": {"text": "platform-gateway", "value": "platform-gateway"}
           }
         ]
@@ -34,7 +34,7 @@ data:
           "description": "Beta target >= 99.5% successful requests for core journeys.",
           "targets": [
             {
-              "expr": "100 * sum(rate(nexuspaas_http_requests_total{service=~\"platform-gateway|identity-service|authorization-policy-service|org-project-service|workload-service|scheduler-quota-service|k8s-control-service\",status!~\"5..\"}[5m])) / clamp_min(sum(rate(nexuspaas_http_requests_total{service=~\"platform-gateway|identity-service|authorization-policy-service|org-project-service|workload-service|scheduler-quota-service|k8s-control-service\"}[5m])), 1)"
+              "expr": "100 * sum(rate(nexuspaas_http_requests_total{service=~\"platform-gateway|iam-unit|tenant-unit|compute-api|compute-control-plane\",status!~\"5..\"}[5m])) / clamp_min(sum(rate(nexuspaas_http_requests_total{service=~\"platform-gateway|iam-unit|tenant-unit|compute-api|compute-control-plane\"}[5m])), 1)"
             }
           ]
         },
@@ -75,7 +75,7 @@ data:
           "title": "Deployment availability",
           "targets": [
             {
-              "expr": "kube_deployment_status_replicas_available{namespace=\"nexuspaas\",deployment=~\"audit-compliance-service|authorization-policy-service|ide-service|identity-service|image-registry-service|integration-proxy-service|k8s-control-service|media-upload-service|org-project-service|platform-gateway|request-notification-service|scheduler-quota-service|storage-service|usage-observability-service|workload-service\"}"
+              "expr": "kube_deployment_status_replicas_available{namespace=\"nexuspaas\",deployment=~\"platform-gateway|iam-unit|tenant-unit|collaboration-unit|platform-io-unit|usage-observability|compute-api|compute-control-plane\"}"
             }
           ]
         },

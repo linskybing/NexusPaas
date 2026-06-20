@@ -54,21 +54,14 @@ data:
     }
 
     for service in \
-      audit-compliance-service \
-      authorization-policy-service \
-      ide-service \
-      identity-service \
-      image-registry-service \
-      integration-proxy-service \
-      k8s-control-service \
-      media-upload-service \
-      org-project-service \
       platform-gateway \
-      request-notification-service \
-      scheduler-quota-service \
-      storage-service \
-      usage-observability-service \
-      workload-service
+      iam-unit \
+      tenant-unit \
+      collaboration-unit \
+      platform-io-unit \
+      usage-observability \
+      compute-api \
+      compute-control-plane
     do
       require_200 "${service}" /healthz
       require_200 "${service}" /readyz
@@ -78,21 +71,21 @@ data:
     require_200 platform-gateway /openapi.json
     require_200 platform-gateway /service-registry
 
-    require_no_5xx audit-compliance-service /api/v1/audit/logs
-    require_no_5xx authorization-policy-service /api/v1/permissions/policies
-    require_no_5xx ide-service /api/v1/ide
-    require_no_5xx identity-service /api/v1/users
-    require_no_5xx image-registry-service /api/v1/image-catalog
-    require_no_5xx integration-proxy-service /api/v1/admin/vpn
-    require_no_5xx k8s-control-service /api/v1/resources
-    require_no_5xx media-upload-service /api/v1/uploads/images/nonexistent-smoke.png
-    require_no_5xx org-project-service /api/v1/projects
+    require_no_5xx collaboration-unit /api/v1/audit/logs
+    require_no_5xx iam-unit /api/v1/permissions/policies
+    require_no_5xx compute-api /api/v1/ide
+    require_no_5xx iam-unit /api/v1/users
+    require_no_5xx platform-io-unit /api/v1/image-catalog
+    require_no_5xx platform-io-unit /api/v1/admin/vpn
+    require_no_5xx compute-control-plane /api/v1/resources
+    require_no_5xx collaboration-unit /api/v1/uploads/images/nonexistent-smoke.png
+    require_no_5xx tenant-unit /api/v1/projects
     require_no_5xx platform-gateway /api/v1/gateway/health
-    require_no_5xx request-notification-service /api/v1/forms
-    require_no_5xx scheduler-quota-service /api/v1/plans
-    require_no_5xx storage-service /api/v1/storage/options
-    require_no_5xx usage-observability-service /api/v1/admin/usage
-    require_no_5xx workload-service /api/v1/jobs
+    require_no_5xx collaboration-unit /api/v1/forms
+    require_no_5xx compute-control-plane /api/v1/plans
+    require_no_5xx platform-io-unit /api/v1/storage/options
+    require_no_5xx usage-observability /api/v1/admin/usage
+    require_no_5xx compute-api /api/v1/jobs
 
     if [ "${failures}" -ne 0 ]; then
       printf 'synthetic smoke failed checks=%s\n' "${failures}" >&2
