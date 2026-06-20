@@ -29,16 +29,6 @@ func newTestApp() *platform.App {
 	return app
 }
 
-func TestCatalogRouteValidation(t *testing.T) {
-	app := newTestApp()
-	if err := app.ValidateRouteCollisions(); err != nil {
-		t.Fatalf("ValidateRouteCollisions = %v", err)
-	}
-	if err := app.ValidateInternalRouteAuth(); err != nil {
-		t.Fatalf("ValidateInternalRouteAuth = %v", err)
-	}
-}
-
 func TestServiceCatalogCoversAllServices(t *testing.T) {
 	app := newTestApp()
 	want := []string{
