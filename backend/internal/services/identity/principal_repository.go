@@ -112,6 +112,19 @@ func (r recordStoreIdentityPrincipalRepository) CreateUser(ctx context.Context, 
 	return cloneIdentityRecord(record), nil
 }
 
+// CreateUserWithEvent persists the user and its event in one transaction, keeping
+// the users resource key owned by this repository (identity source guard).
+func (r recordStoreIdentityPrincipalRepository) CreateUserWithEvent(ctx context.Context, app *platform.App, user map[string]any, build func(contracts.Record[map[string]any]) contracts.Event) (contracts.Record[map[string]any], error) {
+	if r.store == nil {
+		return contracts.Record[map[string]any]{}, errIdentityPrincipalStoreUnavailable
+	}
+	record, err := app.CreateRecordWithEvent(ctx, usersResource, shared.CloneMap(user), build)
+	if err != nil {
+		return contracts.Record[map[string]any]{}, err
+	}
+	return cloneIdentityRecord(record), nil
+}
+
 func (r recordStoreIdentityPrincipalRepository) UpdateUser(ctx context.Context, id string, update map[string]any) (contracts.Record[map[string]any], bool) {
 	if r.store == nil || strings.TrimSpace(id) == "" {
 		return contracts.Record[map[string]any]{}, false
@@ -123,11 +136,29 @@ func (r recordStoreIdentityPrincipalRepository) UpdateUser(ctx context.Context, 
 	return cloneIdentityRecord(record), true
 }
 
+func (r recordStoreIdentityPrincipalRepository) UpdateUserTx(ctx context.Context, tx platform.StoreTx, id string, update map[string]any) (contracts.Record[map[string]any], bool, error) {
+	if r.store == nil || strings.TrimSpace(id) == "" {
+		return contracts.Record[map[string]any]{}, false, nil
+	}
+	record, ok, err := tx.Update(ctx, usersResource, id, shared.CloneMap(update))
+	if err != nil || !ok {
+		return contracts.Record[map[string]any]{}, ok, err
+	}
+	return cloneIdentityRecord(record), true, nil
+}
+
 func (r recordStoreIdentityPrincipalRepository) DeleteUser(ctx context.Context, id string) bool {
 	if r.store == nil || strings.TrimSpace(id) == "" {
 		return false
 	}
 	return r.store.Delete(ctx, usersResource, id)
+}
+
+func (r recordStoreIdentityPrincipalRepository) DeleteUserTx(ctx context.Context, tx platform.StoreTx, id string) (bool, error) {
+	if r.store == nil || strings.TrimSpace(id) == "" {
+		return false, nil
+	}
+	return tx.Delete(ctx, usersResource, id)
 }
 
 func (r recordStoreIdentityPrincipalRepository) SetUserStatus(ctx context.Context, id, status string) bool {

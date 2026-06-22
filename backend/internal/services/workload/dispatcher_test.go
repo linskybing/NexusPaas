@@ -94,6 +94,21 @@ func TestDispatchSubmittedWorkloadCreatesNativeJobAndMarksRunning(t *testing.T) 
 	}
 }
 
+func TestDispatchResourcesRejectsRawSecret(t *testing.T) {
+	rawSecret := `{"apiVersion":"v1","kind":"Secret","metadata":{"name":"db-creds"},"stringData":{"password":"super-secret"}}`
+
+	resources, err := dispatchResources(map[string]any{
+		"resources": []any{map[string]any{"name": "db-creds", "manifest": rawSecret}},
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "raw Kubernetes Secret resources are rejected") {
+		t.Fatalf("dispatchResources err = %v resources=%#v, want raw Secret rejection", err, resources)
+	}
+	if strings.Contains(err.Error(), "super-secret") {
+		t.Fatalf("raw Secret rejection leaked plaintext: %v", err)
+	}
+}
+
 func TestDispatchSubmittedWorkloadLabelsDeploymentRuntimeLimit(t *testing.T) {
 	now := time.Date(2026, 6, 14, 16, 31, 0, 0, time.UTC)
 	cl := cluster.New(fake.NewSimpleClientset(), "proj")

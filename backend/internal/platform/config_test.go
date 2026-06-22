@@ -2,6 +2,7 @@ package platform
 
 import (
 	"net"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -106,6 +107,63 @@ func TestConfigAllowedOriginsDeniedInProductionWhenUnset(t *testing.T) {
 	}
 }
 
+func TestConfigEnvironmentProfileDefaultsAndParsing(t *testing.T) {
+	cfg := ConfigFromEnv()
+	if cfg.EnvironmentProfile != "" {
+		t.Fatalf("EnvironmentProfile default = %q, want empty compatibility profile", cfg.EnvironmentProfile)
+	}
+	if got := cfg.EnvironmentName(); got != runtimeProfileDev {
+		t.Fatalf("EnvironmentName default = %q, want dev", got)
+	}
+	if cfg.Production || cfg.StrictRuntimeChecks() {
+		t.Fatalf("default profile production=%v strict=%v, want false/false", cfg.Production, cfg.StrictRuntimeChecks())
+	}
+
+	t.Setenv(envAppEnv, runtimeProfileStaging)
+	cfg = ConfigFromEnv()
+	if cfg.EnvironmentProfile != runtimeProfileStaging || cfg.EnvironmentName() != runtimeProfileStaging {
+		t.Fatalf("staging profile = %q env=%q", cfg.EnvironmentProfile, cfg.EnvironmentName())
+	}
+	if cfg.Production {
+		t.Fatal("APP_ENV=staging should not set Production")
+	}
+	if !cfg.StrictRuntimeChecks() {
+		t.Fatal("APP_ENV=staging should use strict startup checks")
+	}
+
+	t.Setenv(envAppEnv, runtimeProfileProduction)
+	t.Setenv(envProduction, "")
+	cfg = ConfigFromEnv()
+	if !cfg.Production || cfg.EnvironmentName() != runtimeProfileProduction {
+		t.Fatalf("APP_ENV=production production=%v env=%q, want true/production", cfg.Production, cfg.EnvironmentName())
+	}
+}
+
+func TestConfigEnvironmentProfileRejectsInvalidAndConflictingSettings(t *testing.T) {
+	cases := []struct {
+		name       string
+		appEnv     string
+		production string
+	}{
+		{name: "invalid profile", appEnv: "qa"},
+		{name: "production flag conflicts with dev profile", appEnv: runtimeProfileDev, production: "true"},
+		{name: "false production flag conflicts with production profile", appEnv: runtimeProfileProduction, production: "false"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(envAppEnv, tc.appEnv)
+			if tc.production != "" {
+				t.Setenv(envProduction, tc.production)
+			}
+			cfg := ConfigFromEnv()
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), envAppEnv) {
+				t.Fatalf("Validate() error = %v, want containing %s", err, envAppEnv)
+			}
+		})
+	}
+}
+
 func TestConfigAllowedOriginsParsing(t *testing.T) {
 	t.Setenv("PRODUCTION", "true")
 	t.Setenv("ALLOWED_ORIGINS", " http://a.test, http://b.test ,")
@@ -203,6 +261,9 @@ func TestConfigVPNUsageDefaultsAndParsing(t *testing.T) {
 
 func TestConfigServiceEnvDefaults(t *testing.T) {
 	cfg := ConfigFromEnv()
+	if cfg.WebUIDir != defaultWebUIDir {
+		t.Fatalf("WebUIDir default = %q, want %q", cfg.WebUIDir, defaultWebUIDir)
+	}
 	if !strings.Contains(cfg.CLICACertPEM, "NEXUSPAAS-LOCAL-CLI-CA") {
 		t.Fatalf("CLICACertPEM default = %q, want local placeholder", cfg.CLICACertPEM)
 	}
@@ -218,7 +279,115 @@ func TestConfigServiceEnvDefaults(t *testing.T) {
 	assertStringSlice(t, cfg.StorageClassOptions, []string{"standard", "fast"})
 	assertStringSlice(t, cfg.GroupStorageClassOptions, nil)
 	assertStringSlice(t, cfg.GroupRegistryProfileOptions, nil)
+
+	t.Setenv(envWebUIDir, "/tmp/nexuspaas-web")
+	cfg = ConfigFromEnv()
+	if cfg.WebUIDir != "/tmp/nexuspaas-web" {
+		t.Fatalf("WebUIDir env = %q, want /tmp/nexuspaas-web", cfg.WebUIDir)
+	}
 }
+
+func TestConfigProductNameDefaultsAndParsing(t *testing.T) {
+	cfg := ConfigFromEnv()
+	if got := cfg.EffectiveProductName(); got != "NexusPaaS" {
+		t.Fatalf("EffectiveProductName default = %q, want NexusPaaS", got)
+	}
+	if got := (Config{}).EffectiveProductName(); got != "NexusPaaS" {
+		t.Fatalf("zero Config EffectiveProductName = %q, want NexusPaaS", got)
+	}
+
+	t.Setenv(envProductName, "  CSCC AI Platform  ")
+	cfg = ConfigFromEnv()
+	if got := cfg.EffectiveProductName(); got != "CSCC AI Platform" {
+		t.Fatalf("EffectiveProductName env = %q, want trimmed CSCC AI Platform", got)
+	}
+}
+
+func TestConfigInputLimitDefaultsAndParsing(t *testing.T) {
+	cfg := ConfigFromEnv()
+	if cfg.MaxAPIBodyBytes != defaultMaxAPIBodyBytes ||
+		cfg.MaxConfigFileBytes != defaultMaxConfigFileBytes ||
+		cfg.MaxConfigFileDocuments != defaultMaxConfigFileDocuments {
+		t.Fatalf("input limit defaults = api:%d config:%d docs:%d", cfg.MaxAPIBodyBytes, cfg.MaxConfigFileBytes, cfg.MaxConfigFileDocuments)
+	}
+
+	t.Setenv(envMaxAPIBodyBytes, "2048")
+	t.Setenv(envMaxConfigFileBytes, "1024")
+	t.Setenv(envMaxConfigFileDocuments, "7")
+
+	cfg = ConfigFromEnv()
+	if cfg.MaxAPIBodyBytes != 2048 || cfg.MaxConfigFileBytes != 1024 || cfg.MaxConfigFileDocuments != 7 {
+		t.Fatalf("input limits parsed incorrectly: api:%d config:%d docs:%d", cfg.MaxAPIBodyBytes, cfg.MaxConfigFileBytes, cfg.MaxConfigFileDocuments)
+	}
+}
+
+func TestConfigInputLimitValidation(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  Config
+		want string
+	}{
+		{name: "valid defaults", cfg: streamValidationConfig()},
+		{name: "negative api body", cfg: streamValidationConfig(func(cfg *Config) { cfg.MaxAPIBodyBytes = -1 }), want: envMaxAPIBodyBytes},
+		{name: "negative config bytes", cfg: streamValidationConfig(func(cfg *Config) { cfg.MaxConfigFileBytes = -1 }), want: envMaxConfigFileBytes},
+		{name: "negative config docs", cfg: streamValidationConfig(func(cfg *Config) { cfg.MaxConfigFileDocuments = -1 }), want: envMaxConfigFileDocuments},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.cfg.Validate()
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("Validate() error = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Validate() error = %v, want containing %s", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateManifestValueAllowsPlainTextContent(t *testing.T) {
+	if err := ValidateManifestValue("v2", 16, 1); err != nil {
+		t.Fatalf("ValidateManifestValue(plain text) error = %v, want nil", err)
+	}
+
+	if err := ValidateManifestValue(strings.Repeat("x", 9), 8, 1); InputLimitStatus(err, 0) != http.StatusRequestEntityTooLarge {
+		t.Fatalf("ValidateManifestValue(oversized text) status = %d, want 413: %v", InputLimitStatus(err, 0), err)
+	}
+
+	if err := ValidateManifestValue("kind: Pod\n---\nkind: Service", 1024, 1); InputLimitStatus(err, 0) != http.StatusUnprocessableEntity {
+		t.Fatalf("ValidateManifestValue(multi-doc manifest) status = %d, want 422: %v", InputLimitStatus(err, 0), err)
+	}
+}
+
+func TestValidateManifestValueCoversTypedInputs(t *testing.T) {
+	if err := ValidateManifestValue(nil, 8, 1); err != nil {
+		t.Fatalf("ValidateManifestValue(nil) error = %v, want nil", err)
+	}
+	if err := ValidateManifestValue([]byte("kind: Pod"), 32, 1); err != nil {
+		t.Fatalf("ValidateManifestValue([]byte) error = %v, want nil", err)
+	}
+	if err := ValidateManifestValue(map[string]any{"kind": "Pod"}, 64, 1); err != nil {
+		t.Fatalf("ValidateManifestValue(map) error = %v, want nil", err)
+	}
+	if err := ValidateManifestValue(make(chan int), 64, 1); err == nil {
+		t.Fatal("ValidateManifestValue(channel) error = nil, want marshal error")
+	}
+
+	plainErr := errTestSentinel{}
+	if InputLimitStatus(plainErr, http.StatusTeapot) != http.StatusTeapot {
+		t.Fatalf("InputLimitStatus fallback = %d, want 418", InputLimitStatus(plainErr, http.StatusTeapot))
+	}
+	if InputLimitMessage(plainErr, "fallback") != "fallback" {
+		t.Fatalf("InputLimitMessage fallback = %q, want fallback", InputLimitMessage(plainErr, "fallback"))
+	}
+}
+
+type errTestSentinel struct{}
+
+func (errTestSentinel) Error() string { return "sentinel" }
 
 func TestConfigServiceEnvParsing(t *testing.T) {
 	t.Setenv(envCLICACertPEM, " test-ca ")
@@ -612,6 +781,7 @@ func TestConfigBackingServiceEnvParsing(t *testing.T) {
 	t.Setenv(envDatabaseURL, " "+testDatabaseURL+" ")
 	t.Setenv(envRedisURL, " "+testRedisURL+" ")
 	t.Setenv(envEventBusURL, " "+testEventBusURL+" ")
+	t.Setenv(envEventRelayBatchSize, "37")
 
 	cfg := ConfigFromEnv()
 	if cfg.AuthorizationPolicyURL != testPolicyURL {
@@ -637,6 +807,9 @@ func TestConfigBackingServiceEnvParsing(t *testing.T) {
 	}
 	if cfg.EventBusURL != testEventBusURL {
 		t.Fatalf("EventBusURL = %q, want trimmed event bus URL", cfg.EventBusURL)
+	}
+	if cfg.EventRelayBatchSize != 37 {
+		t.Fatalf("EventRelayBatchSize = %d, want 37", cfg.EventRelayBatchSize)
 	}
 }
 
@@ -729,8 +902,8 @@ func TestConfigTracingDisabledByDefault(t *testing.T) {
 	if cfg.ServiceVersion != "0.1.0" {
 		t.Fatalf("ServiceVersion default = %q, want 0.1.0", cfg.ServiceVersion)
 	}
-	if cfg.EnvironmentName() != "development" {
-		t.Fatalf("EnvironmentName() = %q, want development", cfg.EnvironmentName())
+	if cfg.EnvironmentName() != runtimeProfileDev {
+		t.Fatalf("EnvironmentName() = %q, want dev", cfg.EnvironmentName())
 	}
 }
 
@@ -917,6 +1090,17 @@ func TestConfigMalformedNonProductionRecordsDiagnosticsWithoutFailing(t *testing
 	}
 }
 
+func TestConfigMalformedStagingFailsClosed(t *testing.T) {
+	t.Setenv(envAppEnv, runtimeProfileStaging)
+	t.Setenv(envAdapterConfig, "{bad-json")
+
+	cfg := ConfigFromEnv()
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), envAdapterConfig) {
+		t.Fatalf("Validate() error = %v, want containing %s", err, envAdapterConfig)
+	}
+}
+
 func TestConfigValidateProductionGuards(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -941,7 +1125,10 @@ func TestConfigValidateProductionGuards(t *testing.T) {
 		{name: "production requires object store url", cfg: productionConfigWithout(envObjectStoreURL), wantErr: envObjectStoreURL},
 		{name: "production rejects non-redis redis url", cfg: productionConfigWithURL(envRedisURL, "nats://redis:4222"), wantErr: envRedisURL},
 		{name: "production rejects non-redis event bus url", cfg: productionConfigWithURL(envEventBusURL, "nats://events:4222"), wantErr: envEventBusURL},
+		{name: "event relay batch size must be positive", cfg: Config{RequireAuth: true, EventRelayBatchSize: -1}, wantErr: envEventRelayBatchSize},
 		{name: "production accepts api key principal", cfg: validProductionConfig()},
+		{name: "production profile enables production guards", cfg: Config{EnvironmentProfile: runtimeProfileProduction, RequireAuth: true}, wantErr: "API_KEYS or JWT_JWKS_URL"},
+		{name: "production flag conflicts with staging profile", cfg: Config{EnvironmentProfile: runtimeProfileStaging, Production: true, RequireAuth: true}, wantErr: envAppEnv},
 		{name: "production rejects insecure jwks", cfg: Config{Production: true, RequireAuth: true, JWKSURL: "http://issuer.test/jwks", JWTIssuer: "https://issuer.test", JWTAudiences: map[string]bool{"api": true}}, wantErr: "https"},
 		{name: "production jwks requires issuer", cfg: Config{Production: true, RequireAuth: true, JWKSURL: "https://issuer.test/.well-known/jwks.json", JWTAudiences: map[string]bool{"api": true}}, wantErr: "JWT_ISSUER"},
 		{name: "production jwks requires audience", cfg: Config{Production: true, RequireAuth: true, JWKSURL: "https://issuer.test/.well-known/jwks.json", JWTIssuer: "https://issuer.test"}, wantErr: "JWT_AUDIENCE"},

@@ -133,7 +133,9 @@ func TestIsolatedRuntimeRegistrationE2E(t *testing.T) {
 		[]string{
 			"audit-log-retention",
 			"cluster-resource-collector",
+			"event-outbox-relay",
 			"gpu-usage-telemetry-collector",
+			"harbor-catalog-sync",
 			"harbor-health",
 			"identity-auth-cleanup",
 			"idle-reaper",
@@ -878,9 +880,9 @@ func (h *e2eHarness) seedIdentityContracts() identityIDs {
 		userID:     "user" + h.runID,
 		roleID:     "role" + h.runID,
 		session:    "session" + h.runID,
-		apiTokenID: "token" + h.runID,
-		apiToken:   "rawtoken" + h.runID,
+		apiTokenID: "AT" + h.runID,
 	}
+	ids.apiToken = platform.FormatUserAPIToken(ids.apiTokenID, "rawtoken"+h.runID)
 	expires := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
 	h.createRecord(identityUsersResource, ids.userID, map[string]any{
 		"username":    "alice-" + h.runID,

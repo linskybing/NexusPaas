@@ -151,6 +151,83 @@ func TestSubmitAdmissionRejectsPayloadResourceUnderreporting(t *testing.T) {
 	}
 }
 
+func TestSubmitAdmissionRejectsOversizedManifestResource(t *testing.T) {
+	app := newSchedulerQuotaTestApp()
+	app.Config.MaxConfigFileBytes = 8
+
+	code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+		"project_id": "P1",
+		"user_id":    "U1",
+		"resources": []any{
+			map[string]any{"name": "big", "manifest": "kind: Deployment"},
+		},
+	})), platform.RouteSpec{})
+
+	assertSchedulerStatus(t, code, data, http.StatusRequestEntityTooLarge)
+	if !strings.Contains(data.(map[string]any)["reason"].(string), "max byte size") {
+		t.Fatalf("oversize denial = %#v, want byte-size reason", data)
+	}
+}
+
+func TestSubmitAdmissionRejectsTooManyManifestDocuments(t *testing.T) {
+	app := newSchedulerQuotaTestApp()
+	app.Config.MaxConfigFileDocuments = 1
+
+	code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+		"project_id": "P1",
+		"user_id":    "U1",
+		"resources": []any{
+			map[string]any{"name": "docs", "manifest": "kind: Pod\n---\nkind: Service"},
+		},
+	})), platform.RouteSpec{})
+
+	assertSchedulerStatus(t, code, data, http.StatusUnprocessableEntity)
+	if !strings.Contains(data.(map[string]any)["reason"].(string), "document count") {
+		t.Fatalf("document denial = %#v, want document-count reason", data)
+	}
+}
+
+func TestSubmitAdmissionRejectsRawSecretAndPublishesSafeAudit(t *testing.T) {
+	app := newSchedulerQuotaTestApp()
+	rawSecret := `{"apiVersion":"v1","kind":"Secret","metadata":{"name":"db-creds"},"stringData":{"password":"super-secret"}}`
+
+	code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+		"job_id":     "J-secret",
+		"project_id": "P1",
+		"user_id":    "U1",
+		"resources": []any{
+			map[string]any{"name": "db-creds", "manifest": rawSecret},
+		},
+	})), platform.RouteSpec{})
+
+	assertSchedulerStatus(t, code, data, http.StatusForbidden)
+	response := data.(map[string]any)
+	if !strings.Contains(response["reason"].(string), "raw Kubernetes Secret resources are rejected") {
+		t.Fatalf("secret denial = %#v, want raw Secret policy reason", response)
+	}
+	rawResponse, _ := json.Marshal(response)
+	if strings.Contains(string(rawResponse), "super-secret") {
+		t.Fatalf("secret denial leaked plaintext: %s", rawResponse)
+	}
+
+	domainEvent := requireSchedulerEvent(t, app, "SecretAccessRejected", "rejected")
+	assertSchedulerEventValue(t, domainEvent.Data, "resource_type", "secret")
+	assertSchedulerEventValue(t, domainEvent.Data, "resource_name", "db-creds")
+	auditEvent := requireSchedulerEvent(t, app, "AuditEvent", "rejected")
+	assertSchedulerEventValue(t, auditEvent.Data, "resource_type", "secret")
+	assertSchedulerEventValue(t, auditEvent.Data, "success", false)
+	allEvents, _ := json.Marshal(app.Events.Outbox())
+	if strings.Contains(string(allEvents), "super-secret") {
+		t.Fatalf("secret rejection event leaked plaintext: %s", allEvents)
+	}
+
+	if _, found := admissionSecretPolicyViolationFromRequest(submitAdmissionRequest{
+		Resources: []admissionResourcePayload{{Name: "external", Kind: "ExternalSecret", Raw: []byte(`{"apiVersion":"external-secrets.io/v1","kind":"ExternalSecret"}`)}},
+	}); found {
+		t.Fatal("ExternalSecret profile should not be rejected as a raw Kubernetes Secret")
+	}
+}
+
 func TestSubmitAdmissionAllowsOwnerGroupMemberAndDefaultQueue(t *testing.T) {
 	t.Setenv("DEFAULT_QUEUE_NAME", "default-batch")
 	app := newSchedulerQuotaTestApp()
@@ -248,6 +325,75 @@ func TestAdmissionResourceFloorCoversControllersAndDRA(t *testing.T) {
 	}
 	if floor.gpu != 4 || floor.cpu != 4 || floor.memoryMB != 4096 {
 		t.Fatalf("resource floor = %#v, want gpu=4 cpu=4 memory=4096", floor)
+	}
+}
+
+func TestAdmissionResourceAccountingRejectsInvalidInputs(t *testing.T) {
+	smZero := 0
+	tests := []struct {
+		name string
+		req  submitAdmissionRequest
+		want string
+	}{
+		{name: "required gpu", req: submitAdmissionRequest{RequiredGPU: -1}, want: "required GPU must be non-negative"},
+		{name: "required cpu", req: submitAdmissionRequest{RequiredCPU: -1}, want: "required CPU must be non-negative"},
+		{name: "required memory", req: submitAdmissionRequest{RequiredMemory: -1}, want: "required memory must be non-negative"},
+		{name: "dra gpu count", req: submitAdmissionRequest{GPUCount: -1}, want: "DRA GPU count must be non-negative"},
+		{name: "dra sm percentage", req: submitAdmissionRequest{SMPercentage: &smZero}, want: "DRA SM percentage must be between 1 and 100"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := admissionResourceFloorFromRequest(tt.req)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("resource accounting err = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestAdmissionResourcePolicyRejectsRawSecrets(t *testing.T) {
+	req := submitAdmissionRequest{Resources: []admissionResourcePayload{
+		{Name: "raw-secret", Raw: mustJSON(t, map[string]any{
+			"kind":     "Secret",
+			"metadata": map[string]any{"name": "db-password"},
+		})},
+	}}
+
+	_, err := admissionResourceFloorFromRequest(req)
+
+	var violation admissionSecretPolicyViolation
+	if err == nil || !strings.Contains(err.Error(), "raw Kubernetes Secret resources are rejected") {
+		t.Fatalf("secret policy err = %v, want raw secret rejection", err)
+	}
+	if !strings.Contains(err.Error(), rawSecretPolicyReason()) {
+		t.Fatalf("secret policy err = %v, want shared reason", err)
+	}
+	violation, _ = err.(admissionSecretPolicyViolation)
+	if violation.ResourceName != "db-password" || violation.ResourceKind != "Secret" {
+		t.Fatalf("secret violation = %#v, want named Secret", violation)
+	}
+}
+
+func TestAdmissionSecretPolicyViolationFromRequestUsesExplicitAndRawMetadata(t *testing.T) {
+	explicit, found := admissionSecretPolicyViolationFromRequest(submitAdmissionRequest{Resources: []admissionResourcePayload{
+		{Name: "explicit-secret", Kind: "Secret"},
+	}})
+	if !found || explicit.ResourceName != "explicit-secret" || explicit.ResourceKind != "Secret" {
+		t.Fatalf("explicit secret violation = %#v found=%v, want explicit metadata", explicit, found)
+	}
+
+	raw, found := admissionSecretPolicyViolationFromRequest(submitAdmissionRequest{Resources: []admissionResourcePayload{
+		{Raw: mustJSON(t, map[string]any{"kind": "Secret", "metadata": map[string]any{"name": "raw-secret"}})},
+	}})
+	if !found || raw.ResourceName != "raw-secret" || raw.ResourceKind != "Secret" {
+		t.Fatalf("raw secret violation = %#v found=%v, want raw metadata", raw, found)
+	}
+
+	_, found = admissionSecretPolicyViolationFromRequest(submitAdmissionRequest{Resources: []admissionResourcePayload{
+		{Name: "config", Kind: "ConfigMap"},
+	}})
+	if found {
+		t.Fatal("ConfigMap was reported as a secret policy violation")
 	}
 }
 

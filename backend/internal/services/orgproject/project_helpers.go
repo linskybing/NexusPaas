@@ -16,6 +16,8 @@ type projectMemberInput struct {
 	Role   string
 }
 
+const msgProjectMemberNotFound = "project member not found"
+
 func visibleProjects(app *platform.App, r *http.Request, userID string) []map[string]any {
 	rows := projectRows(app, r)
 	visible := make([]map[string]any, 0, len(rows))
@@ -199,14 +201,22 @@ func createDirectProjectMember(app *platform.App, r *http.Request, projectID, ta
 		"created_at": now,
 		"updated_at": now,
 	}
-	record, err := projectRepository(app).CreateDirectProjectMember(r.Context(), data)
+	var record orgProjectMemberRecord
+	err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		var e error
+		record, e = projectRepository(app).CreateDirectProjectMemberTx(r.Context(), tx, data)
+		if e != nil {
+			return e
+		}
+		tx.Emit(eventFor(r, "project_memberCreated", record.Data))
+		return nil
+	})
 	if err != nil {
 		if platform.IsCreateConflict(err) {
 			return fmt.Errorf("project member already exists")
 		}
 		return fmt.Errorf("project member could not be created")
 	}
-	publishEvent(app, r, eventFor(r, "project_memberCreated", record.Data))
 	return nil
 }
 
@@ -220,10 +230,19 @@ func deleteDirectProjectMember(app *platform.App, r *http.Request, projectID, ta
 	}
 	member, found := findProjectMemberRecord(app, r, projectID, targetUserID)
 	if !found {
-		return http.StatusNotFound, shared.ErrorData("project member not found")
+		return http.StatusNotFound, shared.ErrorData(msgProjectMemberNotFound)
 	}
-	projectRepository(app).DeleteDirectProjectMemberAndQuota(r.Context(), projectID, targetUserID)
-	publishEvent(app, r, eventFor(r, "project_memberDeleted", member.Data))
+	if err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		if _, ok, err := projectRepository(app).DeleteDirectProjectMemberAndQuotaTx(r.Context(), tx, projectID, targetUserID); err != nil {
+			return err
+		} else if !ok {
+			return fmt.Errorf(msgProjectMemberNotFound)
+		}
+		tx.Emit(eventFor(r, "project_memberDeleted", member.Data))
+		return nil
+	}); err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("project member delete failed")
+	}
 	return http.StatusOK, nil
 }
 
@@ -238,14 +257,38 @@ func updateDirectProjectMemberRole(app *platform.App, r *http.Request, projectID
 	}
 	member, found := findProjectMemberRecord(app, r, projectID, targetUserID)
 	if !found {
-		return http.StatusNotFound, shared.ErrorData("project member not found")
+		return http.StatusNotFound, shared.ErrorData(msgProjectMemberNotFound)
 	}
-	_, updated, ok := projectRepository(app).UpdateDirectProjectMemberRole(r.Context(), projectID, targetUserID, role, time.Now().UTC())
-	if !ok {
+	updated, err := updateDirectProjectMemberRoleWithEvent(app, r, member, projectID, targetUserID, role)
+	if err != nil {
 		return http.StatusInternalServerError, shared.ErrorData("project member update failed")
 	}
-	publishEvent(app, r, eventFor(r, "project_memberUpdated", map[string]any{"old": member.Data, "new": updated.Data}))
 	return http.StatusOK, updated.Data
+}
+
+func updateDirectProjectMemberRoleWithEvent(
+	app *platform.App,
+	r *http.Request,
+	member platformRecord,
+	projectID string,
+	targetUserID string,
+	role string,
+) (orgProjectMemberRecord, error) {
+	var updated orgProjectMemberRecord
+	err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		var ok bool
+		var err error
+		_, updated, ok, err = projectRepository(app).UpdateDirectProjectMemberRoleTx(r.Context(), tx, projectID, targetUserID, role, time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf(msgProjectMemberNotFound)
+		}
+		tx.Emit(eventFor(r, "project_memberUpdated", map[string]any{"old": member.Data, "new": updated.Data}))
+		return nil
+	})
+	return updated, err
 }
 
 func findProjectMember(app *platform.App, r *http.Request, projectID, userID string) (map[string]any, bool) {
@@ -274,11 +317,19 @@ func upsertQuota(app *platform.App, r *http.Request, quota map[string]any) (int,
 	if id == "" || shared.TextValue(quota, "user_id") == "" {
 		return http.StatusBadRequest, shared.ErrorData("user_id is required"), nil
 	}
-	record, err := projectRepository(app).UpsertProjectUserQuota(r.Context(), quota)
+	var record orgProjectQuotaRecord
+	err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		var e error
+		record, e = projectRepository(app).UpsertProjectUserQuotaTx(r.Context(), tx, quota)
+		if e != nil {
+			return e
+		}
+		tx.Emit(eventFor(r, "UserQuotaUpdated", record.Data))
+		return nil
+	})
 	if err != nil {
 		return http.StatusInternalServerError, shared.ErrorData("quota update failed"), nil
 	}
-	publishEvent(app, r, eventFor(r, "UserQuotaUpdated", record.Data))
 	return http.StatusOK, quotaDTO(record.Data), nil
 }
 

@@ -71,6 +71,9 @@ func withRuntimeDefaults(cfg Config) Config {
 	if strings.TrimSpace(cfg.LonghornNamespace) == "" {
 		cfg.LonghornNamespace = "longhorn-system"
 	}
+	if strings.TrimSpace(cfg.WebUIDir) == "" {
+		cfg.WebUIDir = defaultWebUIDir
+	}
 	if cfg.LonghornRWXHealthInterval == 0 {
 		cfg.LonghornRWXHealthInterval = 30 * time.Second
 	}
@@ -247,6 +250,7 @@ func (a *App) registerBuiltinActions() {
 	a.actions["event_ingest"] = a.handleEventIngest
 	a.actions["command"] = a.handleCommand
 	a.actions["proxy"] = a.handleProxy
+	a.actions[gatewayProxyAction] = a.handleGatewayProxy
 }
 
 func (a *App) RegisterCustomHandler(method, pattern string, handler HandlerFunc) {
@@ -255,6 +259,9 @@ func (a *App) RegisterCustomHandler(method, pattern string, handler HandlerFunc)
 
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if a.serveServiceRoute(w, r) {
+		return
+	}
+	if a.serveGatewayCatalogProxyRoute(w, r) {
 		return
 	}
 	a.Mux.ServeHTTP(w, r)
@@ -288,6 +295,48 @@ func (a *App) serveServiceRoute(w http.ResponseWriter, r *http.Request) bool {
 	}
 	a.wrap(routeService(best), best)(w, r)
 	return true
+}
+
+func (a *App) serveGatewayCatalogProxyRoute(w http.ResponseWriter, r *http.Request) bool {
+	if strings.TrimSpace(a.Config.ServiceName) != "platform-gateway" || len(a.Config.ServiceURLs) == 0 {
+		return false
+	}
+	var best RouteSpec
+	bestScore := -1
+	bestParams := map[string]string{}
+	for _, route := range a.catalogRouteCandidates(r.Method, r.URL.Path) {
+		if route.Method != r.Method || !a.gatewayProxyableRoute(route) {
+			continue
+		}
+		params, ok := extractPathParams(route.Pattern, r.URL.Path)
+		if !ok {
+			continue
+		}
+		score := routeSpecificity(route.Pattern)
+		if score <= bestScore {
+			continue
+		}
+		best = route
+		bestScore = score
+		bestParams = params
+	}
+	if bestScore < 0 {
+		return false
+	}
+	for key, value := range bestParams {
+		r.SetPathValue(key, value)
+	}
+	best.Action = gatewayProxyAction
+	a.wrap(routeService(best), best)(w, r)
+	return true
+}
+
+func (a *App) gatewayProxyableRoute(route RouteSpec) bool {
+	owner := routeService(route)
+	return owner != "" &&
+		!a.Config.AllowsService(owner) &&
+		!route.ServiceAuthRequired &&
+		!isInternalRoutePattern(route.Pattern)
 }
 
 func (a *App) RegisterService(spec ServiceSpec) {
@@ -344,7 +393,7 @@ func (a *App) handleRoute(r *httpRequest, route RouteSpec) (int, any, *Degraded)
 		return status, data, degraded
 	}
 
-	if route.Action != "proxy" && route.ExternalAdapter != "" {
+	if route.Action != "proxy" && route.Action != gatewayProxyAction && route.ExternalAdapter != "" {
 		result := a.callAdapter(r, route.ExternalAdapter, route)
 		if result.Degraded {
 			a.Metrics.Inc(route.ExternalAdapter + "_degraded")
@@ -409,9 +458,17 @@ func auditResourceType(route RouteSpec) string {
 }
 
 func (a *App) publishDomainEvent(r *httpRequest, route RouteSpec, suffix string, data map[string]any) {
+	a.publishEvent(r, domainEventName(route, suffix), data)
+}
+
+func (a *App) newDomainEvent(r *httpRequest, route RouteSpec, suffix string, data map[string]any) contracts.Event {
+	return a.newEvent(r, domainEventName(route, suffix), data)
+}
+
+func domainEventName(route RouteSpec, suffix string) string {
 	name := strings.TrimSuffix(route.Resource, "s") + suffix
 	name = strings.TrimPrefix(name, route.ServicePrefix()+":")
-	a.publishEvent(r, name, data)
+	return name
 }
 
 func (route RouteSpec) ServicePrefix() string {

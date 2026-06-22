@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
 	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
@@ -102,7 +103,7 @@ func (e admissionDeny) Error() string {
 func reviewSubmitAdmission(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
 	payload, err := decodePayload(r)
 	if err != nil {
-		return http.StatusBadRequest, shared.ErrorData(msgInvalidBody), nil
+		return platform.InputLimitStatus(err, http.StatusBadRequest), shared.ErrorData(platform.InputLimitMessage(err, msgInvalidBody)), nil
 	}
 	req, err := decodeSubmitAdmissionRequest(payload)
 	if err != nil {
@@ -111,6 +112,13 @@ func reviewSubmitAdmission(app *platform.App, r *http.Request, _ platform.RouteS
 	applyAdmissionStreamConfig(&req, app.Config)
 	if req.QueueName == "" {
 		req.QueueName = shared.FirstNonEmpty(strings.TrimSpace(app.Config.DefaultQueueName), defaultQueueName)
+	}
+	if err := validateAdmissionResourceManifestLimits(req, app.Config); err != nil {
+		return platform.InputLimitStatus(err, http.StatusUnprocessableEntity), admissionDenied(req, platform.InputLimitMessage(err, err.Error())), nil
+	}
+	if violation, found := admissionSecretPolicyViolationFromRequest(req); found {
+		publishSecretAccessRejected(app, r, req, violation)
+		return http.StatusForbidden, admissionDenied(req, violation.Reason), nil
 	}
 	if app.Store == nil {
 		return http.StatusServiceUnavailable, admissionDenied(req, "submit policy store is not configured"), nil
@@ -215,4 +223,55 @@ func deny(status int, reason string) error {
 
 func schedulerDefaultQueueName() string {
 	return defaultQueueName
+}
+
+func validateAdmissionResourceManifestLimits(req submitAdmissionRequest, cfg platform.Config) error {
+	for _, resource := range req.Resources {
+		if len(resource.Raw) == 0 {
+			continue
+		}
+		if err := platform.ValidateManifestLimits(resource.Raw, cfg.EffectiveMaxConfigFileBytes(), cfg.EffectiveMaxConfigFileDocuments()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func publishSecretAccessRejected(app *platform.App, r *http.Request, req submitAdmissionRequest, violation admissionSecretPolicyViolation) {
+	if app == nil || app.Events == nil {
+		return
+	}
+	data := secretAccessRejectedData(req, violation)
+	publish(app, r, "SecretAccessRejected", "rejected", data)
+	auditData := shared.CloneMap(data)
+	auditData["action"] = "rejected"
+	auditData["actor_user_id"] = shared.FirstNonEmpty(r.Header.Get("X-User-ID"), req.UserID, "anonymous")
+	auditData["resource_type"] = "secret"
+	auditData["resource_id"] = violation.ResourceName
+	auditData["success"] = false
+	auditData["description"] = violation.Reason
+	_ = app.Events.Publish(r.Context(), contracts.Event{
+		EventID:        platform.NewUUID(),
+		Name:           "AuditEvent",
+		Source:         serviceName,
+		OccurredAt:     time.Now().UTC(),
+		TraceID:        shared.FirstNonEmpty(r.Header.Get("X-Trace-ID"), r.Header.Get("X-Request-ID"), "scheduler-quota-local"),
+		SchemaVersion:  1,
+		IdempotencyKey: r.Header.Get("Idempotency-Key"),
+		Data:           auditData,
+	})
+}
+
+func secretAccessRejectedData(req submitAdmissionRequest, violation admissionSecretPolicyViolation) map[string]any {
+	return map[string]any{
+		"project_id":    req.ProjectID,
+		"user_id":       req.UserID,
+		"job_id":        req.JobID,
+		"resource_type": "secret",
+		"resource_id":   violation.ResourceName,
+		"resource_kind": shared.FirstNonEmpty(violation.ResourceKind, "Secret"),
+		"resource_name": violation.ResourceName,
+		"reason":        violation.Reason,
+		"success":       false,
+	}
 }

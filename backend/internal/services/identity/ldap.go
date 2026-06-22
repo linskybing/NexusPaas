@@ -87,7 +87,7 @@ func authenticateUser(app *platform.App, r *http.Request, username, password str
 	return userRecord.Data, true
 }
 
-func createUserWithLDAP(app *platform.App, r *http.Request, user map[string]any, password string) (contracts.Record[map[string]any], int, map[string]any) {
+func createUserWithLDAP(app *platform.App, r *http.Request, user map[string]any, password string, build func(contracts.Record[map[string]any]) contracts.Event) (contracts.Record[map[string]any], int, map[string]any) {
 	dir, ldapOn := ldapDirectoryFor(app)
 	var ldapResult ldapUpsertResult
 	if ldapOn {
@@ -98,7 +98,7 @@ func createUserWithLDAP(app *platform.App, r *http.Request, user map[string]any,
 			return contracts.Record[map[string]any]{}, http.StatusServiceUnavailable, map[string]any{"message": msgLDAPSyncFailed}
 		}
 	}
-	record, err := principalRepository(app).CreateUser(r.Context(), user)
+	record, err := principalRepository(app).CreateUserWithEvent(r.Context(), app, user, build)
 	if err != nil {
 		if ldapOn {
 			compensateLDAPUpsert(r.Context(), dir, ldapResult)
@@ -111,7 +111,7 @@ func createUserWithLDAP(app *platform.App, r *http.Request, user map[string]any,
 	return record, http.StatusOK, nil
 }
 
-func updateUserWithLDAP(app *platform.App, r *http.Request, id string, payload, update map[string]any) (contracts.Record[map[string]any], int, map[string]any) {
+func updateUserWithLDAP(app *platform.App, r *http.Request, id string, payload, update map[string]any, build ...func(contracts.Record[map[string]any]) contracts.Event) (contracts.Record[map[string]any], int, map[string]any) {
 	repo := principalRepository(app)
 	current, found := repo.GetUser(r.Context(), id)
 	if !found {
@@ -119,8 +119,8 @@ func updateUserWithLDAP(app *platform.App, r *http.Request, id string, payload, 
 	}
 	dir, ldapOn := ldapDirectoryFor(app)
 	if !ldapOn {
-		updated, ok := repo.UpdateUser(r.Context(), id, update)
-		if !ok {
+		updated, ok, err := updateUserLocal(r.Context(), app, repo, id, update, firstIdentityEventBuilder(build))
+		if err != nil || !ok {
 			return contracts.Record[map[string]any]{}, http.StatusNotFound, map[string]any{"message": msgUserNotFound}
 		}
 		return updated, http.StatusOK, nil
@@ -134,48 +134,54 @@ func updateUserWithLDAP(app *platform.App, r *http.Request, id string, payload, 
 			slog.Warn("ldap user update sync failed", "username", safeLDAPUsername(textValue(target, "username")), "error", sanitizeLDAPError(err))
 			return contracts.Record[map[string]any]{}, http.StatusServiceUnavailable, map[string]any{"message": msgLDAPSyncFailed}
 		}
-		updated, ok := repo.UpdateUser(r.Context(), id, update)
-		if !ok {
+		updated, ok, updateErr := updateUserLocal(r.Context(), app, repo, id, update, firstIdentityEventBuilder(build))
+		if updateErr != nil || !ok {
 			compensateLDAPUpsert(r.Context(), dir, ldapResult)
 			return contracts.Record[map[string]any]{}, http.StatusServiceUnavailable, map[string]any{"message": "user could not be updated"}
 		}
 		return updated, http.StatusOK, nil
 	}
 
-	updated, ok := repo.UpdateUser(r.Context(), id, update)
-	if !ok {
-		return contracts.Record[map[string]any]{}, http.StatusServiceUnavailable, map[string]any{"message": "user could not be updated"}
-	}
-	if _, err := dir.UpsertUser(r.Context(), target, password); err != nil {
-		rollbackLocalUser(r.Context(), app, id, current.Data)
+	ldapResult, err := dir.UpsertUser(r.Context(), target, password)
+	if err != nil {
 		slog.Warn("ldap user password sync failed", "username", safeLDAPUsername(textValue(target, "username")), "error", sanitizeLDAPError(err))
 		return contracts.Record[map[string]any]{}, http.StatusServiceUnavailable, map[string]any{"message": msgLDAPSyncFailed}
+	}
+	updated, ok, updateErr := updateUserLocal(r.Context(), app, repo, id, update, firstIdentityEventBuilder(build))
+	if updateErr != nil || !ok {
+		compensateLDAPUpsert(r.Context(), dir, ldapResult)
+		return contracts.Record[map[string]any]{}, http.StatusServiceUnavailable, map[string]any{"message": "user could not be updated"}
 	}
 	return updated, http.StatusOK, nil
 }
 
-func resetUserPasswordWithLDAP(app *platform.App, r *http.Request, id, password string) bool {
+func resetUserPasswordWithLDAP(app *platform.App, r *http.Request, id, password string, build ...func(contracts.Record[map[string]any]) contracts.Event) bool {
 	repo := principalRepository(app)
 	current, found := repo.GetUser(r.Context(), id)
 	if !found {
 		return false
 	}
 	update := map[string]any{"password_hash": platform.HashSecret(password), "updated_at": time.Now().UTC().Format(time.RFC3339)}
-	updated, ok := repo.UpdateUser(r.Context(), id, update)
-	if !ok {
-		return false
-	}
 	if dir, ldapOn := ldapDirectoryFor(app); ldapOn {
-		if _, err := dir.UpsertUser(r.Context(), updated.Data, password); err != nil {
-			rollbackLocalUser(r.Context(), app, id, current.Data)
-			slog.Warn("ldap batch password sync failed", "username", safeLDAPUsername(textValue(updated.Data, "username")), "error", sanitizeLDAPError(err))
+		target := mergedUserData(current.Data, update)
+		ldapResult, err := dir.UpsertUser(r.Context(), target, password)
+		if err != nil {
+			slog.Warn("ldap batch password sync failed", "username", safeLDAPUsername(textValue(target, "username")), "error", sanitizeLDAPError(err))
 			return false
 		}
+		if _, ok, err := updateUserLocal(r.Context(), app, repo, id, update, firstIdentityEventBuilder(build)); err != nil || !ok {
+			compensateLDAPUpsert(r.Context(), dir, ldapResult)
+			return false
+		}
+		return true
+	}
+	if _, ok, err := updateUserLocal(r.Context(), app, repo, id, update, firstIdentityEventBuilder(build)); err != nil || !ok {
+		return false
 	}
 	return true
 }
 
-func updateUserRoleWithLDAP(app *platform.App, r *http.Request, id string, update map[string]any) (map[string]any, bool) {
+func updateUserRoleWithLDAP(app *platform.App, r *http.Request, id string, update map[string]any, build ...func(contracts.Record[map[string]any]) contracts.Event) (map[string]any, bool) {
 	repo := principalRepository(app)
 	current, found := repo.GetUser(r.Context(), id)
 	if !found {
@@ -192,8 +198,8 @@ func updateUserRoleWithLDAP(app *platform.App, r *http.Request, id string, updat
 			return nil, false
 		}
 	}
-	updated, ok := repo.UpdateUser(r.Context(), id, update)
-	if !ok {
+	updated, ok, err := updateUserLocal(r.Context(), app, repo, id, update, firstIdentityEventBuilder(build))
+	if err != nil || !ok {
 		if ldapOn {
 			compensateLDAPUpsert(r.Context(), dir, ldapResult)
 		}
@@ -202,7 +208,7 @@ func updateUserRoleWithLDAP(app *platform.App, r *http.Request, id string, updat
 	return updated.Data, true
 }
 
-func deleteUserWithLDAP(app *platform.App, r *http.Request, id string) (int, map[string]any) {
+func deleteUserWithLDAP(app *platform.App, r *http.Request, id string, build ...func() contracts.Event) (int, map[string]any) {
 	repo := principalRepository(app)
 	current, found := repo.GetUser(r.Context(), id)
 	if !found {
@@ -215,7 +221,8 @@ func deleteUserWithLDAP(app *platform.App, r *http.Request, id string) (int, map
 			return http.StatusServiceUnavailable, map[string]any{"message": msgLDAPSyncFailed}
 		}
 	}
-	if !repo.DeleteUser(r.Context(), id) {
+	deleted, err := deleteUserLocal(r.Context(), app, repo, id, firstIdentityDeleteEventBuilder(build))
+	if err != nil || !deleted {
 		if ldapOn {
 			if err := dir.RestoreDeletedUser(r.Context(), current.Data); err != nil {
 				slog.Warn("ldap user delete compensation failed", "username", safeLDAPUsername(textValue(current.Data, "username")), "error", sanitizeLDAPError(err))
@@ -224,6 +231,56 @@ func deleteUserWithLDAP(app *platform.App, r *http.Request, id string) (int, map
 		return http.StatusServiceUnavailable, map[string]any{"message": "user could not be deleted"}
 	}
 	return http.StatusOK, nil
+}
+
+func updateUserLocal(ctx context.Context, app *platform.App, repo *recordStoreIdentityPrincipalRepository, id string, update map[string]any, build func(contracts.Record[map[string]any]) contracts.Event) (contracts.Record[map[string]any], bool, error) {
+	if build == nil {
+		record, ok := repo.UpdateUser(ctx, id, update)
+		return record, ok, nil
+	}
+	var updated contracts.Record[map[string]any]
+	var ok bool
+	err := app.WithTx(ctx, func(tx platform.StoreTx) error {
+		var e error
+		updated, ok, e = repo.UpdateUserTx(ctx, tx, id, update)
+		if e != nil || !ok {
+			return e
+		}
+		tx.Emit(build(updated))
+		return nil
+	})
+	return updated, ok, err
+}
+
+func deleteUserLocal(ctx context.Context, app *platform.App, repo *recordStoreIdentityPrincipalRepository, id string, build func() contracts.Event) (bool, error) {
+	if build == nil {
+		return repo.DeleteUser(ctx, id), nil
+	}
+	var deleted bool
+	err := app.WithTx(ctx, func(tx platform.StoreTx) error {
+		var e error
+		deleted, e = repo.DeleteUserTx(ctx, tx, id)
+		if e != nil || !deleted {
+			return e
+		}
+		tx.Emit(build())
+		return nil
+	})
+	return deleted, err
+}
+
+func firstIdentityEventBuilder(builders []func(contracts.Record[map[string]any]) contracts.Event) func(contracts.Record[map[string]any]) contracts.Event {
+	if len(builders) == 0 {
+		return nil
+	}
+	return builders[0]
+}
+
+func firstIdentityDeleteEventBuilder(builders []func() contracts.Event) func() contracts.Event {
+	if len(builders) == 0 {
+		return nil
+	}
+	return builders[0]
 }
 
 func syncLDAPMirror(ctx context.Context, app *platform.App, dir ldapDirectory) error {

@@ -3,6 +3,7 @@ package auditcompliance
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
@@ -21,9 +22,7 @@ func CleanupOldAuditLogs(ctx context.Context, store platform.RecordStore, retent
 	if store == nil {
 		return 0
 	}
-	if retentionDays <= 0 {
-		retentionDays = defaultRetentionDays
-	}
+	retentionDays = effectiveAuditRetentionDays(retentionDays)
 	cutoff := now.UTC().AddDate(0, 0, -retentionDays)
 	removed := 0
 	for _, record := range store.List(ctx, auditLogResource) {
@@ -38,6 +37,13 @@ func CleanupOldAuditLogs(ctx context.Context, store platform.RecordStore, retent
 	return removed
 }
 
+func effectiveAuditRetentionDays(retentionDays int) int {
+	if retentionDays <= 0 {
+		return defaultRetentionDays
+	}
+	return retentionDays
+}
+
 // auditRecordCreatedAt resolves the record's effective creation time, preferring an
 // explicit created_at field in the data and falling back to the store metadata
 // timestamp, matching how auditLogs() reads records for the read path.
@@ -46,6 +52,19 @@ func auditRecordCreatedAt(data map[string]any, fallback time.Time) time.Time {
 		return created
 	}
 	return fallback
+}
+
+func cleanupAuditRetention(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
+	retentionDays := defaultRetentionDays
+	removed := 0
+	if app != nil {
+		retentionDays = effectiveAuditRetentionDays(app.Config.AuditRetentionDays)
+		removed = CleanupOldAuditLogs(r.Context(), app.Store, app.Config.AuditRetentionDays, time.Now())
+	}
+	return http.StatusOK, map[string]any{
+		"removed":        removed,
+		"retention_days": retentionDays,
+	}, nil
 }
 
 // registerAuditRetention wires periodic audit-log retention cleanup as a

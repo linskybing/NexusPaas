@@ -62,9 +62,10 @@ func TestAuthorizationPolicyRawPermissionPolicyCRUDAndSimulate(t *testing.T) {
 
 func TestAuthorizationPolicyEnforceEndpointRequiresServicePrincipal(t *testing.T) {
 	app := platform.NewApp(platform.Config{
-		ServiceName: "all",
-		HTTPAddr:    ":0",
-		RequireAuth: true,
+		ServiceName:   "all",
+		HTTPAddr:      ":0",
+		RequireAuth:   true,
+		ServiceAPIKey: "service-key",
 		APIKeys: map[string]bool{
 			"service-key": true,
 			"user-key":    true,
@@ -79,15 +80,16 @@ func TestAuthorizationPolicyEnforceEndpointRequiresServicePrincipal(t *testing.T
 	body := `{"sub":"alice","dom":"proj-1","obj":"model","act":"read"}`
 
 	requestJSON(t, app, http.MethodPost, "/api/v1/permissions/enforce", body, nil, http.StatusUnauthorized)
-	requestJSON(t, app, http.MethodPost, "/api/v1/permissions/enforce", body, map[string]string{"X-API-Key": "user-key"}, http.StatusForbidden)
-	requestJSON(t, app, http.MethodPost, "/api/v1/permissions/enforce", `{"sub":"alice","dom":"proj-1","obj":"model"}`, map[string]string{"X-API-Key": "service-key"}, http.StatusBadRequest)
+	requestJSON(t, app, http.MethodPost, "/api/v1/permissions/enforce", body, map[string]string{"X-API-Key": "user-key"}, http.StatusUnauthorized)
+	requestJSON(t, app, http.MethodPost, "/api/v1/permissions/enforce", body, map[string]string{"X-Service-Key": "wrong"}, http.StatusUnauthorized)
+	requestJSON(t, app, http.MethodPost, "/api/v1/permissions/enforce", `{"sub":"alice","dom":"proj-1","obj":"model"}`, map[string]string{"X-Service-Key": "service-key"}, http.StatusBadRequest)
 
-	denied := responseMap(t, requestJSON(t, app, http.MethodPost, "/api/v1/permissions/enforce", body, map[string]string{"X-API-Key": "service-key"}, http.StatusOK))
+	denied := responseMap(t, requestJSON(t, app, http.MethodPost, "/api/v1/permissions/enforce", body, map[string]string{"X-Service-Key": "service-key"}, http.StatusOK))
 	if denied["allowed"] != false {
 		t.Fatalf("enforce denied = %#v, want allowed=false", denied)
 	}
 	allowRawPolicy(t, app, "alice", "proj-1", "model", "read")
-	allowed := responseMap(t, requestJSON(t, app, http.MethodPost, "/api/v1/permissions/enforce", body, map[string]string{"X-API-Key": "service-key"}, http.StatusOK))
+	allowed := responseMap(t, requestJSON(t, app, http.MethodPost, "/api/v1/permissions/enforce", body, map[string]string{"X-Service-Key": "service-key"}, http.StatusOK))
 	if allowed["allowed"] != true {
 		t.Fatalf("enforce allowed = %#v, want allowed=true", allowed)
 	}
@@ -125,10 +127,11 @@ func TestAuthorizationPolicyPDPWiresPlatformAuthorization(t *testing.T) {
 
 func TestRemoteAuthorizationPolicyPDPAuthorizesIsolatedService(t *testing.T) {
 	policyApp := platform.NewApp(platform.Config{
-		ServiceName: "authorization-policy-service",
-		HTTPAddr:    ":0",
-		RequireAuth: true,
-		APIKeys:     map[string]bool{"pdp-key": true},
+		ServiceName:   "authorization-policy-service",
+		HTTPAddr:      ":0",
+		RequireAuth:   true,
+		ServiceAPIKey: "pdp-key",
+		APIKeys:       map[string]bool{"pdp-key": true},
 		APIKeyPrincipals: map[string]platform.APIKeyPrincipal{
 			"pdp-key": {ID: "svc:identity", Username: "identity-service", Role: "service", Scopes: []string{"authorization-policy-service:write"}},
 		},

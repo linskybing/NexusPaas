@@ -21,8 +21,8 @@ type imageRecord struct {
 	Data map[string]any
 }
 
-func publishEvent(app *platform.App, r *http.Request, name string, data map[string]any) {
-	if err := app.Events.Publish(r.Context(), contracts.Event{
+func registryEvent(r *http.Request, name string, data map[string]any) contracts.Event {
+	return contracts.Event{
 		EventID:       platform.NewUUID(),
 		Name:          name,
 		Source:        serviceName,
@@ -30,7 +30,11 @@ func publishEvent(app *platform.App, r *http.Request, name string, data map[stri
 		TraceID:       shared.FirstNonBlank(r.Header.Get("X-Trace-ID"), r.Header.Get("X-Request-ID"), platform.NewUUID()),
 		SchemaVersion: 1,
 		Data:          data,
-	}); err != nil {
+	}
+}
+
+func publishEvent(app *platform.App, r *http.Request, name string, data map[string]any) {
+	if err := app.Events.Publish(r.Context(), registryEvent(r, name, data)); err != nil {
 		slogError(name, err)
 	}
 }
@@ -57,6 +61,11 @@ func callHarbor(app *platform.App, r *http.Request, route platform.RouteSpec, fa
 		return result, adapterDegraded(result)
 	}
 	return result, nil
+}
+
+func harborDegraded(app *platform.App, r *http.Request, route platform.RouteSpec, fallbackOperation string) *platform.Degraded {
+	_, degraded := callHarbor(app, r, route, fallbackOperation)
+	return degraded
 }
 
 func adapterDegraded(result contracts.AdapterResult) *platform.Degraded {
@@ -261,9 +270,74 @@ func allowRuleFromCatalog(app *platform.App, r *http.Request, tagID, projectID, 
 func enrichRuleWithCatalog(app *platform.App, r *http.Request, rule map[string]any) map[string]any {
 	out := shared.CloneMap(rule)
 	if tag := catalogByID(app, r, shared.TextValue(rule, "tag_id", "tagId")); len(tag) > 0 {
+		promoteCatalogImageStatusFields(out, tag)
 		out["catalog"] = tag
 	}
 	return out
+}
+
+func promoteCatalogImageStatusFields(row, catalog map[string]any) {
+	promoteCatalogField(row, catalog, "digest", "digest", "image_digest", "imageDigest")
+	promoteCatalogField(row, catalog, "scan_status", "scan_status", "scanStatus")
+	promoteCatalogBoolField(row, catalog, "deleted", "deleted", "is_deleted", "isDeleted")
+	promoteCatalogBoolField(row, catalog, "unavailable", "unavailable", "is_unavailable", "isUnavailable")
+	promoteCatalogField(row, catalog, "status", "status")
+}
+
+func promoteCatalogField(row, catalog map[string]any, target string, sources ...string) {
+	if imageStatusFieldPresent(row, target) {
+		return
+	}
+	for _, source := range sources {
+		value, ok := catalog[source]
+		if ok && imageStatusValuePresent(value) {
+			row[target] = value
+			return
+		}
+	}
+}
+
+func promoteCatalogBoolField(row, catalog map[string]any, target string, sources ...string) {
+	if imageStatusFieldPresent(row, target) {
+		return
+	}
+	for _, source := range sources {
+		value, ok := catalog[source]
+		if ok && imageStatusValuePresent(value) {
+			row[target] = canonicalImageBool(value)
+			return
+		}
+	}
+}
+
+func imageStatusFieldPresent(row map[string]any, key string) bool {
+	value, ok := row[key]
+	return ok && imageStatusValuePresent(value)
+}
+
+func imageStatusValuePresent(value any) bool {
+	if value == nil {
+		return false
+	}
+	if text, ok := value.(string); ok {
+		return strings.TrimSpace(text) != ""
+	}
+	return true
+}
+
+func canonicalImageBool(value any) any {
+	text, ok := value.(string)
+	if !ok {
+		return value
+	}
+	switch {
+	case strings.EqualFold(strings.TrimSpace(text), "true"):
+		return true
+	case strings.EqualFold(strings.TrimSpace(text), "false"):
+		return false
+	default:
+		return value
+	}
 }
 
 func catalogByID(app *platform.App, r *http.Request, id string) map[string]any {
@@ -309,15 +383,23 @@ func setImageRequestStatus(app *platform.App, r *http.Request, id, statusValue, 
 		return http.StatusNotFound, shared.ErrorData("image request not found"), nil
 	}
 	update := map[string]any{"status": statusValue, "reviewed_by": actor, "updated_at": time.Now().UTC()}
-	updated, ok := app.Store.Update(r.Context(), imageRequestsResource, id, update)
-	if !ok {
+	var build func(contracts.Record[map[string]any]) contracts.Event
+	switch statusValue {
+	case "approved":
+		build = func(rec contracts.Record[map[string]any]) contracts.Event {
+			return registryEvent(r, "ImageApproved", rec.Data)
+		}
+	case "rejected":
+		build = func(rec contracts.Record[map[string]any]) contracts.Event {
+			return registryEvent(r, "ImageRejected", rec.Data)
+		}
+	}
+	updated, ok, err := app.UpdateRecordWithEvent(r.Context(), imageRequestsResource, id, update, build)
+	if err != nil || !ok {
 		return http.StatusInternalServerError, shared.ErrorData("image request update failed"), nil
 	}
 	if statusValue == "approved" {
 		upsertApprovedRule(app, r, updated.Data, actor)
-		publishEvent(app, r, "ImageApproved", updated.Data)
-	} else if statusValue == "rejected" {
-		publishEvent(app, r, "ImageRejected", updated.Data)
 	}
 	_ = record
 	return http.StatusOK, updated.Data, nil

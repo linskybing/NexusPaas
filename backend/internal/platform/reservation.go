@@ -3,6 +3,8 @@ package platform
 import (
 	"log/slog"
 	"net/http"
+
+	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 )
 
 // reservationStateMachine encodes the quota-reservation lifecycle policy:
@@ -46,12 +48,16 @@ func (a *App) handleReservation(r *httpRequest, route RouteSpec, state string) (
 	}
 	payload["state"] = state
 	payload["idempotency_key"] = firstNonEmpty(r.IdempotencyKey, newID())
-	record, err := a.Store.Create(r.Context(), route.Resource, payload)
+	eventName := reservationFSM.eventName(state)
+	var buildEvent recordEventBuilder
+	if eventName != "" {
+		buildEvent = func(record contracts.Record[map[string]any]) contracts.Event {
+			return a.newEvent(r, eventName, reservationEventData(record.ID, state, record.Data))
+		}
+	}
+	record, err := a.createRecordWithEvent(r, route.Resource, payload, buildEvent)
 	if err != nil {
 		return createErrorResponse(err)
-	}
-	if eventName := reservationFSM.eventName(state); eventName != "" {
-		a.publishEvent(r, eventName, reservationEventData(record.ID, state, record.Data))
 	}
 	return http.StatusCreated, record
 }
@@ -69,13 +75,17 @@ func (a *App) handleReservationTransition(r *httpRequest, route RouteSpec, state
 	if !reservationFSM.transitionAllowed(current, state) {
 		return http.StatusConflict, map[string]any{"id": id, "state": current, "requested": state}
 	}
-	updated, ok := a.Store.Update(r.Context(), "scheduler-quota-service:reservations", id, map[string]any{"state": state})
-	if !ok {
-		slog.Error("reservation state update failed", "reservation_id", id, "state", state)
-		return http.StatusInternalServerError, map[string]any{"message": "reservation update failed"}
+	eventName := reservationFSM.eventName(state)
+	var buildEvent recordEventBuilder
+	if eventName != "" {
+		buildEvent = func(record contracts.Record[map[string]any]) contracts.Event {
+			return a.newEvent(r, eventName, reservationEventData(id, state, record.Data))
+		}
 	}
-	if eventName := reservationFSM.eventName(state); eventName != "" {
-		a.publishEvent(r, eventName, reservationEventData(id, state, updated.Data))
+	updated, ok, err := a.updateRecordWithEvent(r, "scheduler-quota-service:reservations", id, map[string]any{"state": state}, buildEvent)
+	if err != nil || !ok {
+		slog.Error("reservation state update failed", "reservation_id", id, "state", state, "error", err)
+		return http.StatusInternalServerError, map[string]any{"message": "reservation update failed"}
 	}
 	return http.StatusOK, updated
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 )
 
 func TestPostgresStoreCRUDWithQueryLayer(t *testing.T) {
@@ -403,6 +404,171 @@ func TestPostgresStoreNextIDUsesRecordsAndHighWaterMark(t *testing.T) {
 	}
 }
 
+func TestPostgresStoreCreateWithEventCommitsRecordAndOutboxTogether(t *testing.T) {
+	now := time.Date(2026, 6, 20, 16, 0, 0, 0, time.UTC)
+	tx := &fakePostgresTx{
+		fakePostgresDB: fakePostgresDB{
+			queryRows: []*fakePostgresRow{{values: []any{
+				"r1",
+				[]byte(`{"id":"r1","name":"created"}`),
+				1,
+				now,
+				now,
+			}}},
+			execTags: []pgconn.CommandTag{pgconn.NewCommandTag("INSERT 0 1")},
+		},
+	}
+	store := &PostgresStore{db: &fakePostgresDB{tx: tx}}
+	record, err := store.CreateWithEvent(context.Background(), "svc:records", map[string]any{"id": "r1", "name": "created"}, func(record contracts.Record[map[string]any]) contracts.Event {
+		event := sampleEvent("event-r1")
+		event.Data = record.Data
+		return event
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.ID != "r1" || !tx.committed || !tx.rolledBack {
+		t.Fatalf("record=%#v committed=%v rolledBack=%v, want committed transaction", record, tx.committed, tx.rolledBack)
+	}
+	queries := strings.Join(tx.queries, "\n")
+	if !strings.Contains(queries, "INSERT INTO platform_records") || !strings.Contains(queries, "INSERT INTO platform_event_outbox") {
+		t.Fatalf("transaction queries = %s, want record and outbox inserts", queries)
+	}
+}
+
+func TestPostgresStoreCreateWithEventRollsBackWhenOutboxInsertFails(t *testing.T) {
+	now := time.Date(2026, 6, 20, 16, 30, 0, 0, time.UTC)
+	tx := &fakePostgresTx{
+		fakePostgresDB: fakePostgresDB{
+			queryRows: []*fakePostgresRow{{values: []any{
+				"r1",
+				[]byte(`{"id":"r1","name":"created"}`),
+				1,
+				now,
+				now,
+			}}},
+			execErrs: []error{errors.New("outbox insert failed")},
+		},
+	}
+	store := &PostgresStore{db: &fakePostgresDB{tx: tx}}
+	_, err := store.CreateWithEvent(context.Background(), "svc:records", map[string]any{"id": "r1"}, func(record contracts.Record[map[string]any]) contracts.Event {
+		event := sampleEvent("event-r1")
+		event.Data = record.Data
+		return event
+	})
+	if err == nil {
+		t.Fatal("CreateWithEvent() error = nil, want outbox insert failure")
+	}
+	if tx.committed || !tx.rolledBack {
+		t.Fatalf("committed=%v rolledBack=%v, want rollback without commit", tx.committed, tx.rolledBack)
+	}
+}
+
+func TestPostgresStoreUpdateWithEventCommitsRecordAndOutboxTogether(t *testing.T) {
+	now := time.Date(2026, 6, 20, 17, 0, 0, 0, time.UTC)
+	tx := &fakePostgresTx{
+		fakePostgresDB: fakePostgresDB{
+			queryRows: []*fakePostgresRow{{values: []any{
+				"r1",
+				[]byte(`{"id":"r1","name":"updated"}`),
+				2,
+				now,
+				now.Add(time.Minute),
+			}}},
+			execTags: []pgconn.CommandTag{pgconn.NewCommandTag("INSERT 0 1")},
+		},
+	}
+	store := &PostgresStore{db: &fakePostgresDB{tx: tx}}
+	record, ok, err := store.UpdateWithEvent(context.Background(), "svc:records", "r1", map[string]any{"name": "updated"}, func(record contracts.Record[map[string]any]) contracts.Event {
+		event := sampleEvent("event-r1-updated")
+		event.Data = record.Data
+		return event
+	})
+	if err != nil || !ok {
+		t.Fatalf("UpdateWithEvent() record=%#v ok=%v err=%v, want updated", record, ok, err)
+	}
+	if record.Version != 2 || !tx.committed || !tx.rolledBack {
+		t.Fatalf("record=%#v committed=%v rolledBack=%v, want committed update", record, tx.committed, tx.rolledBack)
+	}
+	queries := strings.Join(tx.queries, "\n")
+	if !strings.Contains(queries, "UPDATE platform_records") || !strings.Contains(queries, "INSERT INTO platform_event_outbox") {
+		t.Fatalf("transaction queries = %s, want update and outbox insert", queries)
+	}
+}
+
+func TestPostgresStoreDeleteWithEventCommitsDeleteAndOutboxTogether(t *testing.T) {
+	tx := &fakePostgresTx{
+		fakePostgresDB: fakePostgresDB{
+			execTags: []pgconn.CommandTag{
+				pgconn.NewCommandTag("DELETE 1"),
+				pgconn.NewCommandTag("INSERT 0 1"),
+			},
+		},
+	}
+	store := &PostgresStore{db: &fakePostgresDB{tx: tx}}
+	deleted, err := store.DeleteWithEvent(context.Background(), "svc:records", "r1", func(deleted bool) contracts.Event {
+		event := sampleEvent("event-r1-deleted")
+		event.Data = map[string]any{"id": "r1", "deleted": deleted}
+		return event
+	})
+	if err != nil || !deleted {
+		t.Fatalf("DeleteWithEvent() deleted=%v err=%v, want deleted", deleted, err)
+	}
+	if !tx.committed || !tx.rolledBack {
+		t.Fatalf("committed=%v rolledBack=%v, want committed delete", tx.committed, tx.rolledBack)
+	}
+	queries := strings.Join(tx.queries, "\n")
+	if !strings.Contains(queries, "DELETE FROM platform_records") || !strings.Contains(queries, "INSERT INTO platform_event_outbox") {
+		t.Fatalf("transaction queries = %s, want delete and outbox insert", queries)
+	}
+}
+
+func TestPostgresStoreRunInTxCommitsAllWritesAndEvents(t *testing.T) {
+	now := time.Date(2026, 6, 21, 9, 0, 0, 0, time.UTC)
+	tx := &fakePostgresTx{
+		fakePostgresDB: fakePostgresDB{
+			queryRows: []*fakePostgresRow{
+				{values: []any{"a", []byte(`{"id":"a"}`), 1, now, now}},
+				{values: []any{"b", []byte(`{"id":"b"}`), 1, now, now}},
+			},
+			execTags: []pgconn.CommandTag{pgconn.NewCommandTag("INSERT 0 1")},
+		},
+	}
+	store := &PostgresStore{db: &fakePostgresDB{tx: tx}}
+	err := store.RunInTx(context.Background(), func(stx StoreTx) error {
+		if _, err := stx.Create(context.Background(), "svc:records", map[string]any{"id": "a"}); err != nil {
+			return err
+		}
+		if _, err := stx.Create(context.Background(), "svc:records", map[string]any{"id": "b"}); err != nil {
+			return err
+		}
+		stx.Emit(sampleEvent("evt-cascade"))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tx.committed || !tx.rolledBack {
+		t.Fatalf("committed=%v rolledBack=%v, want committed transaction", tx.committed, tx.rolledBack)
+	}
+	queries := strings.Join(tx.queries, "\n")
+	if strings.Count(queries, "INSERT INTO platform_records") != 2 || !strings.Contains(queries, "INSERT INTO platform_event_outbox") {
+		t.Fatalf("transaction queries = %s, want two record inserts and one outbox insert", queries)
+	}
+}
+
+func TestPostgresStoreRunInTxRollsBackOnCallbackError(t *testing.T) {
+	tx := &fakePostgresTx{fakePostgresDB: fakePostgresDB{}}
+	store := &PostgresStore{db: &fakePostgresDB{tx: tx}}
+	wantErr := errors.New("cascade aborted")
+	if err := store.RunInTx(context.Background(), func(StoreTx) error { return wantErr }); err != wantErr {
+		t.Fatalf("RunInTx err = %v, want %v", err, wantErr)
+	}
+	if tx.committed || !tx.rolledBack {
+		t.Fatalf("committed=%v rolledBack=%v, want rollback without commit", tx.committed, tx.rolledBack)
+	}
+}
+
 func identityColumnMap(columns []identityColumnValue) map[string]any {
 	values := map[string]any{}
 	for _, column := range columns {
@@ -423,6 +589,34 @@ func TestNewBackingResourcesInjectsPostgresStoreWhenDatabaseURLIsConfigured(t *t
 	app := NewApp(Config{ServiceName: "all"}, backing.Options...)
 	if _, ok := app.Store.(*PostgresStore); !ok {
 		t.Fatalf("store = %T, want *PostgresStore", app.Store)
+	}
+	if _, ok := app.Events.(*PostgresEventBus); !ok {
+		t.Fatalf("events = %T, want *PostgresEventBus", app.Events)
+	}
+}
+
+func TestNewBackingResourcesRelaysPostgresOutboxToRedisWhenBothAreConfigured(t *testing.T) {
+	backing, err := NewBackingResources(context.Background(), Config{
+		DatabaseURL:         "postgres://user:pass@localhost:1/db?sslmode=disable",
+		EventBusURL:         "redis://localhost:6379/1",
+		EventRelayBatchSize: 7,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backing.Close()
+
+	app := NewApp(Config{ServiceName: "all"}, backing.Options...)
+	if _, ok := app.Events.(*PostgresEventBus); !ok {
+		t.Fatalf("events = %T, want *PostgresEventBus primary", app.Events)
+	}
+	if got, want := app.MaintenanceTaskNames(), []string{"event-outbox-relay"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("maintenance tasks = %#v, want %#v", got, want)
+	}
+
+	isolated := NewApp(Config{ServiceName: "identity-service"}, backing.Options...)
+	if got := isolated.MaintenanceTaskNames(); len(got) != 0 {
+		t.Fatalf("isolated maintenance tasks = %#v, want none", got)
 	}
 }
 

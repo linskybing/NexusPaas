@@ -80,6 +80,22 @@ func (repo recordStoreSchedulerPreemptionPriorityRepository) AppendPreemptionVic
 	repo.store.Update(ctx, preemptionRecordsResource, id, map[string]any{"victims": victims})
 }
 
+func (repo recordStoreSchedulerPreemptionPriorityRepository) AppendPreemptionVictimTx(
+	ctx context.Context,
+	tx platform.StoreTx,
+	id string,
+	victim map[string]any,
+) error {
+	record, found := repo.FindPreemptionRecord(ctx, id)
+	if !found {
+		return nil
+	}
+	victims := preemptionListOfMaps(record.Data["victims"])
+	victims = append(victims, shared.CloneMap(victim))
+	_, _, err := tx.Update(ctx, preemptionRecordsResource, id, map[string]any{"victims": victims})
+	return err
+}
+
 func (repo recordStoreSchedulerPreemptionPriorityRepository) PreemptionRecordVictims(
 	ctx context.Context,
 	id string,

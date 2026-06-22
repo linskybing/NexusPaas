@@ -7,6 +7,11 @@ import (
 	"strings"
 )
 
+const (
+	userAPITokenPrefix   = "nexuspaas"
+	userAPITokenIDPrefix = "AT"
+)
+
 // APIKeyPrincipal binds a static API key to an explicit service/user identity.
 // Production config requires one binding per enabled API_KEYS entry.
 type APIKeyPrincipal struct {
@@ -29,6 +34,10 @@ func (p APIKeyPrincipal) normalized() APIKeyPrincipal {
 		p.Role = "admin"
 	}
 	return p
+}
+
+func (p APIKeyPrincipal) Normalized() APIKeyPrincipal {
+	return p.normalized()
 }
 
 func (p APIKeyPrincipal) userData() map[string]any {
@@ -57,6 +66,26 @@ func (a *App) authorizeStaticAPIKey(r *http.Request, presented string) bool {
 		applyAuthHeaders(r, principal.userData())
 	}
 	return true
+}
+
+func FormatUserAPIToken(id, secret string) string {
+	id = strings.TrimSpace(id)
+	secret = strings.TrimSpace(secret)
+	if id == "" || secret == "" {
+		return ""
+	}
+	return userAPITokenPrefix + "_" + id + "_" + secret
+}
+
+func ParseUserAPITokenID(token string) (string, bool) {
+	parts := strings.SplitN(strings.TrimSpace(token), "_", 3)
+	if len(parts) != 3 || parts[0] != userAPITokenPrefix || parts[1] == "" || parts[2] == "" {
+		return "", false
+	}
+	if !strings.HasPrefix(parts[1], userAPITokenIDPrefix) || len(parts[1]) == len(userAPITokenIDPrefix) {
+		return "", false
+	}
+	return parts[1], true
 }
 
 func apiKeyAllowed(presented string, configured map[string]bool) bool {

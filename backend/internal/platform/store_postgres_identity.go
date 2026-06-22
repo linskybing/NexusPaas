@@ -96,6 +96,15 @@ func (s *PostgresStore) createIdentityRecord(
 	spec identityPostgresResource,
 	data map[string]any,
 ) (contracts.Record[map[string]any], error) {
+	return createIdentityRecordIn(ctx, s.db, spec, data)
+}
+
+func createIdentityRecordIn(
+	ctx context.Context,
+	db postgresStoreExecutor,
+	spec identityPostgresResource,
+	data map[string]any,
+) (contracts.Record[map[string]any], error) {
 	payloadMap := cloneMap(data)
 	id := asString(payloadMap["id"])
 	if id == "" {
@@ -123,7 +132,7 @@ func (s *PostgresStore) createIdentityRecord(
 		strings.Join(columns, ", "),
 		postgresPlaceholders(len(columns)),
 	)
-	record, err := scanIdentityRecord(s.db.QueryRow(ctx, query, args...))
+	record, err := scanIdentityRecord(db.QueryRow(ctx, query, args...))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return contracts.Record[map[string]any]{}, CreateConflictError{Resource: spec.resource, ID: id}
@@ -181,12 +190,26 @@ func (s *PostgresStore) updateIdentityRecord(
 	id string,
 	data map[string]any,
 ) (contracts.Record[map[string]any], bool) {
+	record, ok, err := updateIdentityRecordIn(ctx, s.db, spec, id, data)
+	if err != nil {
+		slog.Error("postgres identity update failed", "resource", spec.resource, "id", id, "error", err)
+		return contracts.Record[map[string]any]{}, false
+	}
+	return record, ok
+}
+
+func updateIdentityRecordIn(
+	ctx context.Context,
+	db postgresStoreExecutor,
+	spec identityPostgresResource,
+	id string,
+	data map[string]any,
+) (contracts.Record[map[string]any], bool, error) {
 	patchMap := cloneMap(data)
 	sanitizeIdentityPayload(spec, patchMap)
 	patch, err := json.Marshal(patchMap)
 	if err != nil {
-		slog.Error("postgres identity update marshal failed", "resource", spec.resource, "id", id, "error", err)
-		return contracts.Record[map[string]any]{}, false
+		return contracts.Record[map[string]any]{}, false, fmt.Errorf("marshal identity patch: %w", err)
 	}
 	sets := []string{"payload = payload || $2::jsonb", "version = version + 1", "updated_at = now()"}
 	args := []any{id, patch}
@@ -199,24 +222,32 @@ func (s *PostgresStore) updateIdentityRecord(
 		spec.table,
 		strings.Join(sets, ", "),
 	)
-	record, err := scanIdentityRecord(s.db.QueryRow(ctx, query, args...))
+	record, err := scanIdentityRecord(db.QueryRow(ctx, query, args...))
 	if err != nil {
-		if !errors.Is(err, pgx.ErrNoRows) {
-			slog.Error("postgres identity update failed", "resource", spec.resource, "id", id, "error", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return contracts.Record[map[string]any]{}, false, nil
 		}
-		return contracts.Record[map[string]any]{}, false
+		return contracts.Record[map[string]any]{}, false, fmt.Errorf("update identity record: %w", err)
 	}
-	return record, true
+	return record, true, nil
 }
 
 func (s *PostgresStore) deleteIdentityRecord(ctx context.Context, spec identityPostgresResource, id string) bool {
-	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", spec.table)
-	tag, err := s.db.Exec(ctx, query, id)
+	deleted, err := deleteIdentityRecordIn(ctx, s.db, spec, id)
 	if err != nil {
 		slog.Error("postgres identity delete failed", "resource", spec.resource, "id", id, "error", err)
 		return false
 	}
-	return tag.RowsAffected() > 0
+	return deleted
+}
+
+func deleteIdentityRecordIn(ctx context.Context, db postgresStoreExecutor, spec identityPostgresResource, id string) (bool, error) {
+	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", spec.table)
+	tag, err := db.Exec(ctx, query, id)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 func (s *PostgresStore) nextIdentityID(spec identityPostgresResource, prefix string, base, width int) string {

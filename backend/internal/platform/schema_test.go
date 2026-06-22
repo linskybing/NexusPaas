@@ -70,3 +70,17 @@ func TestFieldSchemaValidatesUpdatePath(t *testing.T) {
 		t.Fatalf("update correct-type status=%d want 200", status)
 	}
 }
+
+func TestPlatformSchemaContainsDurableOutboxInboxTables(t *testing.T) {
+	for _, want := range []string{
+		"CREATE TABLE IF NOT EXISTS platform_event_outbox",
+		"CREATE INDEX IF NOT EXISTS idx_platform_event_outbox_relay",
+		"CREATE TABLE IF NOT EXISTS platform_event_inbox",
+		"CREATE TABLE IF NOT EXISTS platform_event_checkpoints",
+		"CHECK (relay_status IN",
+	} {
+		if !strings.Contains(platformSchemaSQL, want) {
+			t.Fatalf("platform schema missing %q", want)
+		}
+	}
+}

@@ -62,6 +62,40 @@ func (r recordStoreWorkloadConfigRepository) CreateConfig(
 	return r.create(ctx, configsResource, data)
 }
 
+// CreateConfigWithEvent persists a config file and its domain event in one
+// transaction (when the store supports it), keeping the config resource key
+// owned by this repository. Prefer this over CreateConfig + a separate publish
+// so a crash cannot leave a config without its event.
+func (r recordStoreWorkloadConfigRepository) CreateConfigWithEvent(
+	ctx context.Context,
+	app *platform.App,
+	data map[string]any,
+	build func(contracts.Record[map[string]any]) contracts.Event,
+) (contracts.Record[map[string]any], error) {
+	return app.CreateRecordWithEvent(ctx, configsResource, shared.CloneMap(data), build)
+}
+
+// UpdateConfigWithEvent is the update counterpart to CreateConfigWithEvent.
+func (r recordStoreWorkloadConfigRepository) UpdateConfigWithEvent(
+	ctx context.Context,
+	app *platform.App,
+	id string,
+	data map[string]any,
+	build func(contracts.Record[map[string]any]) contracts.Event,
+) (contracts.Record[map[string]any], bool, error) {
+	return app.UpdateRecordWithEvent(ctx, configsResource, id, shared.CloneMap(data), build)
+}
+
+// DeleteConfigWithEvent is the delete counterpart to CreateConfigWithEvent.
+func (r recordStoreWorkloadConfigRepository) DeleteConfigWithEvent(
+	ctx context.Context,
+	app *platform.App,
+	id string,
+	build func(deleted bool) contracts.Event,
+) (bool, error) {
+	return app.DeleteRecordWithEvent(ctx, configsResource, id, build)
+}
+
 func (r recordStoreWorkloadConfigRepository) GetConfig(
 	ctx context.Context,
 	id string,
@@ -117,16 +151,21 @@ func (r recordStoreWorkloadConfigRepository) CommitVersion(
 	if r.store == nil {
 		return contracts.Record[map[string]any]{}, errWorkloadConfigRepositoryUnavailable
 	}
-	if now.IsZero() {
-		now = time.Now().UTC()
+	return r.create(ctx, versionsResource, committedVersionPayload(configID, data, now))
+}
+
+func (r recordStoreWorkloadConfigRepository) CommitVersionWithEvent(
+	ctx context.Context,
+	app *platform.App,
+	configID string,
+	data map[string]any,
+	now time.Time,
+	build func(contracts.Record[map[string]any]) contracts.Event,
+) (contracts.Record[map[string]any], error) {
+	if r.store == nil {
+		return contracts.Record[map[string]any]{}, errWorkloadConfigRepositoryUnavailable
 	}
-	version := shared.CloneMap(data)
-	sum := sha256.Sum256([]byte(shared.TextValue(version, "content")))
-	version["sha256"] = hex.EncodeToString(sum[:])
-	version["immutable"] = true
-	version["config_id"] = shared.FirstNonEmpty(shared.TextValue(version, "config_id", "configId"), configID)
-	version["committed_at"] = now.UTC().Format(time.RFC3339)
-	return r.create(ctx, versionsResource, version)
+	return app.CreateRecordWithEvent(ctx, versionsResource, committedVersionPayload(configID, data, now), build)
 }
 
 func (r recordStoreWorkloadConfigRepository) CreateVersion(
@@ -201,6 +240,43 @@ func (r recordStoreWorkloadConfigRepository) CreateInstanceCommand(
 	payload["status"] = "accepted"
 	payload["requested_at"] = now.UTC().Format(time.RFC3339)
 	return r.create(ctx, commandsResource, payload)
+}
+
+func (r recordStoreWorkloadConfigRepository) CreateInstanceCommandWithEvent(
+	ctx context.Context,
+	app *platform.App,
+	configID string,
+	action string,
+	data map[string]any,
+	now time.Time,
+	build func(contracts.Record[map[string]any]) contracts.Event,
+) (contracts.Record[map[string]any], error) {
+	if r.store == nil {
+		return contracts.Record[map[string]any]{}, errWorkloadConfigRepositoryUnavailable
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	payload := shared.CloneMap(data)
+	payload["id"] = r.NextCommandID()
+	payload["config_id"] = configID
+	payload["action"] = action
+	payload["status"] = "accepted"
+	payload["requested_at"] = now.UTC().Format(time.RFC3339)
+	return app.CreateRecordWithEvent(ctx, commandsResource, payload, build)
+}
+
+func committedVersionPayload(configID string, data map[string]any, now time.Time) map[string]any {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	version := shared.CloneMap(data)
+	sum := sha256.Sum256([]byte(shared.TextValue(version, "content")))
+	version["sha256"] = hex.EncodeToString(sum[:])
+	version["immutable"] = true
+	version["config_id"] = shared.FirstNonEmpty(shared.TextValue(version, "config_id", "configId"), configID)
+	version["committed_at"] = now.UTC().Format(time.RFC3339)
+	return version
 }
 
 func (r recordStoreWorkloadConfigRepository) nextID(resource, prefix string) string {

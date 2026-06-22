@@ -1,11 +1,23 @@
 package platform
 
 import (
+	"bytes"
 	"io"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/linskybing/nexuspaas/backend/internal/contracts"
+)
+
+const (
+	gatewayProxyAction       = "gateway_proxy"
+	headerForwardedHost      = "X-Forwarded-Host"
+	headerForwardedProto     = "X-Forwarded-Proto"
+	headerForwardedProtoHTTP = "http"
+	headerForwardedProtoTLS  = "https"
 )
 
 func (a *App) callAdapter(r *httpRequest, adapterName string, route RouteSpec) contracts.AdapterResult {
@@ -136,6 +148,156 @@ func rawResponseFromAdapter(response contracts.AdapterProxyResponse) RawResponse
 		HeaderValues: headers,
 		Body:         append([]byte(nil), response.Body...),
 	}
+}
+
+func (a *App) handleGatewayProxy(r *httpRequest, route RouteSpec) (int, any) {
+	owner := routeService(route)
+	baseURL := strings.TrimSpace(a.Config.ServiceURLs[owner])
+	if baseURL == "" {
+		return http.StatusBadGateway, map[string]any{"error": "bad_gateway", "message": "downstream service URL is not configured"}
+	}
+	endpoint, err := serviceEndpoint(baseURL, r.URL.Path, r.URL.RawQuery)
+	if err != nil {
+		return http.StatusBadGateway, map[string]any{"error": "bad_gateway", "message": "downstream service URL is invalid"}
+	}
+	var body []byte
+	if r.Body != nil {
+		body, err = io.ReadAll(r.Body)
+		if err != nil {
+			return http.StatusBadRequest, map[string]any{"error": errInvalidRequestBody, "message": err.Error()}
+		}
+	}
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return http.StatusBadGateway, map[string]any{"error": "bad_gateway", "message": "downstream request could not be created"}
+	}
+	req.Header = gatewayProxyRequestHeader(r.Header)
+	if gatewayProxyOIDCBrowserRoute(route, r.URL.Path) {
+		setGatewayProxyOIDCForwardedOrigin(req.Header, r.Request)
+	}
+	timeout := a.Config.AdapterTimeout
+	if timeout <= 0 {
+		timeout = 2 * time.Second
+	}
+	resp, err := gatewayProxyHTTPClient(timeout, gatewayProxyBrowserRedirectRoute(route, r.URL.Path)).Do(req)
+	if err != nil {
+		return http.StatusBadGateway, map[string]any{"error": "bad_gateway", "message": "downstream service request failed"}
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return http.StatusBadGateway, map[string]any{"error": "bad_gateway", "message": "downstream response could not be read"}
+	}
+	return resp.StatusCode, RawResponse{
+		ContentType:  resp.Header.Get(headerContentType),
+		HeaderValues: cloneProxyHeader(resp.Header),
+		Body:         raw,
+	}
+}
+
+func gatewayProxyRequestHeader(header http.Header) http.Header {
+	allowed := map[string]bool{
+		"Accept":          true,
+		"Authorization":   true,
+		"Content-Type":    true,
+		"Cookie":          true,
+		"Idempotency-Key": true,
+		"Traceparent":     true,
+		"X-Api-Key":       true,
+		"X-Request-Id":    true,
+		"X-Trace-Id":      true,
+	}
+	cloned := http.Header{}
+	connectionHeaders := connectionHeaderTokens(header)
+	for key, values := range header {
+		canonicalKey := http.CanonicalHeaderKey(key)
+		if !allowed[canonicalKey] || isHopByHopHeader(key) || connectionHeaders[canonicalKey] {
+			continue
+		}
+		for _, value := range values {
+			cloned.Add(canonicalKey, value)
+		}
+	}
+	return cloned
+}
+
+func gatewayProxyOIDCBrowserRoute(route RouteSpec, path string) bool {
+	return routeService(route) == identityServiceName && strings.HasPrefix(path, "/api/v1/oidc/")
+}
+
+func gatewayProxyBrowserRedirectRoute(route RouteSpec, path string) bool {
+	if routeService(route) != identityServiceName {
+		return false
+	}
+	return strings.HasPrefix(path, "/api/v1/oidc/") || strings.HasPrefix(path, "/dex/")
+}
+
+func gatewayProxyHTTPClient(timeout time.Duration, preserveRedirects bool) *http.Client {
+	client := &http.Client{Timeout: timeout}
+	if preserveRedirects {
+		client.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+	}
+	return client
+}
+
+func setGatewayProxyOIDCForwardedOrigin(header http.Header, r *http.Request) {
+	if host, ok := gatewayValidHostAuthority(r.Host); ok {
+		header.Set(headerForwardedHost, host)
+	}
+	if proto, ok := gatewayValidForwardedProto(r.Header.Values(headerForwardedProto)); ok {
+		header.Set(headerForwardedProto, proto)
+		return
+	}
+	if r.TLS != nil {
+		header.Set(headerForwardedProto, headerForwardedProtoTLS)
+		return
+	}
+	header.Set(headerForwardedProto, headerForwardedProtoHTTP)
+}
+
+func gatewayValidForwardedProto(values []string) (string, bool) {
+	if len(values) != 1 {
+		return "", false
+	}
+	value := strings.ToLower(strings.TrimSpace(values[0]))
+	if strings.Contains(value, ",") || (value != headerForwardedProtoHTTP && value != headerForwardedProtoTLS) {
+		return "", false
+	}
+	return value, true
+}
+
+func gatewayValidHostAuthority(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.Contains(value, ",") || strings.ContainsAny(value, " \t\r\n/\\@") {
+		return "", false
+	}
+	host := value
+	if splitHost, port, err := net.SplitHostPort(value); err == nil {
+		if !gatewayValidPort(port) {
+			return "", false
+		}
+		host = splitHost
+	} else if strings.Contains(value, ":") {
+		if !strings.HasPrefix(value, "[") || !strings.HasSuffix(value, "]") {
+			return "", false
+		}
+		host = strings.TrimSuffix(strings.TrimPrefix(value, "["), "]")
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" || strings.Contains(host, ",") || strings.ContainsAny(host, " \t\r\n/\\@") {
+		return "", false
+	}
+	return value, true
+}
+
+func gatewayValidPort(port string) bool {
+	if port == "" {
+		return false
+	}
+	value, err := strconv.Atoi(port)
+	return err == nil && value > 0 && value <= 65535
 }
 
 func shouldPublishRouteAudit(route RouteSpec, status int) bool {

@@ -130,6 +130,7 @@ func registeredResourceDependencyKeys() map[serviceResourceKey]bool {
 func explicitResourceClassifications() map[serviceResourceKey]resourceClassification {
 	return map[serviceResourceKey]resourceClassification{
 		{serviceAuditCompliance, serviceOrgProject + ":project_members"}: classCohostedOnlyFallback,
+		{serviceAuditCompliance, serviceOrgProject + ":user_groups"}:     classCohostedOnlyFallback,
 
 		{serviceAuthorizationPolicy, serviceIdentity + ":roles"}:                  classCohostedOnlyFallback,
 		{serviceAuthorizationPolicy, serviceIdentity + ":users"}:                  classCohostedOnlyFallback,

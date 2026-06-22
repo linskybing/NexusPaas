@@ -95,6 +95,41 @@ func (r recordStoreOrgProjectGroupGPURepository) CreateGroup(ctx context.Context
 	return groupRecordFromStore(record), nil
 }
 
+// CreateGroupWithEvent persists the group and its event in one transaction.
+func (r recordStoreOrgProjectGroupGPURepository) CreateGroupWithEvent(ctx context.Context, app *platform.App, group map[string]any, build func(contracts.Record[map[string]any]) contracts.Event) (orgProjectGroupRecord, error) {
+	if r.store == nil {
+		return orgProjectGroupRecord{}, errOrgProjectGroupGPUStoreUnavailable
+	}
+	record, err := app.CreateRecordWithEvent(ctx, groupsResource, shared.CloneMap(group), build)
+	if err != nil {
+		return orgProjectGroupRecord{}, err
+	}
+	return groupRecordFromStore(record), nil
+}
+
+// UpdateGroupWithEvent resolves the group id, then commits update+event in one tx.
+func (r recordStoreOrgProjectGroupGPURepository) UpdateGroupWithEvent(ctx context.Context, app *platform.App, id string, update map[string]any, build func(old, updated orgProjectGroupRecord) contracts.Event) (orgProjectGroupRecord, orgProjectGroupRecord, bool, error) {
+	if r.store == nil {
+		return orgProjectGroupRecord{}, orgProjectGroupRecord{}, false, nil
+	}
+	group, found := r.FindGroup(ctx, id)
+	if !found {
+		return orgProjectGroupRecord{}, orgProjectGroupRecord{}, false, nil
+	}
+	old, found := r.store.Get(ctx, groupsResource, group.ID)
+	if !found {
+		return orgProjectGroupRecord{}, orgProjectGroupRecord{}, false, nil
+	}
+	oldRec := groupRecordFromStore(old)
+	updated, ok, err := app.UpdateRecordWithEvent(ctx, groupsResource, group.ID, shared.CloneMap(update), func(rec contracts.Record[map[string]any]) contracts.Event {
+		return build(oldRec, groupRecordFromStore(rec))
+	})
+	if err != nil || !ok {
+		return orgProjectGroupRecord{}, orgProjectGroupRecord{}, false, err
+	}
+	return oldRec, groupRecordFromStore(updated), true, nil
+}
+
 func (r recordStoreOrgProjectGroupGPURepository) UpdateGroup(ctx context.Context, id string, update map[string]any) (orgProjectGroupRecord, orgProjectGroupRecord, bool) {
 	if r.store == nil {
 		return orgProjectGroupRecord{}, orgProjectGroupRecord{}, false
@@ -130,6 +165,32 @@ func (r recordStoreOrgProjectGroupGPURepository) DeleteGroupCascade(ctx context.
 		deletedMemberships += r.DeleteMembershipsByGroup(ctx, logicalID)
 	}
 	return group, deletedMemberships, true
+}
+
+func (r recordStoreOrgProjectGroupGPURepository) DeleteGroupCascadeTx(ctx context.Context, tx platform.StoreTx, id string) (orgProjectGroupRecord, int, bool, error) {
+	if r.store == nil {
+		return orgProjectGroupRecord{}, 0, false, nil
+	}
+	group, found := r.FindGroup(ctx, id)
+	if !found {
+		return orgProjectGroupRecord{}, 0, false, nil
+	}
+	deleted, err := tx.Delete(ctx, groupsResource, group.ID)
+	if err != nil || !deleted {
+		return orgProjectGroupRecord{}, 0, false, err
+	}
+	deletedMemberships, err := r.deleteMembershipsByGroupTx(ctx, tx, group.ID)
+	if err != nil {
+		return orgProjectGroupRecord{}, 0, false, err
+	}
+	if logicalID := groupID(group.Data); logicalID != "" && logicalID != group.ID {
+		logicalDeleted, err := r.deleteMembershipsByGroupTx(ctx, tx, logicalID)
+		if err != nil {
+			return orgProjectGroupRecord{}, 0, false, err
+		}
+		deletedMemberships += logicalDeleted
+	}
+	return group, deletedMemberships, true, nil
 }
 
 func (r recordStoreOrgProjectGroupGPURepository) NextGroupID() string {
@@ -180,6 +241,17 @@ func (r recordStoreOrgProjectGroupGPURepository) CreateMembership(ctx context.Co
 	return membershipRecordFromStore(record), nil
 }
 
+func (r recordStoreOrgProjectGroupGPURepository) CreateMembershipTx(ctx context.Context, tx platform.StoreTx, membership map[string]any) (orgProjectMembershipRecord, error) {
+	if r.store == nil {
+		return orgProjectMembershipRecord{}, errOrgProjectGroupGPUStoreUnavailable
+	}
+	record, err := tx.Create(ctx, userGroupsResource, shared.CloneMap(membership))
+	if err != nil {
+		return orgProjectMembershipRecord{}, err
+	}
+	return membershipRecordFromStore(record), nil
+}
+
 func (r recordStoreOrgProjectGroupGPURepository) UpdateMembershipRole(ctx context.Context, userID, groupID, role string, now time.Time) (orgProjectMembershipRecord, orgProjectMembershipRecord, bool) {
 	if r.store == nil {
 		return orgProjectMembershipRecord{}, orgProjectMembershipRecord{}, false
@@ -193,6 +265,21 @@ func (r recordStoreOrgProjectGroupGPURepository) UpdateMembershipRole(ctx contex
 		return orgProjectMembershipRecord{}, orgProjectMembershipRecord{}, false
 	}
 	return old, membershipRecordFromStore(updated), true
+}
+
+func (r recordStoreOrgProjectGroupGPURepository) UpdateMembershipRoleTx(ctx context.Context, tx platform.StoreTx, userID, groupID, role string, now time.Time) (orgProjectMembershipRecord, orgProjectMembershipRecord, bool, error) {
+	if r.store == nil {
+		return orgProjectMembershipRecord{}, orgProjectMembershipRecord{}, false, nil
+	}
+	old, found := r.FindMembership(ctx, userID, groupID)
+	if !found {
+		return orgProjectMembershipRecord{}, orgProjectMembershipRecord{}, false, nil
+	}
+	updated, ok, err := tx.Update(ctx, userGroupsResource, old.ID, map[string]any{"role": role, "updated_at": now})
+	if err != nil || !ok {
+		return orgProjectMembershipRecord{}, orgProjectMembershipRecord{}, false, err
+	}
+	return old, membershipRecordFromStore(updated), true, nil
 }
 
 func (r recordStoreOrgProjectGroupGPURepository) DeleteMembership(ctx context.Context, userID, groupID string) (orgProjectMembershipRecord, bool) {
@@ -209,6 +296,21 @@ func (r recordStoreOrgProjectGroupGPURepository) DeleteMembership(ctx context.Co
 	return membership, true
 }
 
+func (r recordStoreOrgProjectGroupGPURepository) DeleteMembershipTx(ctx context.Context, tx platform.StoreTx, userID, groupID string) (orgProjectMembershipRecord, bool, error) {
+	if r.store == nil {
+		return orgProjectMembershipRecord{}, false, nil
+	}
+	membership, found := r.FindMembership(ctx, userID, groupID)
+	if !found {
+		return orgProjectMembershipRecord{}, false, nil
+	}
+	deleted, err := tx.Delete(ctx, userGroupsResource, membership.ID)
+	if err != nil || !deleted {
+		return orgProjectMembershipRecord{}, false, err
+	}
+	return membership, true, nil
+}
+
 func (r recordStoreOrgProjectGroupGPURepository) DeleteMembershipsByGroup(ctx context.Context, groupID string) int {
 	if r.store == nil {
 		return 0
@@ -223,6 +325,26 @@ func (r recordStoreOrgProjectGroupGPURepository) DeleteMembershipsByGroup(ctx co
 		}
 	}
 	return count
+}
+
+func (r recordStoreOrgProjectGroupGPURepository) deleteMembershipsByGroupTx(ctx context.Context, tx platform.StoreTx, groupID string) (int, error) {
+	if r.store == nil {
+		return 0, nil
+	}
+	count := 0
+	for _, record := range r.store.List(ctx, userGroupsResource) {
+		if shared.TextValue(record.Data, "group_id", "groupId", "gid", "g_id") != groupID {
+			continue
+		}
+		deleted, err := tx.Delete(ctx, userGroupsResource, record.ID)
+		if err != nil {
+			return 0, err
+		}
+		if deleted {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func (r recordStoreOrgProjectGroupGPURepository) ListGPUClaimsByProject(ctx context.Context, projectID string) []orgProjectGPUClaimRecord {
@@ -267,6 +389,17 @@ func (r recordStoreOrgProjectGroupGPURepository) CreateGPUClaim(ctx context.Cont
 	return gpuClaimRecordFromStore(record), nil
 }
 
+func (r recordStoreOrgProjectGroupGPURepository) CreateGPUClaimTx(ctx context.Context, tx platform.StoreTx, claim map[string]any) (orgProjectGPUClaimRecord, error) {
+	if r.store == nil {
+		return orgProjectGPUClaimRecord{}, errOrgProjectGroupGPUStoreUnavailable
+	}
+	record, err := tx.Create(ctx, gpuClaimsResource, shared.CloneMap(claim))
+	if err != nil {
+		return orgProjectGPUClaimRecord{}, err
+	}
+	return gpuClaimRecordFromStore(record), nil
+}
+
 func (r recordStoreOrgProjectGroupGPURepository) DeleteGPUClaim(ctx context.Context, id string) (orgProjectGPUClaimRecord, bool) {
 	if r.store == nil || strings.TrimSpace(id) == "" {
 		return orgProjectGPUClaimRecord{}, false
@@ -279,6 +412,21 @@ func (r recordStoreOrgProjectGroupGPURepository) DeleteGPUClaim(ctx context.Cont
 		return orgProjectGPUClaimRecord{}, false
 	}
 	return gpuClaimRecordFromStore(record), true
+}
+
+func (r recordStoreOrgProjectGroupGPURepository) DeleteGPUClaimTx(ctx context.Context, tx platform.StoreTx, id string) (orgProjectGPUClaimRecord, bool, error) {
+	if r.store == nil || strings.TrimSpace(id) == "" {
+		return orgProjectGPUClaimRecord{}, false, nil
+	}
+	record, found := r.store.Get(ctx, gpuClaimsResource, id)
+	if !found {
+		return orgProjectGPUClaimRecord{}, false, nil
+	}
+	deleted, err := tx.Delete(ctx, gpuClaimsResource, id)
+	if err != nil || !deleted {
+		return orgProjectGPUClaimRecord{}, false, err
+	}
+	return gpuClaimRecordFromStore(record), true, nil
 }
 
 func (r recordStoreOrgProjectGroupGPURepository) DeleteGPUClaimsByProject(ctx context.Context, projectID string) int {
@@ -295,6 +443,26 @@ func (r recordStoreOrgProjectGroupGPURepository) DeleteGPUClaimsByProject(ctx co
 		}
 	}
 	return count
+}
+
+func (r recordStoreOrgProjectGroupGPURepository) DeleteGPUClaimsByProjectTx(ctx context.Context, tx platform.StoreTx, projectID string) (int, error) {
+	if r.store == nil {
+		return 0, nil
+	}
+	count := 0
+	for _, record := range r.store.List(ctx, gpuClaimsResource) {
+		if shared.TextValue(record.Data, "project_id", "projectId") != projectID {
+			continue
+		}
+		deleted, err := tx.Delete(ctx, gpuClaimsResource, record.ID)
+		if err != nil {
+			return 0, err
+		}
+		if deleted {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func groupRecordFromStore(record contracts.Record[map[string]any]) orgProjectGroupRecord {

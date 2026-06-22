@@ -6,7 +6,7 @@ CI_GATE := ./scripts/ci-security-gate.sh
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build fmt-check vet lint test coverage check ci-local ci-quick ci-docker ci-security ci-sonar ci-all beta-rc clean
+.PHONY: help build fmt-check vet lint test coverage check ci-local ci-quick ci-docker ci-security ci-sonar ci-all beta-rc perf-k6-core-read perf-k6-stream-credentials clean
 
 help:
 	@printf '%s\n' 'Backend developer targets:'
@@ -24,6 +24,8 @@ help:
 	@printf '%s\n' '  make ci-sonar     Run SonarScanner quality gate'
 	@printf '%s\n' '  make ci-all       Run all CI gates'
 	@printf '%s\n' '  make beta-rc      Run production beta RC gate'
+	@printf '%s\n' '  make perf-k6-core-read  Run optional k6 core read performance harness'
+	@printf '%s\n' '  make perf-k6-stream-credentials  Run optional k6 stream credential performance harness'
 	@printf '%s\n' '  make clean        Remove local coverage output'
 
 build:
@@ -64,6 +66,14 @@ ci-all:
 
 beta-rc:
 	$(BASH) $(CI_GATE) beta-rc
+
+perf-k6-core-read:
+	mkdir -p .tmp
+	k6 run scripts/perf/core-read-100vu.js
+
+perf-k6-stream-credentials:
+	mkdir -p .tmp
+	k6 run scripts/perf/stream-credentials-100vu.js
 
 clean:
 	rm -f $(COVERAGE_FILE)

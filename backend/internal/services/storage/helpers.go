@@ -13,8 +13,8 @@ import (
 	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
 
-func publishEvent(app *platform.App, r *http.Request, name string, data map[string]any) {
-	if err := app.Events.Publish(r.Context(), contracts.Event{
+func storageEvent(r *http.Request, name string, data map[string]any) contracts.Event {
+	return contracts.Event{
 		EventID:       platform.NewUUID(),
 		Name:          name,
 		Source:        serviceName,
@@ -22,7 +22,11 @@ func publishEvent(app *platform.App, r *http.Request, name string, data map[stri
 		TraceID:       shared.FirstNonBlank(r.Header.Get("X-Trace-ID"), r.Header.Get("X-Request-ID"), platform.NewUUID()),
 		SchemaVersion: 1,
 		Data:          data,
-	}); err != nil {
+	}
+}
+
+func publishEvent(app *platform.App, r *http.Request, name string, data map[string]any) {
+	if err := app.Events.Publish(r.Context(), storageEvent(r, name, data)); err != nil {
 		slog.Error("storage event publish failed", "event", name, "error", err)
 	}
 }
@@ -200,11 +204,15 @@ func commandGroupStorage(app *platform.App, r *http.Request, _ platform.RouteSpe
 	if !canReadGroup(app, r, groupID, userID) {
 		return http.StatusForbidden, shared.ErrorData(msgGroupMemberRequired), nil
 	}
-	updated, ok := storageRepo(app).UpdateGroupStorageStatus(r.Context(), groupID, pvcID, statusValue, time.Now().UTC())
+	updated, ok, err := storageRepo(app).UpdateGroupStorageStatusWithEvent(r.Context(), app, groupID, pvcID, statusValue, time.Now().UTC(), func(data map[string]any) contracts.Event {
+		return storageEvent(r, "GroupStorageCommanded", data)
+	})
+	if err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("group storage could not be updated"), nil
+	}
 	if !ok {
 		return http.StatusNotFound, shared.ErrorData("group storage not found"), nil
 	}
-	publishEvent(app, r, "GroupStorageCommanded", updated)
 	return http.StatusOK, updated, nil
 }
 
@@ -224,29 +232,45 @@ func batchStoragePermissions(app *platform.App, r *http.Request, delete bool) (i
 	result := batchResult()
 	for _, item := range payloadItems(payload) {
 		item["group_id"] = shared.FirstNonBlank(shared.TextValue(item, "group_id", "groupId"), groupID)
-		if delete {
-			storageRepo(app).DeleteStoragePermission(
-				r.Context(),
-				shared.TextValue(item, "group_id", "groupId"),
-				shared.TextValue(item, "pvc_id", "pvcId"),
-				shared.TextValue(item, "user_id", "userId"),
-			)
-		} else {
-			record, err := permissionRecord(item)
-			if err != nil {
-				result["failed"] = result["failed"].(int) + 1
-				result["errors"] = append(result["errors"].([]string), err.Error())
-				continue
-			}
-			if _, err := storageRepo(app).UpsertStoragePermission(r.Context(), record); err != nil {
-				result["failed"] = result["failed"].(int) + 1
-				result["errors"] = append(result["errors"].([]string), err.Error())
-				continue
-			}
+		if err := applyStoragePermissionItem(app, r, item, delete); err != nil {
+			result["failed"] = result["failed"].(int) + 1
+			result["errors"] = append(result["errors"].([]string), err.Error())
+			continue
 		}
 		result["succeeded"] = result["succeeded"].(int) + 1
 	}
 	return http.StatusOK, result, nil
+}
+
+func applyStoragePermissionItem(app *platform.App, r *http.Request, item map[string]any, delete bool) error {
+	if delete {
+		return deleteStoragePermissionItem(app, r, item)
+	}
+	record, err := permissionRecord(item)
+	if err != nil {
+		return err
+	}
+	_, err = storageRepo(app).UpsertStoragePermissionWithEvent(r.Context(), app, record, func(data map[string]any) contracts.Event {
+		return storageEvent(r, "StoragePermissionChanged", data)
+	})
+	return err
+}
+
+func deleteStoragePermissionItem(app *platform.App, r *http.Request, item map[string]any) error {
+	groupID := shared.TextValue(item, "group_id", "groupId")
+	pvcID := shared.TextValue(item, "pvc_id", "pvcId")
+	targetUserID := shared.TextValue(item, "user_id", "userId")
+	_, err := storageRepo(app).DeleteStoragePermissionWithEvent(
+		r.Context(),
+		app,
+		groupID,
+		pvcID,
+		targetUserID,
+		func(bool) contracts.Event {
+			return storageEvent(r, "StoragePermissionChanged", map[string]any{"group_id": groupID, "pvc_id": pvcID, "user_id": targetUserID, "action": "delete"})
+		},
+	)
+	return err
 }
 
 func permissionRecord(payload map[string]any) (map[string]any, error) {
@@ -289,10 +313,18 @@ func batchProjectPermissions(app *platform.App, r *http.Request, delete bool) (i
 	for _, item := range payloadItems(payload) {
 		targetUserID := shared.TextValue(item, "user_id", "userId")
 		if delete {
-			storageRepo(app).DeleteProjectPermission(r.Context(), projectID, pvcID, targetUserID)
+			if _, err := storageRepo(app).DeleteProjectPermissionWithEvent(r.Context(), app, projectID, pvcID, targetUserID, func(bool) contracts.Event {
+				return storageEvent(r, "ProjectStoragePermissionChanged", map[string]any{"project_id": projectID, "pvc_id": pvcID, "user_id": targetUserID, "action": "delete"})
+			}); err != nil {
+				result["failed"] = result["failed"].(int) + 1
+				result["errors"] = append(result["errors"].([]string), err.Error())
+				continue
+			}
 		} else {
 			record := projectPermissionRecord(projectID, pvcID, targetUserID, normalizePermission(shared.TextValue(item, "permission")))
-			if _, err := storageRepo(app).UpsertProjectPermission(r.Context(), record); err != nil {
+			if _, err := storageRepo(app).UpsertProjectPermissionWithEvent(r.Context(), app, record, func(data map[string]any) contracts.Event {
+				return storageEvent(r, "ProjectStoragePermissionChanged", data)
+			}); err != nil {
 				result["failed"] = result["failed"].(int) + 1
 				result["errors"] = append(result["errors"].([]string), err.Error())
 				continue
@@ -343,11 +375,12 @@ func userStorageCommand(app *platform.App, r *http.Request, _ platform.RouteSpec
 	payload := platform.DecodeMap(r)
 	size := shared.FirstNonBlank(shared.TextValue(payload, "size"), shared.TextValue(payload, "quota"), "10Gi")
 	record := map[string]any{"id": username, "username": username, "size": size, "status": statusValue, "updated_at": time.Now().UTC()}
-	updated, err := storageRepo(app).UpsertUserStorage(r.Context(), username, record)
+	updated, err := storageRepo(app).UpsertUserStorageWithEvent(r.Context(), app, username, record, func(data map[string]any) contracts.Event {
+		return storageEvent(r, "UserStorageChanged", data)
+	})
 	if err != nil {
 		return http.StatusConflict, shared.ErrorData("user storage could not be saved"), nil
 	}
-	publishEvent(app, r, "UserStorageChanged", updated)
 	return http.StatusOK, updated, nil
 }
 

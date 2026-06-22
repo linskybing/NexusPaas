@@ -84,11 +84,12 @@ func createQueue(app *platform.App, r *http.Request, _ platform.RouteSpec) (int,
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(err.Error()), nil
 	}
-	record, err := repo.CreateQueue(r.Context(), queue)
+	record, err := app.CreateRecordWithEvent(r.Context(), queuesResource, queue, func(rec contracts.Record[map[string]any]) contracts.Event {
+		return schedulerEvent(r, "QueueChanged", "created", changePayload(nil, rec.Data))
+	})
 	if err != nil {
 		return createError(err), nil, nil
 	}
-	publish(app, r, "QueueChanged", "created", record.Data)
 	return http.StatusCreated, record, nil
 }
 
@@ -114,15 +115,17 @@ func updateQueue(app *platform.App, r *http.Request, _ platform.RouteSpec) (int,
 	if repo == nil {
 		return http.StatusInternalServerError, shared.ErrorData(msgRepoUnavailable), nil
 	}
-	if _, found := repo.GetQueue(r.Context(), id); !found {
+	previous, found := repo.GetQueue(r.Context(), id)
+	if !found {
 		return http.StatusNotFound, shared.ErrorData(msgQueueNotFound), nil
 	}
 	update := normalizeQueueUpdate(payload)
-	record, ok := repo.UpdateQueue(r.Context(), id, update)
-	if !ok {
+	record, ok, err := app.UpdateRecordWithEvent(r.Context(), queuesResource, id, update, func(rec contracts.Record[map[string]any]) contracts.Event {
+		return schedulerEvent(r, "QueueChanged", "updated", changePayload(previous.Data, rec.Data))
+	})
+	if err != nil || !ok {
 		return http.StatusInternalServerError, shared.ErrorData("queue update failed"), nil
 	}
-	publish(app, r, "QueueChanged", "updated", record.Data)
 	return http.StatusOK, record, nil
 }
 
@@ -132,11 +135,40 @@ func deleteQueue(app *platform.App, r *http.Request, _ platform.RouteSpec) (int,
 	if repo == nil {
 		return http.StatusInternalServerError, shared.ErrorData(msgRepoUnavailable), nil
 	}
-	if !repo.DeleteQueueAndRemoveFromPlans(r.Context(), id) {
+	deleted, removed, err := deleteQueueWithEvent(app, r, repo, id)
+	if err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("queue could not be deleted"), nil
+	}
+	if !removed {
 		return http.StatusNotFound, shared.ErrorData(msgQueueNotFound), nil
 	}
-	publish(app, r, "QueueChanged", "deleted", map[string]any{"id": id})
-	return http.StatusOK, map[string]any{"id": id, "deleted": true}, nil
+	return http.StatusOK, deleted, nil
+}
+
+func deleteQueueWithEvent(
+	app *platform.App,
+	r *http.Request,
+	repo *recordStoreSchedulerQuotaRepository,
+	id string,
+) (map[string]any, bool, error) {
+	previous, found := repo.GetQueue(r.Context(), id)
+	if !found {
+		return nil, false, nil
+	}
+	deleted := map[string]any{"id": id, "deleted": true}
+	removed := false
+	err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		ok, err := repo.DeleteQueueAndRemoveFromPlansTx(r.Context(), tx, id)
+		if err != nil {
+			return err
+		}
+		removed = ok
+		if ok {
+			tx.Emit(schedulerEvent(r, "QueueChanged", "deleted", changePayload(previous.Data, deleted)))
+		}
+		return nil
+	})
+	return deleted, removed, err
 }
 
 func batchDeleteQueues(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
@@ -148,9 +180,17 @@ func batchDeleteQueues(app *platform.App, r *http.Request, _ platform.RouteSpec)
 	if repo == nil {
 		return http.StatusInternalServerError, shared.ErrorData(msgRepoUnavailable), nil
 	}
-	result := repo.DeleteQueues(r.Context(), ids)
+	result := schedulerDeleteResult{Errors: []string{}, Deleted: []string{}}
+	for _, id := range ids {
+		if _, removed, err := deleteQueueWithEvent(app, r, repo, id); err != nil || !removed {
+			result.Failed++
+			result.Errors = append(result.Errors, id)
+			continue
+		}
+		result.Succeeded++
+		result.Deleted = append(result.Deleted, id)
+	}
 	response := result.response()
-	publish(app, r, "QueueChanged", "batch_deleted", response)
 	return http.StatusOK, response, nil
 }
 
@@ -190,11 +230,12 @@ func createPlan(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, 
 	if missing := repo.MissingQueues(r.Context(), shared.StringSlice(plan["queue_ids"])); len(missing) > 0 {
 		return http.StatusBadRequest, shared.ErrorData(msgUnknownQueueIDs + strings.Join(missing, ",")), nil
 	}
-	record, err := repo.CreatePlan(r.Context(), plan)
+	record, err := app.CreateRecordWithEvent(r.Context(), plansResource, plan, func(rec contracts.Record[map[string]any]) contracts.Event {
+		return schedulerEvent(r, "PlanChanged", "created", changePayload(nil, rec.Data))
+	})
 	if err != nil {
 		return createError(err), nil, nil
 	}
-	publish(app, r, "PlanChanged", "created", record.Data)
 	return http.StatusCreated, record, nil
 }
 
@@ -220,18 +261,20 @@ func updatePlan(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, 
 	if repo == nil {
 		return http.StatusInternalServerError, shared.ErrorData(msgRepoUnavailable), nil
 	}
-	if _, found := repo.GetPlan(r.Context(), id); !found {
+	previous, found := repo.GetPlan(r.Context(), id)
+	if !found {
 		return http.StatusNotFound, shared.ErrorData(msgPlanNotFound), nil
 	}
 	update := normalizePlanUpdate(payload)
 	if missing := repo.MissingQueues(r.Context(), shared.StringSlice(update["queue_ids"])); len(missing) > 0 {
 		return http.StatusBadRequest, shared.ErrorData(msgUnknownQueueIDs + strings.Join(missing, ",")), nil
 	}
-	record, ok := repo.UpdatePlan(r.Context(), id, update)
-	if !ok {
+	record, ok, err := app.UpdateRecordWithEvent(r.Context(), plansResource, id, update, func(rec contracts.Record[map[string]any]) contracts.Event {
+		return schedulerEvent(r, "PlanChanged", "updated", changePayload(previous.Data, rec.Data))
+	})
+	if err != nil || !ok {
 		return http.StatusInternalServerError, shared.ErrorData("plan update failed"), nil
 	}
-	publish(app, r, "PlanChanged", "updated", record.Data)
 	return http.StatusOK, record, nil
 }
 
@@ -241,12 +284,41 @@ func deletePlan(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, 
 	if repo == nil {
 		return http.StatusInternalServerError, shared.ErrorData(msgRepoUnavailable), nil
 	}
-	if !repo.DeletePlan(r.Context(), id) {
+	deleted, removed, err := deletePlanWithEvent(app, r, repo, id)
+	if err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("plan could not be deleted"), nil
+	}
+	if !removed {
 		return http.StatusNotFound, shared.ErrorData(msgPlanNotFound), nil
 	}
 	unbindPlanFromProjects(app, r, id)
-	publish(app, r, "PlanChanged", "deleted", map[string]any{"id": id})
-	return http.StatusOK, map[string]any{"id": id, "deleted": true}, nil
+	return http.StatusOK, deleted, nil
+}
+
+func deletePlanWithEvent(
+	app *platform.App,
+	r *http.Request,
+	repo *recordStoreSchedulerQuotaRepository,
+	id string,
+) (map[string]any, bool, error) {
+	previous, found := repo.GetPlan(r.Context(), id)
+	if !found {
+		return nil, false, nil
+	}
+	deleted := map[string]any{"id": id, "deleted": true}
+	removed := false
+	err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		ok, err := repo.DeletePlanTx(r.Context(), tx, id)
+		if err != nil {
+			return err
+		}
+		removed = ok
+		if ok {
+			tx.Emit(schedulerEvent(r, "PlanChanged", "deleted", changePayload(previous.Data, deleted)))
+		}
+		return nil
+	})
+	return deleted, removed, err
 }
 
 func batchDeletePlans(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
@@ -258,12 +330,20 @@ func batchDeletePlans(app *platform.App, r *http.Request, _ platform.RouteSpec) 
 	if repo == nil {
 		return http.StatusInternalServerError, shared.ErrorData(msgRepoUnavailable), nil
 	}
-	result := repo.DeletePlans(r.Context(), ids)
+	result := schedulerDeleteResult{Errors: []string{}, Deleted: []string{}}
+	for _, id := range ids {
+		if _, removed, err := deletePlanWithEvent(app, r, repo, id); err != nil || !removed {
+			result.Failed++
+			result.Errors = append(result.Errors, id)
+			continue
+		}
+		result.Succeeded++
+		result.Deleted = append(result.Deleted, id)
+	}
 	for _, id := range result.Deleted {
 		unbindPlanFromProjects(app, r, id)
 	}
 	response := result.response()
-	publish(app, r, "PlanChanged", "batch_deleted", response)
 	return http.StatusOK, response, nil
 }
 
@@ -299,7 +379,7 @@ func bindPlanToProject(app *platform.App, r *http.Request, _ platform.RouteSpec)
 		slog.Error("scheduler quota plan binding failed", "project_id", projectID, "plan_id", planID, "error", err)
 		return http.StatusBadGateway, shared.ErrorData("project plan binding failed"), nil
 	}
-	publish(app, r, "PlanChanged", "bound_project", map[string]any{"project_id": projectID, "plan_id": planID})
+	publish(app, r, "PlanChanged", "bound_project", changePayload(nil, map[string]any{"project_id": projectID, "plan_id": planID}))
 	return http.StatusOK, map[string]any{"project_id": projectID, "plan_id": planID}, nil
 }
 
@@ -317,18 +397,27 @@ func bindPlanQueues(app *platform.App, r *http.Request, _ platform.RouteSpec) (i
 	if repo == nil {
 		return http.StatusInternalServerError, shared.ErrorData(msgRepoUnavailable), nil
 	}
-	if _, found := repo.GetPlan(r.Context(), id); !found {
+	previous, found := repo.GetPlan(r.Context(), id)
+	if !found {
 		return http.StatusNotFound, shared.ErrorData(msgPlanNotFound), nil
 	}
 	queueIDs := firstStringSlice(payload, "queue_ids", "queueIds", "ids")
 	if missing := repo.MissingQueues(r.Context(), queueIDs); len(missing) > 0 {
 		return http.StatusBadRequest, shared.ErrorData(msgUnknownQueueIDs + strings.Join(missing, ",")), nil
 	}
-	record, ok := repo.BindPlanQueues(r.Context(), id, queueIDs)
-	if !ok {
+	var record contracts.Record[map[string]any]
+	var updated bool
+	if err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		var e error
+		record, updated, e = repo.BindPlanQueuesTx(r.Context(), tx, id, queueIDs)
+		if e != nil || !updated {
+			return e
+		}
+		tx.Emit(schedulerEvent(r, "PlanChanged", "bound_queues", changePayload(previous.Data, record.Data)))
+		return nil
+	}); err != nil || !updated {
 		return http.StatusInternalServerError, shared.ErrorData("plan queue binding failed"), nil
 	}
-	publish(app, r, "PlanChanged", "bound_queues", map[string]any{"plan_id": id, "queue_ids": queueIDs})
 	return http.StatusOK, record, nil
 }
 
@@ -497,7 +586,21 @@ func createError(err error) int {
 	return http.StatusInternalServerError
 }
 
-func publish(app *platform.App, r *http.Request, name, action string, data map[string]any) {
+func changePayload(oldValue, newValue map[string]any) map[string]any {
+	payload := shared.CloneMap(newValue)
+	payload["old"] = cloneEventMapOrNil(oldValue)
+	payload["new"] = cloneEventMapOrNil(newValue)
+	return payload
+}
+
+func cloneEventMapOrNil(value map[string]any) any {
+	if value == nil {
+		return nil
+	}
+	return shared.CloneMap(value)
+}
+
+func schedulerEvent(r *http.Request, name, action string, data map[string]any) contracts.Event {
 	traceID := shared.FirstNonEmpty(r.Header.Get("X-Trace-ID"), r.Header.Get("X-Request-ID"), "scheduler-quota-local")
 	event := contracts.Event{
 		EventID:        platform.NewUUID(),
@@ -510,7 +613,16 @@ func publish(app *platform.App, r *http.Request, name, action string, data map[s
 		Data:           shared.CloneMap(data),
 	}
 	event.Data["action"] = action
-	if err := app.Events.Publish(r.Context(), event); err != nil {
+	actor := shared.FirstNonEmpty(r.Header.Get("X-User-ID"), "anonymous")
+	event.Data["actor_user_id"] = actor
+	if shared.TextValue(event.Data, "user_id", "userId") == "" {
+		event.Data["user_id"] = actor
+	}
+	return event
+}
+
+func publish(app *platform.App, r *http.Request, name, action string, data map[string]any) {
+	if err := app.Events.Publish(r.Context(), schedulerEvent(r, name, action, data)); err != nil {
 		slog.Error("scheduler quota event publish failed", "event", name, "error", err)
 	}
 }

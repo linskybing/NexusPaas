@@ -191,42 +191,40 @@ func recordGrantsAdminPanel(data map[string]any) bool {
 	return shared.BoolValue(shared.MapValue(data, "capabilities", "Capabilities"), "admin_panel", "adminPanel", "AdminPanel")
 }
 
-func publishProxyPolicyChanged(app *platform.App, r *http.Request, action string, data map[string]any) {
+func authorizationPolicyEvent(r *http.Request, name, action string, data map[string]any) contracts.Event {
 	if data == nil {
 		data = map[string]any{}
 	}
 	payload := shared.CloneMap(data)
 	payload["action"] = action
-	if err := app.Events.Publish(r.Context(), contracts.Event{
+	return contracts.Event{
 		EventID:        platform.NewUUID(),
-		Name:           "ProxyPolicyChanged",
+		Name:           name,
 		Source:         serviceName,
 		OccurredAt:     time.Now().UTC(),
 		TraceID:        shared.FirstNonEmpty(r.Header.Get("X-Trace-ID"), r.Header.Get("X-Request-ID"), platform.NewUUID()),
 		SchemaVersion:  1,
 		IdempotencyKey: r.Header.Get("Idempotency-Key"),
 		Data:           payload,
-	}); err != nil {
+	}
+}
+
+func proxyPolicyEvent(r *http.Request, action string, data map[string]any) contracts.Event {
+	return authorizationPolicyEvent(r, "ProxyPolicyChanged", action, data)
+}
+
+func policyChangedEvent(r *http.Request, action string, data map[string]any) contracts.Event {
+	return authorizationPolicyEvent(r, "PolicyChanged", action, data)
+}
+
+func publishProxyPolicyChanged(app *platform.App, r *http.Request, action string, data map[string]any) {
+	if err := app.Events.Publish(r.Context(), proxyPolicyEvent(r, action, data)); err != nil {
 		slog.Error("authorization-policy event publish failed", "event", "ProxyPolicyChanged", "error", err)
 	}
 }
 
 func publishPolicyChanged(app *platform.App, r *http.Request, action string, data map[string]any) {
-	if data == nil {
-		data = map[string]any{}
-	}
-	payload := shared.CloneMap(data)
-	payload["action"] = action
-	if err := app.Events.Publish(r.Context(), contracts.Event{
-		EventID:        platform.NewUUID(),
-		Name:           "PolicyChanged",
-		Source:         serviceName,
-		OccurredAt:     time.Now().UTC(),
-		TraceID:        shared.FirstNonEmpty(r.Header.Get("X-Trace-ID"), r.Header.Get("X-Request-ID"), platform.NewUUID()),
-		SchemaVersion:  1,
-		IdempotencyKey: r.Header.Get("Idempotency-Key"),
-		Data:           payload,
-	}); err != nil {
+	if err := app.Events.Publish(r.Context(), policyChangedEvent(r, action, data)); err != nil {
 		slog.Error("authorization-policy event publish failed", "event", "PolicyChanged", "error", err)
 	}
 }

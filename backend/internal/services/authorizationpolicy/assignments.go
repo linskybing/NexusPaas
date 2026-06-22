@@ -9,6 +9,11 @@ import (
 	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
 
+type policyAssignmentTarget struct {
+	TargetType string
+	TargetID   string
+}
+
 func listPolicyAssignments(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
 	if status, data, ok := requireAdmin(app, r); !ok {
 		return status, data, nil
@@ -38,7 +43,18 @@ func assignPolicy(app *platform.App, r *http.Request, _ platform.RouteSpec) (int
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(err.Error()), nil
 	}
-	assignment, created, err := createPolicyAssignment(app, r, policyID, targetType, targetID, r.Header.Get(headerUserID))
+	repo := authorizationPolicyRepo(app)
+	var assignment map[string]any
+	var created bool
+	err = app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		var e error
+		assignment, created, e = repo.CreatePolicyAssignmentTx(r.Context(), tx, policyID, targetType, targetID, r.Header.Get(headerUserID))
+		if e != nil || !created {
+			return e
+		}
+		tx.Emit(proxyPolicyEvent(r, "assign", assignment))
+		return nil
+	})
 	if err != nil {
 		if platform.IsCreateConflict(err) {
 			return http.StatusConflict, shared.ErrorData("assignment already exists"), nil
@@ -46,7 +62,6 @@ func assignPolicy(app *platform.App, r *http.Request, _ platform.RouteSpec) (int
 		return http.StatusInternalServerError, shared.ErrorData("assignment could not be created"), nil
 	}
 	if created {
-		publishProxyPolicyChanged(app, r, "assign", assignment)
 		return http.StatusCreated, assignment, nil
 	}
 	return http.StatusOK, assignment, nil
@@ -65,37 +80,67 @@ func batchAssignPolicy(app *platform.App, r *http.Request, _ platform.RouteSpec)
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(err.Error()), nil
 	}
-	items, ok := payload["assignments"].([]any)
-	if !ok || len(items) == 0 || len(items) > 100 {
-		return http.StatusBadRequest, shared.ErrorData("assignments is required and must contain 1 to 100 items"), nil
-	}
-	assignments := make([]map[string]string, 0, len(items))
-	for i, item := range items {
-		raw, ok := item.(map[string]any)
-		if !ok {
-			return http.StatusBadRequest, shared.ErrorData(fmt.Sprintf("assignments[%d] must be an object", i)), nil
-		}
-		targetType, targetID, err := assignmentTarget(raw)
-		if err != nil {
-			return http.StatusBadRequest, shared.ErrorData(fmt.Sprintf("assignments[%d]: %s", i, err.Error())), nil
-		}
-		assignments = append(assignments, map[string]string{"target_type": targetType, "target_id": targetID})
+	assignments, err := parseBatchPolicyAssignments(payload)
+	if err != nil {
+		return http.StatusBadRequest, shared.ErrorData(err.Error()), nil
 	}
 	result := map[string]any{"succeeded": 0, "failed": 0, "errors": []string{}}
+	repo := authorizationPolicyRepo(app)
 	for _, item := range assignments {
-		targetType := item["target_type"]
-		targetID := item["target_id"]
-		assignment, created, err := createPolicyAssignment(app, r, policyID, targetType, targetID, r.Header.Get(headerUserID))
-		if err != nil {
+		if err := createBatchPolicyAssignment(app, r, repo, policyID, item); err != nil {
 			batchFailure(result, err.Error())
 			continue
-		}
-		if created {
-			publishProxyPolicyChanged(app, r, "assign", assignment)
 		}
 		result["succeeded"] = result["succeeded"].(int) + 1
 	}
 	return http.StatusOK, result, nil
+}
+
+func parseBatchPolicyAssignments(payload map[string]any) ([]policyAssignmentTarget, error) {
+	items, ok := payload["assignments"].([]any)
+	if !ok || len(items) == 0 || len(items) > 100 {
+		return nil, fmt.Errorf("assignments is required and must contain 1 to 100 items")
+	}
+	assignments := make([]policyAssignmentTarget, 0, len(items))
+	for i, item := range items {
+		raw, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("assignments[%d] must be an object", i)
+		}
+		targetType, targetID, err := assignmentTarget(raw)
+		if err != nil {
+			return nil, fmt.Errorf("assignments[%d]: %s", i, err.Error())
+		}
+		assignments = append(assignments, policyAssignmentTarget{TargetType: targetType, TargetID: targetID})
+	}
+	return assignments, nil
+}
+
+func createBatchPolicyAssignment(
+	app *platform.App,
+	r *http.Request,
+	repo *recordStoreAuthorizationPolicyRepository,
+	policyID string,
+	target policyAssignmentTarget,
+) error {
+	var assignment map[string]any
+	var created bool
+	return app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		var err error
+		assignment, created, err = repo.CreatePolicyAssignmentTx(
+			r.Context(),
+			tx,
+			policyID,
+			target.TargetType,
+			target.TargetID,
+			r.Header.Get(headerUserID),
+		)
+		if err != nil || !created {
+			return err
+		}
+		tx.Emit(proxyPolicyEvent(r, "assign", assignment))
+		return nil
+	})
 }
 
 func unassignPolicy(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
@@ -112,8 +157,18 @@ func unassignPolicy(app *platform.App, r *http.Request, _ platform.RouteSpec) (i
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(err.Error()), nil
 	}
-	if assignment, found := authorizationPolicyRepo(app).UnassignPolicy(r.Context(), policyID, targetType, targetID); found {
-		publishProxyPolicyChanged(app, r, "unassign", assignment)
+	var assignment map[string]any
+	var found bool
+	if err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		var e error
+		assignment, found, e = authorizationPolicyRepo(app).UnassignPolicyTx(r.Context(), tx, policyID, targetType, targetID)
+		if e != nil || !found {
+			return e
+		}
+		tx.Emit(proxyPolicyEvent(r, "unassign", assignment))
+		return nil
+	}); err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("assignment could not be deleted"), nil
 	}
 	return http.StatusOK, nil, nil
 }

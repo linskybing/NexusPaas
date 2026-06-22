@@ -73,6 +73,7 @@ func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodDelete, pathUserID, deleteUser)
 	app.RegisterCustomHandler(http.MethodGet, pathUserID+"/settings", getUserSettings)
 	app.RegisterCustomHandler(http.MethodPut, pathUserID+"/settings", updateUserSettings)
+	app.RegisterCustomHandler(http.MethodGet, "/api/v1/oidc/start", oidcStart)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/oidc/login", oidcLoginForm)
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/oidc/login", oidcLogin)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/oidc/.well-known/openid-configuration", oidcProviderUnavailable)

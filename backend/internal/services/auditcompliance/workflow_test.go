@@ -34,8 +34,8 @@ func TestAuditLogHandlerFiltersAndPaginates(t *testing.T) {
 		t.Fatalf("anonymous audit status=%d data=%#v, want unauthorized", code, data)
 	}
 	code, data, _ = getAuditLogs(app, auditRequest("/api/v1/audit/logs", "U1", "user"), platform.RouteSpec{})
-	if code != http.StatusForbidden {
-		t.Fatalf("user audit status=%d data=%#v, want forbidden", code, data)
+	if code != http.StatusBadRequest {
+		t.Fatalf("user audit status=%d data=%#v, want scoped-query bad request", code, data)
 	}
 	code, data, _ = getAuditLogs(app, auditRequest("/api/v1/audit/logs?start_time=bad-date", "ADMIN", "admin"), platform.RouteSpec{})
 	if code != http.StatusBadRequest {
@@ -43,10 +43,102 @@ func TestAuditLogHandlerFiltersAndPaginates(t *testing.T) {
 	}
 }
 
-func TestProjectReportDownloadUsesProjectedMembership(t *testing.T) {
+func TestAuditLogQueryAllowsPlatformAuditorAndProjectAdmins(t *testing.T) {
 	app := platform.NewApp(platform.Config{ServiceName: serviceName, HTTPAddr: ":0"})
 	seedAuditRows(t, app)
-	publishProjectMemberTestEvent(t, app, "project_memberCreated", map[string]any{"project_id": "P1", "user_id": "U1"})
+
+	code, data, degraded := getAuditLogs(app, auditRequest("/api/v1/audit/logs", "AUDITOR", "platform_auditor"), platform.RouteSpec{})
+	if degraded != nil || code != http.StatusOK {
+		t.Fatalf("platform auditor audit logs status=%d degraded=%v data=%#v, want 200", code, degraded, data)
+	}
+	if logs := data.([]AuditLog); len(logs) < 3 {
+		t.Fatalf("platform auditor logs = %#v, want all projects", logs)
+	}
+
+	code, data, _ = getAuditLogs(app, auditRequest("/api/v1/audit/logs", "AUDITOR", "platform-auditor"), platform.RouteSpec{})
+	if code != http.StatusBadRequest {
+		t.Fatalf("non-exact auditor role status=%d data=%#v, want scoped-query bad request", code, data)
+	}
+
+	assertProjectAuditQueryRole(t, "admin")
+	assertProjectAuditQueryRole(t, "project_admin")
+}
+
+func TestAuditLogQueryAllowsGroupAdmins(t *testing.T) {
+	assertGroupAuditQueryRole(t, "admin")
+	assertGroupAuditQueryRole(t, "group_admin")
+}
+
+func assertProjectAuditQueryRole(t *testing.T, role string) {
+	t.Helper()
+	app := platform.NewApp(platform.Config{ServiceName: serviceName, HTTPAddr: ":0"})
+	seedAuditRows(t, app)
+	publishProjectMemberTestEvent(t, app, "project_memberCreated", map[string]any{"project_id": "P1", "user_id": "U1", "role": role})
+
+	code, data, degraded := getAuditLogs(app, auditRequest("/api/v1/audit/logs?project_id=P1", "U1", "user"), platform.RouteSpec{})
+	if degraded != nil || code != http.StatusOK {
+		t.Fatalf("project audit query role %q status=%d degraded=%v data=%#v, want 200", role, code, degraded, data)
+	}
+	logs := data.([]AuditLog)
+	if len(logs) != 3 {
+		t.Fatalf("project audit query role %q logs=%#v, want only three P1 logs", role, logs)
+	}
+	for _, log := range logs {
+		if log.ProjectID == nil || *log.ProjectID != "P1" {
+			t.Fatalf("project audit query role %q returned non-P1 log %#v", role, log)
+		}
+	}
+}
+
+func assertGroupAuditQueryRole(t *testing.T, role string) {
+	t.Helper()
+	app := platform.NewApp(platform.Config{ServiceName: serviceName, HTTPAddr: ":0"})
+	seedAuditRows(t, app)
+	publishGroupMemberTestEvent(t, app, map[string]any{"user_id": "U1", "group_id": "G1", "role": role, "action": "create"})
+
+	code, data, degraded := getAuditLogs(app, auditRequest("/api/v1/audit/logs?group_id=G1", "U1", "user"), platform.RouteSpec{})
+	if degraded != nil || code != http.StatusOK {
+		t.Fatalf("group audit query role %q status=%d degraded=%v data=%#v, want 200", role, code, degraded, data)
+	}
+	logs := data.([]AuditLog)
+	if len(logs) != 3 {
+		t.Fatalf("group audit query role %q logs=%#v, want only three G1 logs", role, logs)
+	}
+	foundOutboxLog := false
+	for _, log := range logs {
+		if log.GroupID == nil || *log.GroupID != "G1" {
+			t.Fatalf("group audit query role %q returned non-G1 log %#v", role, log)
+		}
+		if log.ID == "event-login" {
+			foundOutboxLog = true
+		}
+	}
+	if !foundOutboxLog {
+		t.Fatalf("group audit query role %q logs=%#v, want outbox-sourced event-login", role, logs)
+	}
+}
+
+func TestAuditLogQueryRejectsProjectNonAdmin(t *testing.T) {
+	app := platform.NewApp(platform.Config{ServiceName: serviceName, HTTPAddr: ":0"})
+	seedAuditRows(t, app)
+	publishProjectMemberTestEvent(t, app, "project_memberCreated", map[string]any{"project_id": "P1", "user_id": "U1", "role": "member"})
+
+	code, data, _ := getAuditLogs(app, auditRequest("/api/v1/audit/logs?project_id=P1", "U1", "user"), platform.RouteSpec{})
+	if code != http.StatusForbidden {
+		t.Fatalf("project member audit query status=%d data=%#v, want forbidden", code, data)
+	}
+
+	publishGroupMemberTestEvent(t, app, map[string]any{"user_id": "U1", "group_id": "G1", "role": "member", "action": "create"})
+	code, data, _ = getAuditLogs(app, auditRequest("/api/v1/audit/logs?group_id=G1", "U1", "user"), platform.RouteSpec{})
+	if code != http.StatusForbidden {
+		t.Fatalf("group member audit query status=%d data=%#v, want forbidden", code, data)
+	}
+}
+
+func TestProjectReportDownloadUsesProjectedMembership(t *testing.T) {
+	app := platform.NewApp(platform.Config{ServiceName: serviceName, ProductName: "CSCC AI Platform", HTTPAddr: ":0"})
+	seedAuditRows(t, app)
+	publishProjectMemberTestEvent(t, app, "project_memberCreated", map[string]any{"project_id": "P1", "user_id": "U1", "role": "member"})
 
 	target := "/api/v1/audit/report?project_id=P1&start=2026-04-01T00:00:00Z&end=2026-04-03T00:00:00Z"
 	code, data, degraded := downloadProjectReport(app, auditRequest(target, "U1", ""), platform.RouteSpec{})
@@ -55,8 +147,14 @@ func TestProjectReportDownloadUsesProjectedMembership(t *testing.T) {
 	}
 	raw := data.(platform.RawResponse)
 	body := string(raw.Body)
-	if raw.ContentType != "text/csv" || !strings.Contains(raw.Headers["Content-Disposition"], "audit_report_P1.csv") {
+	if raw.ContentType != "text/csv" || !strings.Contains(raw.Headers["Content-Disposition"], "cscc-ai-platform_audit_report_p1.csv") {
 		t.Fatalf("raw response headers = %#v contentType=%q, want CSV attachment", raw.Headers, raw.ContentType)
+	}
+	if !strings.Contains(body, "Product,CSCC AI Platform") || !strings.Contains(body, "Project,P1") {
+		t.Fatalf("CSV body = %q, want configured product and project metadata", body)
+	}
+	if !strings.Contains(body, "Integrity Hash,Previous Hash") {
+		t.Fatalf("CSV body = %q, want integrity columns", body)
 	}
 	if !strings.Contains(body, "login_failed") || strings.Contains(body, "P2") {
 		t.Fatalf("CSV body = %q, want only matching project rows", body)
@@ -69,6 +167,33 @@ func TestProjectReportDownloadUsesProjectedMembership(t *testing.T) {
 	code, data, _ = downloadProjectReport(app, auditRequest("/api/v1/audit/report?start=2026-04-01T00:00:00Z", "U1", ""), platform.RouteSpec{})
 	if code != http.StatusBadRequest {
 		t.Fatalf("missing project report status=%d data=%#v, want bad request", code, data)
+	}
+}
+
+func TestAuditLogsCarryTamperEvidentHashChain(t *testing.T) {
+	app := platform.NewApp(platform.Config{ServiceName: serviceName, HTTPAddr: ":0"})
+	seedAuditRows(t, app)
+
+	logs := auditLogs(app, auditRequest("/api/v1/audit/logs", "ADMIN", "admin"))
+	if len(logs) < 2 {
+		t.Fatalf("audit logs = %#v, want multiple rows for hash chain", logs)
+	}
+	for _, log := range logs {
+		if log.IntegrityHash == "" {
+			t.Fatalf("audit log %#v missing integrity hash", log)
+		}
+	}
+	if logs[len(logs)-1].PreviousHash != "" {
+		t.Fatalf("oldest log previous hash = %q, want empty chain root", logs[len(logs)-1].PreviousHash)
+	}
+	if logs[0].PreviousHash == "" {
+		t.Fatalf("newest log previous hash is empty, want chained predecessor")
+	}
+
+	mutated := logs[0]
+	mutated.Action = "tampered"
+	if auditLogIntegrityHash(mutated.PreviousHash, mutated) == logs[0].IntegrityHash {
+		t.Fatal("mutating an audit log did not change its integrity hash")
 	}
 }
 
@@ -113,13 +238,14 @@ func TestAuditHelpersComposeMapsAndDefaults(t *testing.T) {
 		"source_ip":     "127.0.0.1",
 		"user_agent":    "agent",
 		"project_id":    "P3",
+		"group_id":      "G3",
 		"ignored_value": "ignored",
 	})
 	createAuditRow(t, app, auditRow{id: "store-1", userID: "store-user", action: "logout", resourceType: "auth", resourceID: "session", createdAt: time.Date(2026, time.April, 2, 10, 0, 0, 0, time.UTC)})
 
 	maps := RecentAuditLogMaps(app, auditRequest("/", "ADMIN", "admin"), 1)
-	if len(maps) != 1 || maps[0]["id"] != "event-1" || maps[0]["project_id"] != "P3" {
-		t.Fatalf("recent maps = %#v, want limited newest event with project", maps)
+	if len(maps) != 1 || maps[0]["id"] != "event-1" || maps[0]["project_id"] != "P3" || maps[0]["group_id"] != "G3" {
+		t.Fatalf("recent maps = %#v, want limited newest event with project and group", maps)
 	}
 	if all := RecentAuditLogMaps(nil, auditRequest("/", "ADMIN", "admin"), 10); len(all) != 0 {
 		t.Fatalf("nil app maps = %#v, want empty", all)
@@ -128,6 +254,7 @@ func TestAuditHelpersComposeMapsAndDefaults(t *testing.T) {
 	log := logFromMap("fallback", map[string]any{
 		"userId":       "U3",
 		"projectId":    " P4 ",
+		"groupId":      " G4 ",
 		"resourceType": "dataset",
 		"resourceId":   "D1",
 		"createdAt":    "2026-04-04T12:00:00Z",
@@ -135,7 +262,7 @@ func TestAuditHelpersComposeMapsAndDefaults(t *testing.T) {
 		"newData":      map[string]any{"status": "new"},
 		"description":  "changed",
 	}, time.Time{})
-	if log.ID != "fallback" || log.ProjectID == nil || *log.ProjectID != "P4" || log.OldData["status"] != "old" {
+	if log.ID != "fallback" || log.ProjectID == nil || *log.ProjectID != "P4" || log.GroupID == nil || *log.GroupID != "G4" || log.OldData["status"] != "old" {
 		t.Fatalf("mapped log = %#v, want alternate keys and maps converted", log)
 	}
 
@@ -156,12 +283,13 @@ func TestAuditHelpersComposeMapsAndDefaults(t *testing.T) {
 
 func seedAuditRows(t *testing.T, app *platform.App) {
 	t.Helper()
-	createAuditRow(t, app, auditRow{id: "store-login", userID: "alice", projectID: "P1", action: "login_failed", resourceType: "auth", resourceID: "browser", createdAt: time.Date(2026, time.April, 2, 10, 0, 0, 0, time.UTC)})
-	createAuditRow(t, app, auditRow{id: "store-role", userID: "alice", projectID: "P1", action: "role_changed", resourceType: "role", resourceID: "R1", createdAt: time.Date(2026, time.April, 2, 9, 0, 0, 0, time.UTC)})
-	createAuditRow(t, app, auditRow{id: "store-other", userID: "bob", projectID: "P2", action: "login_failed", resourceType: "auth", resourceID: "browser", createdAt: time.Date(2026, time.April, 2, 8, 0, 0, 0, time.UTC)})
+	createAuditRow(t, app, auditRow{id: "store-login", userID: "alice", projectID: "P1", groupID: "G1", action: "login_failed", resourceType: "auth", resourceID: "browser", createdAt: time.Date(2026, time.April, 2, 10, 0, 0, 0, time.UTC)})
+	createAuditRow(t, app, auditRow{id: "store-role", userID: "alice", projectID: "P1", groupID: "G1", action: "role_changed", resourceType: "role", resourceID: "R1", createdAt: time.Date(2026, time.April, 2, 9, 0, 0, 0, time.UTC)})
+	createAuditRow(t, app, auditRow{id: "store-other", userID: "bob", projectID: "P2", groupID: "G2", action: "login_failed", resourceType: "auth", resourceID: "browser", createdAt: time.Date(2026, time.April, 2, 8, 0, 0, 0, time.UTC)})
 	publishAuditEvent(t, app, "event-login", time.Date(2026, time.April, 2, 11, 0, 0, 0, time.UTC), map[string]any{
 		"user_id":       "alice",
 		"project_id":    "P1",
+		"group_id":      "G1",
 		"action":        "login_failed",
 		"resource_type": "auth",
 		"resource_id":   "cli",
@@ -173,6 +301,7 @@ type auditRow struct {
 	id           string
 	userID       string
 	projectID    string
+	groupID      string
 	action       string
 	resourceType string
 	resourceID   string
@@ -193,7 +322,25 @@ func createAuditRow(t *testing.T, app *platform.App, entry auditRow) {
 	if entry.projectID != "" {
 		row["project_id"] = entry.projectID
 	}
+	if entry.groupID != "" {
+		row["group_id"] = entry.groupID
+	}
 	if _, err := app.Store.Create(context.Background(), auditLogResource, row); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func publishGroupMemberTestEvent(t *testing.T, app *platform.App, data map[string]any) {
+	t.Helper()
+	if err := app.Events.Publish(context.Background(), contracts.Event{
+		EventID:       platform.NewUUID(),
+		Name:          "GroupMembershipChanged",
+		Source:        "org-project-service",
+		OccurredAt:    time.Now().UTC(),
+		TraceID:       platform.NewUUID(),
+		SchemaVersion: 1,
+		Data:          data,
+	}); err != nil {
 		t.Fatal(err)
 	}
 }

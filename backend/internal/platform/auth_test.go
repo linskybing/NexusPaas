@@ -1,11 +1,14 @@
 package platform
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 )
 
 func TestRequireAuthStripsClientIdentityHeadersAndEnforcesAdminRoute(t *testing.T) {
@@ -56,9 +59,25 @@ func TestRequireAuthStripsClientIdentityHeadersAndEnforcesAdminRoute(t *testing.
 	if panelAdmin["user_id"] != "panel-admin" {
 		t.Fatalf("direct admin_panel user was not accepted as verified principal: %#v", panelAdmin)
 	}
-	adminAPI := requestAuthTest(t, app, http.MethodGet, "/admin", map[string]string{"Authorization": "Bearer admin-api-token"}, http.StatusOK)
+	adminAPI := requestAuthTest(t, app, http.MethodGet, "/admin", map[string]string{"Authorization": "Bearer " + FormatUserAPIToken("ATADMIN", "admin-secret")}, http.StatusOK)
 	if adminAPI["user_id"] != "admin" || adminAPI["api_token_id"] == "" {
 		t.Fatalf("admin api token was not applied as verified principal: %#v", adminAPI)
+	}
+}
+
+func TestIndexedAPITokenAuthDoesNotListTokens(t *testing.T) {
+	app := newAuthTestApp()
+	adminRoute := RouteSpec{Method: http.MethodGet, Pattern: "/admin", Resource: "test:admin", Action: "list", AuthRequired: true, Admin: true}
+	app.Routes = []RouteSpec{adminRoute}
+	app.RegisterCustomHandler(http.MethodGet, "/admin", echoAuthHandler)
+	spy := &authListSpyStore{RecordStore: app.Store}
+	app.Store = spy
+	user := requestAuthTest(t, app, http.MethodGet, "/admin", map[string]string{"Authorization": "Bearer " + FormatUserAPIToken("ATADMIN", "admin-secret")}, http.StatusOK)
+	if user["api_token_id"] != "ATADMIN" {
+		t.Fatalf("api token id = %#v, want ATADMIN", user["api_token_id"])
+	}
+	if spy.listCalls != 0 {
+		t.Fatalf("api token auth called List %d times, want indexed Get only", spy.listCalls)
 	}
 }
 
@@ -172,6 +191,15 @@ func TestAPIKeyPrincipalBindsVerifiedIdentityAndAdmin(t *testing.T) {
 	}
 }
 
+func TestAPIKeyPrincipalNormalizedExportsRequestAuthSemantics(t *testing.T) {
+	principal := APIKeyPrincipal{UserID: "ops-admin", Name: "Operations Admin", Role: "superadmin", Scopes: []string{"admin"}}
+	normalized := principal.Normalized()
+
+	if normalized.ID != "ops-admin" || normalized.Username != "Operations Admin" || normalized.Role != "admin" || !normalized.Admin {
+		t.Fatalf("Normalized() = %#v, want request auth principal semantics", normalized)
+	}
+}
+
 func TestAPIKeyPrincipalScopesRestrictRoutes(t *testing.T) {
 	app := NewApp(Config{
 		ServiceName: "all",
@@ -217,7 +245,7 @@ func newAuthTestApp() *App {
 	_, _ = app.Store.Create(nil, "identity-service:sessions", map[string]any{"id": "user-session", "user_id": "user", "expires_at": now.Add(time.Hour).Format(time.RFC3339)})
 	_, _ = app.Store.Create(nil, "identity-service:sessions", map[string]any{"id": "capability-session", "user_id": "capability-admin", "expires_at": now.Add(time.Hour).Format(time.RFC3339)})
 	_, _ = app.Store.Create(nil, "identity-service:sessions", map[string]any{"id": "panel-session", "user_id": "panel-admin", "expires_at": now.Add(time.Hour).Format(time.RFC3339)})
-	_, _ = app.Store.Create(nil, "identity-service:api_tokens", map[string]any{"id": "AT_ADMIN", "user_id": "admin", "token_hash": HashSecret("admin-api-token"), "expires_at": now.Add(time.Hour).Format(time.RFC3339), "revoked": false})
+	_, _ = app.Store.Create(nil, "identity-service:api_tokens", map[string]any{"id": "ATADMIN", "user_id": "admin", "token_hash": HashSecret(FormatUserAPIToken("ATADMIN", "admin-secret")), "expires_at": now.Add(time.Hour).Format(time.RFC3339), "revoked": false})
 	return app
 }
 
@@ -251,4 +279,14 @@ func requestAuthTest(t *testing.T, app *App, method, path string, headers map[st
 		t.Fatal(err)
 	}
 	return env.Data
+}
+
+type authListSpyStore struct {
+	RecordStore
+	listCalls int
+}
+
+func (s *authListSpyStore) List(ctx context.Context, resource string) []contracts.Record[map[string]any] {
+	s.listCalls++
+	return s.RecordStore.List(ctx, resource)
 }

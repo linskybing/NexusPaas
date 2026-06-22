@@ -14,7 +14,7 @@ func Spec() platform.ServiceSpec {
 		proxyPolicyAssignments = proxyRBACPolicyID + "/assignments"
 		proxyRBACRoleID        = "/api/v1/admin/proxy-rbac/roles/{id}"
 	)
-	route, id, admin, policyBypass := shared.Route, shared.ID, shared.Admin, shared.PolicyBypass
+	route, id, admin, serviceInternal := shared.Route, shared.ID, shared.Admin, shared.ServiceInternal
 	return platform.ServiceSpec{
 		Name:            "authorization-policy-service",
 		Category:        "core",
@@ -29,7 +29,7 @@ func Spec() platform.ServiceSpec {
 			route(http.MethodPut, permissionPolicy, "policies", "update"),
 			route(http.MethodDelete, permissionPolicy, "policies", "delete"),
 			route(http.MethodPost, "/api/v1/permissions/batch", "policies", "batch"),
-			route(http.MethodPost, "/api/v1/permissions/enforce", "decisions", "create", policyBypass()),
+			route(http.MethodPost, "/api/v1/permissions/enforce", "permissions", "enforce", serviceInternal()),
 			route(http.MethodPost, "/api/v1/permissions/simulate", "decisions", "simulate", admin()),
 			route(http.MethodGet, "/api/v1/permissions/policies", "policies", "list", admin()),
 			route(http.MethodPost, "/api/v1/permissions/policies", "policies", "create", admin()),

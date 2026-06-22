@@ -2,9 +2,12 @@ package identity
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -40,6 +43,16 @@ func TestIdentityRegisterLoginRefreshLogoutDirect(t *testing.T) {
 	refreshed := identityRawData(t, data)
 	if refreshed["token"] == token || refreshed["refresh_token"] == refresh {
 		t.Fatalf("refreshed tokens = %#v, want rotation", refreshed)
+	}
+	code, data, _ = refreshToken(app, identityRequest(http.MethodPost, "/api/v1/refresh", `{"refresh_token":"`+refresh+`"}`), platform.RouteSpec{})
+	assertIdentityStatus(t, code, data, http.StatusUnauthorized)
+	rotatedToken := refreshed["token"].(string)
+	rotatedRefresh := refreshed["refresh_token"].(string)
+	code, data, _ = refreshToken(app, identityRequest(http.MethodPost, "/api/v1/refresh", `{"refresh_token":"`+rotatedRefresh+`"}`), platform.RouteSpec{})
+	assertIdentityStatus(t, code, data, http.StatusOK)
+	refreshed = identityRawData(t, data)
+	if refreshed["token"] == rotatedToken || refreshed["refresh_token"] == rotatedRefresh {
+		t.Fatalf("second refresh tokens = %#v, want another rotation", refreshed)
 	}
 
 	logoutReq := identityRequest(http.MethodPost, "/api/v1/logout", "")
@@ -272,11 +285,11 @@ func TestIdentityLoginCaptchaAndLockoutEdgeBranchesDirect(t *testing.T) {
 	app := newIdentityTestApp()
 	seedIdentityUser(t, app, "US1", "dana")
 	req := identityRequest(http.MethodPost, pathLogin, `{"username":"dana","password":"correct-password"}`)
-	id := loginFailureID("dana", requestIP(req))
+	id := loginFailureID("dana", requestIPForApp(app, req))
 	if _, err := app.Store.Create(context.Background(), loginFailuresResource, map[string]any{
 		"id":       id,
 		"username": "dana",
-		"ip":       requestIP(req),
+		"ip":       requestIPForApp(app, req),
 		"failures": defaultLoginMaxFailed,
 	}); err != nil {
 		t.Fatal(err)
@@ -288,11 +301,11 @@ func TestIdentityLoginCaptchaAndLockoutEdgeBranchesDirect(t *testing.T) {
 	}
 
 	lockReq := identityRequest(http.MethodPost, pathLogin, `{"username":"locked","password":"correct-password"}`)
-	lockID := loginFailureID("locked", requestIP(lockReq))
+	lockID := loginFailureID("locked", requestIPForApp(app, lockReq))
 	if _, err := app.Store.Create(context.Background(), loginFailuresResource, map[string]any{
 		"id":           lockID,
 		"username":     "locked",
-		"ip":           requestIP(lockReq),
+		"ip":           requestIPForApp(app, lockReq),
 		"failures":     defaultLoginMaxFailed + 1,
 		"locked_until": "not-a-time",
 	}); err != nil {
@@ -500,11 +513,149 @@ func TestIdentityOIDCFailClosedDirect(t *testing.T) {
 	}
 }
 
+func TestIdentityOIDCCallbackRejectsInvalidState(t *testing.T) {
+	app := platform.NewApp(platform.Config{ServiceName: "all", DexURL: "http://dex.test/dex"})
+	Register(app)
+	req := identityRequest(http.MethodGet, "/api/v1/oidc/callback?code=code-1&state=state-1", "")
+
+	code, data, degraded := oidcCallback(app, req, platform.RouteSpec{})
+	if degraded != nil || code != http.StatusBadRequest {
+		t.Fatalf("callback status=%d degraded=%v data=%#v, want 400", code, degraded, data)
+	}
+}
+
+func TestIdentityOIDCStartIssuesStateCookie(t *testing.T) {
+	app := platform.NewApp(platform.Config{ServiceName: "all", DexURL: "http://dex.test/dex"})
+	Register(app)
+	req := identityRequest(http.MethodGet, "/api/v1/oidc/start", "")
+	req.Host = "console.test"
+
+	code, data, degraded := oidcStart(app, req, platform.RouteSpec{})
+	if degraded != nil || code != http.StatusFound {
+		t.Fatalf("start status=%d degraded=%v data=%#v, want 302", code, degraded, data)
+	}
+	raw := data.(platform.RawResponse)
+	location := raw.Headers["Location"]
+	if !strings.HasPrefix(location, "/api/v1/oidc/authorize?") {
+		t.Fatalf("Location = %q, want authorize path", location)
+	}
+	parsed, err := url.Parse(location)
+	if err != nil {
+		t.Fatalf("parse Location: %v", err)
+	}
+	state := parsed.Query().Get("state")
+	if state == "" || parsed.Query().Get("redirect_uri") != "http://console.test/api/v1/oidc/callback" {
+		t.Fatalf("authorize query = %q, want state and redirect_uri", parsed.RawQuery)
+	}
+	cookies := strings.Join(raw.HeaderValues["Set-Cookie"], "\n")
+	for _, want := range []string{oidcStateCookieName + "=", "HttpOnly", "Path=/", "Max-Age=300", "SameSite=Lax"} {
+		if !strings.Contains(cookies, want) {
+			t.Fatalf("state cookie attributes = %q, missing %s", cookies, want)
+		}
+	}
+}
+
+func TestOIDCRedirectURIUsesValidatedForwardedOrigin(t *testing.T) {
+	req := identityRequest(http.MethodGet, "/api/v1/oidc/start", "")
+	req.Host = "identity-service:8080"
+	req.Header.Set("X-Forwarded-Host", "localhost:8080")
+	req.Header.Set("X-Forwarded-Proto", "https")
+
+	if got, want := oidcRedirectURI(req), "https://localhost:8080/api/v1/oidc/callback"; got != want {
+		t.Fatalf("redirect_uri = %q, want %q", got, want)
+	}
+}
+
+func TestOIDCRedirectURIRejectsInvalidForwardedOrigin(t *testing.T) {
+	req := identityRequest(http.MethodGet, "/api/v1/oidc/start", "")
+	req.Host = "identity-service:8080"
+	req.Header.Add("X-Forwarded-Host", "localhost:8080")
+	req.Header.Add("X-Forwarded-Host", "evil.test")
+	req.Header.Set("X-Forwarded-Proto", "ftp")
+
+	if got, want := oidcRedirectURI(req), "http://identity-service:8080/api/v1/oidc/callback"; got != want {
+		t.Fatalf("redirect_uri = %q, want %q", got, want)
+	}
+}
+
+func TestIdentityOIDCCallbackIssuesSessionCookies(t *testing.T) {
+	dex := newOIDCTestTokenServer(t)
+	defer dex.Close()
+	app := platform.NewApp(platform.Config{ServiceName: "all", DexURL: dex.URL})
+	Register(app)
+	seedIdentityUser(t, app, "US1", "admin")
+	req := identityRequest(http.MethodGet, "/api/v1/oidc/callback?code=code-1&state=state-1", "")
+	req.Host = "console.test"
+	req.AddCookie(&http.Cookie{Name: oidcStateCookieName, Value: "state-1"})
+
+	code, data, degraded := oidcCallback(app, req, platform.RouteSpec{})
+	if degraded != nil || code != http.StatusFound {
+		t.Fatalf("callback status=%d degraded=%v data=%#v, want 302", code, degraded, data)
+	}
+	raw := data.(platform.RawResponse)
+	if raw.Headers["Location"] != "/ui/?auth=oidc" {
+		t.Fatalf("Location = %q, want /ui/?auth=oidc", raw.Headers["Location"])
+	}
+	cookies := strings.Join(raw.HeaderValues["Set-Cookie"], "\n")
+	for _, name := range []string{"token=", "refresh_token=", oidcStateCookieName + "="} {
+		if !strings.Contains(cookies, name) {
+			t.Fatalf("Set-Cookie = %q, want %s", cookies, name)
+		}
+	}
+	foundSession := false
+	for _, record := range app.Store.List(context.Background(), sessionsResource) {
+		if record.Data["user_id"] == "US1" {
+			foundSession = true
+		}
+	}
+	if !foundSession {
+		t.Fatal("callback did not persist an identity session for US1")
+	}
+}
+
+func newOIDCTestTokenServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assertOIDCTestTokenRequest(t, r)
+		w.Header().Set(headerContentType, "application/json")
+		_, _ = w.Write([]byte(`{"id_token":"` + oidcTestIDToken(map[string]any{"preferred_username": "admin"}) + `"}`))
+	}))
+}
+
+func assertOIDCTestTokenRequest(t *testing.T, r *http.Request) {
+	t.Helper()
+	if r.Method != http.MethodPost || r.URL.Path != "/token" {
+		t.Fatalf("dex request = %s %s, want POST /token", r.Method, r.URL.Path)
+	}
+	if err := r.ParseForm(); err != nil {
+		t.Fatalf("parse dex form: %v", err)
+	}
+	if r.FormValue("grant_type") != "authorization_code" || r.FormValue("client_id") != "platform" || r.FormValue("code") != "code-1" {
+		t.Fatalf("dex form = %#v, want authorization code request", r.Form)
+	}
+	if r.FormValue("redirect_uri") != "http://console.test/api/v1/oidc/callback" {
+		t.Fatalf("redirect_uri = %q", r.FormValue("redirect_uri"))
+	}
+}
+
 func TestIdentityHelperBranchesDirect(t *testing.T) {
+	_, trustedProxy, err := net.ParseCIDR("198.51.100.0/24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := platform.NewApp(platform.Config{
+		ServiceName:       serviceName,
+		TrustedProxyCIDRs: []*net.IPNet{trustedProxy},
+	})
 	req := identityRequest(http.MethodGet, "https://example.test", "")
+	req.RemoteAddr = "203.0.113.200:1234"
 	req.Header.Set("X-Forwarded-For", "203.0.113.10, 198.51.100.5")
-	if requestIP(req) != "203.0.113.10" {
-		t.Fatalf("requestIP = %q, want first forwarded IP", requestIP(req))
+	if requestIPForApp(app, req) != "203.0.113.200" {
+		t.Fatalf("untrusted requestIP = %q, want remote addr", requestIPForApp(app, req))
+	}
+	req.RemoteAddr = "198.51.100.5:1234"
+	if requestIPForApp(app, req) != "203.0.113.10" {
+		t.Fatalf("trusted requestIP = %q, want rightmost untrusted forwarded IP", requestIPForApp(app, req))
 	}
 	if tokenPrefix("short") != "short" || len(tokenPrefix("nexuspaas_abcdefghijklmnop")) != 12 {
 		t.Fatal("tokenPrefix did not preserve/trim expected values")
@@ -524,6 +675,12 @@ func TestIdentityHelperBranchesDirect(t *testing.T) {
 	if roleName(0) != "admin" || len(permissionsForRole("manager", 1)) != 1 || boolValue(map[string]any{"enabled": "true"}, "enabled") != true {
 		t.Fatal("role/permission/bool helper branch failed")
 	}
+}
+
+func oidcTestIDToken(claims map[string]any) string {
+	header, _ := json.Marshal(map[string]any{"alg": "none"})
+	payload, _ := json.Marshal(claims)
+	return base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload) + "."
 }
 
 func newIdentityTestApp() *platform.App {

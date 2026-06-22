@@ -64,6 +64,7 @@ func resolveStorageMountPlanContract(app *platform.App, r *http.Request, _ platf
 	if err != nil {
 		return status, shared.ErrorData(err.Error()), nil
 	}
+	publishMountPlanResolved(app, r, req, plan)
 	return http.StatusOK, plan, nil
 }
 
@@ -213,4 +214,38 @@ func storagePermissionAllows(permission string, readOnly bool) bool {
 		return permission == "read_only" || permission == "read_write"
 	}
 	return permission == "read_write"
+}
+
+func publishMountPlanResolved(app *platform.App, r *http.Request, req storageMountPlanRequest, plan storageMountPlanResponse) {
+	publishEvent(app, r, "StorageMountPlanResolved", map[string]any{
+		"action":                "resolved",
+		"project_id":            req.ProjectID,
+		"user_id":               req.UserID,
+		"namespace":             req.Namespace,
+		"mount_count":           len(req.Mounts),
+		"manifest_mount_count":  len(plan.ManifestMounts),
+		"share_operation_count": len(plan.PVCShareOperations),
+		"pvc_ids":               requestedPVCIDs(req.Mounts),
+		"target_pvcs":           targetPVCs(plan.PVCShareOperations),
+	})
+}
+
+func requestedPVCIDs(mounts []storageMountPlanRequestMount) []string {
+	out := make([]string, 0, len(mounts))
+	for _, mount := range mounts {
+		if mount.PVCID != "" {
+			out = append(out, mount.PVCID)
+		}
+	}
+	return out
+}
+
+func targetPVCs(ops []storagePVCShareOperation) []string {
+	out := make([]string, 0, len(ops))
+	for _, op := range ops {
+		if op.TargetPVC != "" {
+			out = append(out, op.TargetPVC)
+		}
+	}
+	return out
 }

@@ -127,6 +127,7 @@ func (a *App) RunProjection(ctx context.Context, consumer string, apply func(con
 			a.projections.recordDeadLetter(consumer, retried)
 			continue
 		}
+		a.resolveDeadLetterEvent(ctx, consumer, event)
 		a.projections.recordApplied(consumer, event)
 	}
 	if !consumeFailed {
@@ -171,6 +172,13 @@ func (a *App) deadLetterEvent(ctx context.Context, consumer string, event contra
 	return retried
 }
 
+func (a *App) resolveDeadLetterEvent(ctx context.Context, consumer string, event contracts.Event) {
+	if a.Store == nil {
+		return
+	}
+	a.Store.Delete(ctx, deadLetterResource, consumer+":"+event.EventID)
+}
+
 func projectionMetadataInt(data map[string]any, keys ...string) int {
 	for _, key := range keys {
 		switch value := data[key].(type) {
@@ -210,12 +218,24 @@ func (a *App) ProjectionStatuses() []ProjectionStatus {
 	return statuses
 }
 
-// ReplayProjection resets a consumer's idempotency state so its events are
-// re-applied on the next projection run (e.g. after a bug fix or to recover from
-// dead-lettered events). It is the operator-facing replay primitive.
+// ReplayProjection releases only unresolved dead-lettered events for retry. It
+// does not clear the whole consumer inbox, so already successful events are not
+// applied again.
 func (a *App) ReplayProjection(consumer string) {
-	if a.Events != nil {
-		a.projections.recordReplay(consumer)
-		a.Events.ResetConsumer(consumer)
+	if a.Events == nil || a.Store == nil {
+		return
 	}
+	var eventIDs []string
+	for _, record := range a.Store.List(context.Background(), deadLetterResource) {
+		if asString(record.Data["consumer"]) == consumer {
+			if eventID := asString(record.Data["event_id"]); eventID != "" {
+				eventIDs = append(eventIDs, eventID)
+			}
+		}
+	}
+	if len(eventIDs) == 0 {
+		return
+	}
+	a.projections.recordReplay(consumer)
+	a.Events.ResetConsumerEvents(consumer, eventIDs)
 }

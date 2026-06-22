@@ -48,14 +48,23 @@ func createPolicy(app *platform.App, r *http.Request, _ platform.RouteSpec) (int
 	}
 	id := shared.FirstNonEmpty(shared.TextValue(payload, "id"), authorizationPolicyRepo(app).NextProxyPolicyID(r.Context()))
 	now := time.Now().UTC()
-	policy, err := authorizationPolicyRepo(app).CreateProxyPolicy(r.Context(), map[string]any{
-		"id":          id,
-		"name":        name,
-		"description": shared.TextValue(payload, "description"),
-		"is_system":   false,
-		"created_at":  now,
-		"updated_at":  now,
-	}, rules)
+	var policy map[string]any
+	err = app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		created, e := authorizationPolicyRepo(app).CreateProxyPolicyTx(r.Context(), tx, map[string]any{
+			"id":          id,
+			"name":        name,
+			"description": shared.TextValue(payload, "description"),
+			"is_system":   false,
+			"created_at":  now,
+			"updated_at":  now,
+		}, rules)
+		if e != nil {
+			return e
+		}
+		policy = created
+		tx.Emit(proxyPolicyEvent(r, "create", created))
+		return nil
+	})
 	if err != nil {
 		if platform.IsCreateConflict(err) {
 			if strings.Contains(err.Error(), rulesResource) {
@@ -65,7 +74,6 @@ func createPolicy(app *platform.App, r *http.Request, _ platform.RouteSpec) (int
 		}
 		return http.StatusInternalServerError, shared.ErrorData("policy could not be created"), nil
 	}
-	publishProxyPolicyChanged(app, r, "create", policy)
 	return http.StatusCreated, policy, nil
 }
 
@@ -94,17 +102,27 @@ func updatePolicy(app *platform.App, r *http.Request, _ platform.RouteSpec) (int
 		}
 		replacement = &proxyPolicyRuleReplacement{Rules: rules}
 	}
-	policy, ok, err := authorizationPolicyRepo(app).UpdateProxyPolicy(r.Context(), id, update, replacement)
+	repo := authorizationPolicyRepo(app)
+	var policy map[string]any
+	var updated bool
+	err = app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		var e error
+		policy, updated, e = repo.UpdateProxyPolicyTx(r.Context(), tx, id, update, replacement)
+		if e != nil || !updated {
+			return e
+		}
+		tx.Emit(proxyPolicyEvent(r, "update", map[string]any{"old": current, "new": policy}))
+		return nil
+	})
 	if err != nil {
 		if platform.IsCreateConflict(err) {
 			return http.StatusConflict, shared.ErrorData(msgPolicyRuleExists), nil
 		}
 		return http.StatusInternalServerError, shared.ErrorData("policy rules could not be updated"), nil
 	}
-	if !ok {
+	if !updated {
 		return http.StatusNotFound, shared.ErrorData(msgPolicyNotFound), nil
 	}
-	publishProxyPolicyChanged(app, r, "update", map[string]any{"old": current, "new": policy})
 	return http.StatusOK, policy, nil
 }
 
@@ -153,7 +171,14 @@ func deletePolicy(app *platform.App, r *http.Request, _ platform.RouteSpec) (int
 	if !found {
 		return http.StatusNotFound, shared.ErrorData(msgPolicyNotFound), nil
 	}
-	authorizationPolicyRepo(app).DeleteProxyPolicyCascade(r.Context(), id)
-	publishProxyPolicyChanged(app, r, "delete", current)
+	if err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		if _, _, e := authorizationPolicyRepo(app).DeleteProxyPolicyCascadeTx(r.Context(), tx, id); e != nil {
+			return e
+		}
+		tx.Emit(proxyPolicyEvent(r, "delete", current))
+		return nil
+	}); err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("policy could not be deleted"), nil
+	}
 	return http.StatusOK, nil, nil
 }

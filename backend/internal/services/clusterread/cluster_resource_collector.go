@@ -25,14 +25,19 @@ func collectClusterResources(ctx context.Context, cl *cluster.Client, store plat
 	if err != nil {
 		return err
 	}
-	upsertReadModel(ctx, store, map[string]any{"summary": summaryMap(summary, now)})
+	podGPUUsages, err := cl.ListJobPodResourceUsage(ctx, now)
+	if err != nil {
+		return err
+	}
+	upsertReadModel(ctx, store, map[string]any{"summary": summaryMap(summary, podGPUUsages, now)})
 	return nil
 }
 
 // summaryMap renders a cluster.NodeSummary into the camelCase map shape
-// emptySummary()/publicSummary()/nodeList() expect. DRA device classes and
-// Prometheus pod GPU usages are left empty until the DRA/GPU adapters land.
-func summaryMap(s cluster.NodeSummary, now time.Time) map[string]any {
+// emptySummary()/publicSummary()/nodeList() expect. Project pod-count rows are
+// request metadata only; per-device DRA/DCGM metrics still require their own
+// telemetry adapter.
+func summaryMap(s cluster.NodeSummary, podUsages []cluster.PodResourceUsage, now time.Time) map[string]any {
 	nodes := make([]any, 0, len(s.Nodes))
 	for _, n := range s.Nodes {
 		nodes = append(nodes, map[string]any{
@@ -54,10 +59,31 @@ func summaryMap(s cluster.NodeSummary, now time.Time) map[string]any {
 		"totalGpuAllocatable":         s.TotalGPUAllocatable,
 		"totalGpuUsed":                s.TotalGPUUsed,
 		"nodes":                       nodes,
-		"podGpuUsages":                []any{},
+		"podGpuUsages":                podGPUUsageRows(podUsages),
 		"deviceClasses":               []any{},
 		"collectedAt":                 now,
 	}
+}
+
+func podGPUUsageRows(podUsages []cluster.PodResourceUsage) []any {
+	rows := make([]any, 0, len(podUsages))
+	for _, usage := range podUsages {
+		if !usage.IsActive || usage.RequestedGPU <= 0 {
+			continue
+		}
+		rows = append(rows, map[string]any{
+			"job_id":        usage.JobID,
+			"project_id":    usage.ProjectID,
+			"user_id":       usage.UserID,
+			"namespace":     usage.Namespace,
+			"pod_name":      usage.Name,
+			"requested_gpu": usage.RequestedGPU,
+			"timestamp":     usage.LastSeenAt,
+			"phase":         usage.Phase,
+			"active":        usage.IsActive,
+		})
+	}
+	return rows
 }
 
 // upsertReadModel keeps a single cluster_read_models record: it updates the newest

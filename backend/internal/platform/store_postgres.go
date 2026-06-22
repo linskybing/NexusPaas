@@ -35,6 +35,37 @@ func (s *PostgresStore) Create(ctx context.Context, resource string, data map[st
 	if spec, ok := identityPostgresResourceFor(resource); ok {
 		return s.createIdentityRecord(ctx, spec, data)
 	}
+	return createPostgresRecord(ctx, s.db, resource, data)
+}
+
+func (s *PostgresStore) CreateWithEvent(ctx context.Context, resource string, data map[string]any, buildEvent recordEventBuilder) (contracts.Record[map[string]any], error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return contracts.Record[map[string]any]{}, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after commit is a no-op
+
+	var record contracts.Record[map[string]any]
+	if spec, ok := identityPostgresResourceFor(resource); ok {
+		record, err = createIdentityRecordIn(ctx, tx, spec, data)
+	} else {
+		record, err = createPostgresRecord(ctx, tx, resource, data)
+	}
+	if err != nil {
+		return contracts.Record[map[string]any]{}, err
+	}
+	if buildEvent != nil {
+		if err := insertOutboxEvent(ctx, tx, buildEvent(record)); err != nil {
+			return contracts.Record[map[string]any]{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.Record[map[string]any]{}, err
+	}
+	return record, nil
+}
+
+func createPostgresRecord(ctx context.Context, db postgresStoreExecutor, resource string, data map[string]any) (contracts.Record[map[string]any], error) {
 	id, _ := data["id"].(string)
 	if id == "" {
 		id = newID()
@@ -46,7 +77,7 @@ func (s *PostgresStore) Create(ctx context.Context, resource string, data map[st
 	}
 	var rec contracts.Record[map[string]any]
 	var raw []byte
-	row := s.db.QueryRow(ctx, `
+	row := db.QueryRow(ctx, `
 		INSERT INTO platform_records (resource, id, payload)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (resource, id) DO NOTHING
@@ -123,43 +154,254 @@ func (s *PostgresStore) Update(ctx context.Context, resource, id string, data ma
 	if spec, ok := identityPostgresResourceFor(resource); ok {
 		return s.updateIdentityRecord(ctx, spec, id, data)
 	}
+	record, ok, err := updatePostgresRecord(ctx, s.db, resource, id, data)
+	if err != nil {
+		slog.Error("postgres update failed", "resource", resource, "id", id, "error", err)
+		return contracts.Record[map[string]any]{}, false
+	}
+	return record, ok
+}
+
+func (s *PostgresStore) UpdateWithEvent(ctx context.Context, resource, id string, data map[string]any, buildEvent recordEventBuilder) (contracts.Record[map[string]any], bool, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return contracts.Record[map[string]any]{}, false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after commit is a no-op
+
+	var record contracts.Record[map[string]any]
+	var ok bool
+	if spec, identity := identityPostgresResourceFor(resource); identity {
+		record, ok, err = updateIdentityRecordIn(ctx, tx, spec, id, data)
+	} else {
+		record, ok, err = updatePostgresRecord(ctx, tx, resource, id, data)
+	}
+	if err != nil || !ok {
+		return record, ok, err
+	}
+	if buildEvent != nil {
+		if err := insertOutboxEvent(ctx, tx, buildEvent(record)); err != nil {
+			return contracts.Record[map[string]any]{}, false, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.Record[map[string]any]{}, false, err
+	}
+	return record, true, nil
+}
+
+func (s *PostgresStore) UpsertWithEvent(ctx context.Context, resource, id string, data map[string]any, buildEvent recordEventBuilder) (contracts.Record[map[string]any], error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return contracts.Record[map[string]any]{}, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after commit is a no-op
+
+	record, err := upsertRecordIn(ctx, tx, resource, id, data)
+	if err != nil {
+		return contracts.Record[map[string]any]{}, err
+	}
+	if buildEvent != nil {
+		if err := insertOutboxEvent(ctx, tx, buildEvent(record)); err != nil {
+			return contracts.Record[map[string]any]{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.Record[map[string]any]{}, err
+	}
+	return record, nil
+}
+
+func updatePostgresRecord(ctx context.Context, db postgresStoreExecutor, resource, id string, data map[string]any) (contracts.Record[map[string]any], bool, error) {
 	patch, err := json.Marshal(cloneMap(data))
 	if err != nil {
-		slog.Error("postgres update marshal failed", "resource", resource, "id", id, "error", err)
-		return contracts.Record[map[string]any]{}, false
+		return contracts.Record[map[string]any]{}, false, fmt.Errorf("marshal patch: %w", err)
 	}
 	var rec contracts.Record[map[string]any]
 	var raw []byte
 	// Merge the patch into the stored JSONB, bump version, refresh updated_at.
-	row := s.db.QueryRow(ctx, `
+	row := db.QueryRow(ctx, `
 		UPDATE platform_records
 		SET payload = payload || $3::jsonb, version = version + 1, updated_at = now()
 		WHERE resource = $1 AND id = $2
 		RETURNING id, payload, version, created_at, updated_at`,
 		resource, id, patch)
 	if err := row.Scan(&rec.ID, &raw, &rec.Version, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
-		if !errors.Is(err, pgx.ErrNoRows) {
-			slog.Error("postgres update failed", "resource", resource, "id", id, "error", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return contracts.Record[map[string]any]{}, false, nil
 		}
-		return contracts.Record[map[string]any]{}, false
+		return contracts.Record[map[string]any]{}, false, fmt.Errorf("update record: %w", err)
 	}
 	if err := json.Unmarshal(raw, &rec.Data); err != nil {
-		slog.Error("postgres update unmarshal failed", "resource", resource, "id", id, "error", err)
-		return contracts.Record[map[string]any]{}, false
+		return contracts.Record[map[string]any]{}, false, fmt.Errorf("unmarshal payload: %w", err)
 	}
-	return rec, true
+	return rec, true, nil
+}
+
+func upsertRecordIn(ctx context.Context, db postgresStoreExecutor, resource, id string, data map[string]any) (contracts.Record[map[string]any], error) {
+	payload := cloneMap(data)
+	if id == "" {
+		id, _ = payload["id"].(string)
+	}
+	if id == "" {
+		id = newID()
+	}
+	payload["id"] = id
+	if spec, ok := identityPostgresResourceFor(resource); ok {
+		return upsertIdentityRecordIn(ctx, db, spec, id, payload)
+	}
+	return upsertPlatformRecordIn(ctx, db, resource, id, payload)
+}
+
+func upsertIdentityRecordIn(
+	ctx context.Context,
+	db postgresStoreExecutor,
+	spec identityPostgresResource,
+	id string,
+	payload map[string]any,
+) (contracts.Record[map[string]any], error) {
+	record, updated, err := updateIdentityRecordIn(ctx, db, spec, id, payload)
+	if err != nil || updated {
+		return record, err
+	}
+	record, err = createIdentityRecordIn(ctx, db, spec, payload)
+	if err == nil {
+		return record, nil
+	}
+	if !IsCreateConflict(err) {
+		return contracts.Record[map[string]any]{}, err
+	}
+	if updatedRecord, updated, updateErr := updateIdentityRecordIn(ctx, db, spec, id, payload); updateErr != nil || updated {
+		return updatedRecord, updateErr
+	}
+	return contracts.Record[map[string]any]{}, err
+}
+
+func upsertPlatformRecordIn(
+	ctx context.Context,
+	db postgresStoreExecutor,
+	resource string,
+	id string,
+	payload map[string]any,
+) (contracts.Record[map[string]any], error) {
+	record, updated, err := updatePostgresRecord(ctx, db, resource, id, payload)
+	if err != nil || updated {
+		return record, err
+	}
+	record, err = createPostgresRecord(ctx, db, resource, payload)
+	if err == nil {
+		return record, nil
+	}
+	if !IsCreateConflict(err) {
+		return contracts.Record[map[string]any]{}, err
+	}
+	if updatedRecord, updated, updateErr := updatePostgresRecord(ctx, db, resource, id, payload); updateErr != nil || updated {
+		return updatedRecord, updateErr
+	}
+	return contracts.Record[map[string]any]{}, err
 }
 
 func (s *PostgresStore) Delete(ctx context.Context, resource, id string) bool {
 	if spec, ok := identityPostgresResourceFor(resource); ok {
 		return s.deleteIdentityRecord(ctx, spec, id)
 	}
-	tag, err := s.db.Exec(ctx, `DELETE FROM platform_records WHERE resource = $1 AND id = $2`, resource, id)
+	deleted, err := deletePostgresRecord(ctx, s.db, resource, id)
 	if err != nil {
 		slog.Error("postgres delete failed", "resource", resource, "id", id, "error", err)
 		return false
 	}
-	return tag.RowsAffected() > 0
+	return deleted
+}
+
+func (s *PostgresStore) DeleteWithEvent(ctx context.Context, resource, id string, buildEvent deleteEventBuilder) (bool, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after commit is a no-op
+
+	var deleted bool
+	if spec, ok := identityPostgresResourceFor(resource); ok {
+		deleted, err = deleteIdentityRecordIn(ctx, tx, spec, id)
+	} else {
+		deleted, err = deletePostgresRecord(ctx, tx, resource, id)
+	}
+	if err != nil || !deleted {
+		return deleted, err
+	}
+	if buildEvent != nil {
+		if err := insertOutboxEvent(ctx, tx, buildEvent(deleted)); err != nil {
+			return false, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func deletePostgresRecord(ctx context.Context, db postgresStoreExecutor, resource, id string) (bool, error) {
+	tag, err := db.Exec(ctx, `DELETE FROM platform_records WHERE resource = $1 AND id = $2`, resource, id)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// RunInTx runs fn inside one database transaction: every write fn does through the
+// StoreTx and every event it Emits commit together, or all roll back. This is the
+// multi-record counterpart to CreateWithEvent and lets a cascade (parent + child
+// deletes, or a record + its sibling rows) stay atomic with its outbox event.
+func (s *PostgresStore) RunInTx(ctx context.Context, fn func(tx StoreTx) error) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after commit is a no-op
+
+	adapter := &postgresStoreTxAdapter{exec: tx}
+	if err := fn(adapter); err != nil {
+		return err
+	}
+	for _, event := range adapter.events {
+		if err := insertOutboxEvent(ctx, tx, event); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// postgresStoreTxAdapter exposes the in-transaction record helpers as a StoreTx,
+// dispatching identity-owned resources to the typed identity tables exactly like
+// the single-record *WithEvent methods do.
+type postgresStoreTxAdapter struct {
+	exec   postgresStoreExecutor
+	events []contracts.Event
+}
+
+func (a *postgresStoreTxAdapter) Create(ctx context.Context, resource string, data map[string]any) (contracts.Record[map[string]any], error) {
+	if spec, ok := identityPostgresResourceFor(resource); ok {
+		return createIdentityRecordIn(ctx, a.exec, spec, data)
+	}
+	return createPostgresRecord(ctx, a.exec, resource, data)
+}
+
+func (a *postgresStoreTxAdapter) Update(ctx context.Context, resource, id string, data map[string]any) (contracts.Record[map[string]any], bool, error) {
+	if spec, ok := identityPostgresResourceFor(resource); ok {
+		return updateIdentityRecordIn(ctx, a.exec, spec, id, data)
+	}
+	return updatePostgresRecord(ctx, a.exec, resource, id, data)
+}
+
+func (a *postgresStoreTxAdapter) Delete(ctx context.Context, resource, id string) (bool, error) {
+	if spec, ok := identityPostgresResourceFor(resource); ok {
+		return deleteIdentityRecordIn(ctx, a.exec, spec, id)
+	}
+	return deletePostgresRecord(ctx, a.exec, resource, id)
+}
+
+func (a *postgresStoreTxAdapter) Emit(event contracts.Event) {
+	a.events = append(a.events, event)
 }
 
 // NextID mirrors Store.NextID: collision-free, monotonic per (resource,prefix),
@@ -278,17 +520,19 @@ func saveIDHighWater(ctx context.Context, tx postgresStoreTx, key string, maxN i
 	return nil
 }
 
-type postgresStoreDB interface {
+type postgresStoreExecutor interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (postgresRows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) postgresRow
+}
+
+type postgresStoreDB interface {
+	postgresStoreExecutor
 	Begin(ctx context.Context) (postgresStoreTx, error)
 }
 
 type postgresStoreTx interface {
-	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
-	Query(ctx context.Context, sql string, args ...any) (postgresRows, error)
-	QueryRow(ctx context.Context, sql string, args ...any) postgresRow
+	postgresStoreExecutor
 	Commit(ctx context.Context) error
 	Rollback(ctx context.Context) error
 }

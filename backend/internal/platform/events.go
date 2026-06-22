@@ -13,7 +13,12 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-const defaultOutboxLimit = 1000
+const (
+	defaultOutboxLimit       = 1000
+	eventPublishFailedLogMsg = "event publish failed"
+)
+
+var errConsumerEventRequired = errors.New("consumer and event_id are required")
 
 type EventBus struct {
 	mu          sync.RWMutex
@@ -27,8 +32,8 @@ func NewEventBus() *EventBus {
 }
 
 func (b *EventBus) Publish(_ context.Context, event contracts.Event) error {
-	if event.Name == "" || event.Source == "" || event.EventID == "" || event.TraceID == "" || event.SchemaVersion == 0 {
-		return errors.New("event metadata is incomplete")
+	if err := validateEventMetadata(event); err != nil {
+		return err
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -39,7 +44,7 @@ func (b *EventBus) Publish(_ context.Context, event contracts.Event) error {
 
 func (b *EventBus) Consume(_ context.Context, consumer string, event contracts.Event) (bool, error) {
 	if consumer == "" || event.EventID == "" {
-		return false, errors.New("consumer and event_id are required")
+		return false, errConsumerEventRequired
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -58,6 +63,14 @@ func (b *EventBus) ResetConsumer(consumer string) {
 	defer b.mu.Unlock()
 	delete(b.inbox, consumer)
 	delete(b.checkpoints, consumer)
+}
+
+func (b *EventBus) ResetConsumerEvents(consumer string, eventIDs []string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, eventID := range eventIDs {
+		delete(b.inbox[consumer], eventID)
+	}
 }
 
 func (b *EventBus) Outbox() []contracts.Event {
@@ -179,21 +192,36 @@ func (b *EventBus) trimOutboxLocked() {
 	}
 }
 
-func (a *App) publishEvent(r *httpRequest, name string, data map[string]any) {
-	traceID := r.TraceID
-	if sc := trace.SpanContextFromContext(r.Context()); sc.HasTraceID() {
-		traceID = sc.TraceID().String()
+func validateEventMetadata(event contracts.Event) error {
+	if event.Name == "" || event.Source == "" || event.EventID == "" || event.TraceID == "" || event.SchemaVersion == 0 {
+		return errors.New("event metadata is incomplete")
 	}
-	if err := a.Events.Publish(r.Context(), contracts.Event{
+	return nil
+}
+
+func (a *App) publishEvent(r *httpRequest, name string, data map[string]any) {
+	if err := a.Events.Publish(r.Context(), a.newEvent(r, name, data)); err != nil {
+		slog.Error(eventPublishFailedLogMsg, "event", name, "service", r.Service, "trace_id", traceIDFromRequest(r), "error", err)
+	}
+}
+
+func (a *App) newEvent(r *httpRequest, name string, data map[string]any) contracts.Event {
+	return contracts.Event{
 		EventID:        NewUUID(),
 		Name:           name,
 		Source:         r.Service,
 		OccurredAt:     time.Now().UTC(),
-		TraceID:        traceID,
+		TraceID:        traceIDFromRequest(r),
 		SchemaVersion:  1,
 		IdempotencyKey: r.IdempotencyKey,
 		Data:           data,
-	}); err != nil {
-		slog.Error("event publish failed", "event", name, "service", r.Service, "trace_id", traceID, "error", err)
 	}
+}
+
+func traceIDFromRequest(r *httpRequest) string {
+	traceID := r.TraceID
+	if sc := trace.SpanContextFromContext(r.Context()); sc.HasTraceID() {
+		traceID = sc.TraceID().String()
+	}
+	return traceID
 }

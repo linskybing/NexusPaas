@@ -123,6 +123,10 @@ func (repo recordStoreSchedulerQuotaRepository) DeletePlan(ctx context.Context, 
 	return repo.store.Delete(ctx, plansResource, id)
 }
 
+func (repo recordStoreSchedulerQuotaRepository) DeletePlanTx(ctx context.Context, tx platform.StoreTx, id string) (bool, error) {
+	return tx.Delete(ctx, plansResource, id)
+}
+
 func (repo recordStoreSchedulerQuotaRepository) DeletePlans(ctx context.Context, ids []string) schedulerDeleteResult {
 	result := schedulerDeleteResult{Errors: []string{}, Deleted: []string{}}
 	for _, id := range ids {
@@ -173,6 +177,15 @@ func (repo recordStoreSchedulerQuotaRepository) BindPlanQueues(
 	return repo.UpdatePlan(ctx, planID, map[string]any{"queue_ids": queueIDs, "queues": queueIDs})
 }
 
+func (repo recordStoreSchedulerQuotaRepository) BindPlanQueuesTx(
+	ctx context.Context,
+	tx platform.StoreTx,
+	planID string,
+	queueIDs []string,
+) (contracts.Record[map[string]any], bool, error) {
+	return tx.Update(ctx, plansResource, planID, map[string]any{"queue_ids": queueIDs, "queues": queueIDs})
+}
+
 func (repo recordStoreSchedulerQuotaRepository) GetLiveQuota(ctx context.Context, projectID string) (contracts.Record[map[string]any], bool) {
 	return repo.store.Get(ctx, liveQuotasResource, projectID)
 }
@@ -215,4 +228,25 @@ func (repo recordStoreSchedulerQuotaRepository) removeQueueFromPlans(ctx context
 		}
 		repo.UpdatePlan(ctx, plan.ID, map[string]any{"queue_ids": queueIDs, "queues": queueIDs})
 	}
+}
+
+// DeleteQueueAndRemoveFromPlansTx deletes the queue and detaches it from every
+// plan that references it, all in one transaction so the QueueChanged event
+// commits with the cascade.
+func (repo recordStoreSchedulerQuotaRepository) DeleteQueueAndRemoveFromPlansTx(ctx context.Context, tx platform.StoreTx, id string) (bool, error) {
+	deleted, err := tx.Delete(ctx, queuesResource, id)
+	if err != nil || !deleted {
+		return false, err
+	}
+	for _, plan := range repo.ListPlans(ctx) {
+		current := shared.StringSlice(plan.Data["queue_ids"])
+		queueIDs := removeValue(current, id)
+		if len(queueIDs) == len(current) {
+			continue
+		}
+		if _, _, err := tx.Update(ctx, plansResource, plan.ID, map[string]any{"queue_ids": queueIDs, "queues": queueIDs}); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }

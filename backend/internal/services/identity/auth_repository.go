@@ -114,7 +114,7 @@ func newRecordStoreIdentityAuthRepository(store platform.RecordStore, principals
 			return "refresh." + randomHex(24)
 		},
 		apiTokenGenerator: func() string {
-			return "nexuspaas_" + randomHex(24)
+			return randomHex(24)
 		},
 		now: func() time.Time {
 			return time.Now().UTC()
@@ -223,12 +223,12 @@ func (r *recordStoreIdentityAuthRepository) CreateAPIToken(ctx context.Context, 
 	if ttl <= 0 {
 		ttl = defaultAPITokenTTL
 	}
-	rawToken := r.apiTokenGenerator()
 	for attempt := 0; attempt < 3; attempt++ {
 		id := r.store.NextID(apiTokensResource, "AT", 2600001, 0)
 		if attempt > 0 {
 			id = "AT" + strings.ToUpper(randomHex(8))
 		}
+		rawToken := platform.FormatUserAPIToken(id, r.apiTokenGenerator())
 		record, err := r.store.Create(ctx, apiTokensResource, map[string]any{
 			"id":           id,
 			"user_id":      userID,
@@ -250,18 +250,23 @@ func (r *recordStoreIdentityAuthRepository) CreateAPIToken(ctx context.Context, 
 }
 
 func (r *recordStoreIdentityAuthRepository) FindActiveAPITokenByRaw(ctx context.Context, rawToken string, now time.Time) (identityAPIToken, identityUser, bool) {
-	for _, record := range r.store.List(ctx, apiTokensResource) {
-		token := apiTokenFromRecord(record)
-		if !tokenActiveAt(token, now) || !platform.VerifySecret(token.TokenHash, rawToken) {
-			continue
-		}
-		user, ok := r.FindActiveUserByID(ctx, token.UserID)
-		if !ok {
-			return identityAPIToken{}, identityUser{}, false
-		}
-		return token, user, true
+	tokenID, ok := platform.ParseUserAPITokenID(rawToken)
+	if !ok {
+		return identityAPIToken{}, identityUser{}, false
 	}
-	return identityAPIToken{}, identityUser{}, false
+	record, ok := r.store.Get(ctx, apiTokensResource, tokenID)
+	if !ok {
+		return identityAPIToken{}, identityUser{}, false
+	}
+	token := apiTokenFromRecord(record)
+	if !tokenActiveAt(token, now) || !platform.VerifySecret(token.TokenHash, rawToken) {
+		return identityAPIToken{}, identityUser{}, false
+	}
+	user, ok := r.FindActiveUserByID(ctx, token.UserID)
+	if !ok {
+		return identityAPIToken{}, identityUser{}, false
+	}
+	return token, user, true
 }
 
 func (r *recordStoreIdentityAuthRepository) TouchAPITokenLastUsed(ctx context.Context, tokenID string, at time.Time) bool {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +19,40 @@ func TestRegisterUsesEventFedIdentityReadModel(t *testing.T) {
 
 	if err := app.ValidateServiceIsolation(); err != nil {
 		t.Fatalf("org project should use local event-fed identity read model, got isolation error: %v", err)
+	}
+}
+
+func TestMembershipRoleUpdateHelpersFailWhenTxUpdateMisses(t *testing.T) {
+	app := platform.NewApp(platform.Config{ServiceName: serviceName})
+	req := httptest.NewRequest(http.MethodPut, "/", nil)
+
+	existingMembership := orgProjectMembershipRecord{
+		ID: membershipID("U1", "G1"),
+		Data: map[string]any{
+			"id":       membershipID("U1", "G1"),
+			"user_id":  "U1",
+			"group_id": "G1",
+			"role":     "user",
+		},
+	}
+	if _, err := updateExistingMembership(app, req, existingMembership, "U1", "G1", "admin"); err == nil {
+		t.Fatal("updateExistingMembership error = nil, want tx miss error")
+	}
+
+	existingProjectMember := platformRecord{
+		ID: "P1/U1",
+		Data: map[string]any{
+			"id":         "P1/U1",
+			"project_id": "P1",
+			"user_id":    "U1",
+			"role":       "user",
+		},
+	}
+	if _, err := updateDirectProjectMemberRoleWithEvent(app, req, existingProjectMember, "P1", "U1", "admin"); err == nil {
+		t.Fatal("updateDirectProjectMemberRoleWithEvent error = nil, want tx miss error")
+	}
+	if got := len(app.Events.Outbox()); got != 0 {
+		t.Fatalf("tx miss emitted %d events, want 0", got)
 	}
 }
 
@@ -40,6 +75,55 @@ func TestOrgIdentityProjectionSupportsAdminAndUserLookupWhenIsolated(t *testing.
 	}
 	if got := len(app.Store.List(context.Background(), rolesResource)); got != 0 {
 		t.Fatalf("source identity roles = %d, want isolated org project to avoid owner store", got)
+	}
+}
+
+func TestStaticAdminRoleHeaderRequiresPlatformAuth(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/groups", nil)
+	req.Header.Set("X-User-ID", "ops-admin")
+	req.Header.Set("X-User-Role", "admin")
+
+	unauthenticated := platform.NewApp(platform.Config{ServiceName: serviceName})
+	if hasAdminPanel(unauthenticated, req, "ops-admin") {
+		t.Fatal("hasAdminPanel trusted admin role header when RequireAuth=false")
+	}
+
+	authenticated := platform.NewApp(platform.Config{ServiceName: serviceName, RequireAuth: true})
+	if !hasAdminPanel(authenticated, req, "ops-admin") {
+		t.Fatal("hasAdminPanel denied platform-authenticated static admin role")
+	}
+}
+
+func TestSpoofedAdminRoleHeaderCannotCreateGroupThroughServeHTTP(t *testing.T) {
+	app := newStaticAdminOrgProjectHTTPApp()
+
+	noKey := serveOrgProjectGroupCreate(app, map[string]string{"X-User-Role": "admin"}, "spoof-no-key")
+	if noKey.Code != http.StatusUnauthorized {
+		t.Fatalf("spoofed admin header without API key status = %d, want 401: %s", noKey.Code, noKey.Body.String())
+	}
+
+	reader := serveOrgProjectGroupCreate(app, map[string]string{"X-API-Key": "reader-key", "X-User-Role": "admin"}, "spoof-reader")
+	if reader.Code != http.StatusForbidden {
+		t.Fatalf("spoofed admin header with reader key status = %d, want 403: %s", reader.Code, reader.Body.String())
+	}
+
+	if _, found := groupGPURepository(app).FindGroup(context.Background(), "spoof-no-key"); found {
+		t.Fatal("spoofed no-key request created group")
+	}
+	if _, found := groupGPURepository(app).FindGroup(context.Background(), "spoof-reader"); found {
+		t.Fatal("spoofed reader request created group")
+	}
+}
+
+func TestStaticAdminAPIKeyPrincipalCanCreateGroupThroughServeHTTP(t *testing.T) {
+	app := newStaticAdminOrgProjectHTTPApp()
+
+	rec := serveOrgProjectGroupCreate(app, map[string]string{"X-API-Key": "admin-key"}, "static-admin")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("static admin group create status = %d, want 201: %s", rec.Code, rec.Body.String())
+	}
+	if _, found := groupGPURepository(app).FindGroup(context.Background(), "static-admin"); !found {
+		t.Fatal("static admin request did not create group")
 	}
 }
 
@@ -116,6 +200,35 @@ func TestSaveOrgIdentityHandlesMissingIDConflictAndCreateError(t *testing.T) {
 	if failingStore.createCalls != 1 || failingStore.updateCalls != 1 {
 		t.Fatalf("create-error path calls create=%d update=%d, want 1/1", failingStore.createCalls, failingStore.updateCalls)
 	}
+}
+
+func newStaticAdminOrgProjectHTTPApp() *platform.App {
+	app := platform.NewApp(platform.Config{
+		ServiceName:  serviceName,
+		HTTPAddr:     ":0",
+		RequireAuth:  true,
+		APIKeys:      map[string]bool{"admin-key": true, "reader-key": true},
+		ExternalURLs: map[string]string{},
+		APIKeyPrincipals: map[string]platform.APIKeyPrincipal{
+			"admin-key":  {ID: "ops-admin", Username: "ops-admin", Admin: true},
+			"reader-key": {ID: "ops-reader", Username: "ops-reader", Role: "user"},
+		},
+	})
+	app.RegisterService(Spec())
+	Register(app)
+	return app
+}
+
+func serveOrgProjectGroupCreate(app *platform.App, headers map[string]string, id string) *httptest.ResponseRecorder {
+	body := `{"id":"` + id + `","group_name":"` + id + `","name":"` + id + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/groups", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, req)
+	return rec
 }
 
 func publishOrgIdentityEvent(t *testing.T, app *platform.App, name string, data map[string]any) {

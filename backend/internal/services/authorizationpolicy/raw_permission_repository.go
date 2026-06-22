@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	rawPoliciesResource = serviceName + ":permission_policies"
-	groupingResource    = serviceName + ":permission_grouping_policies"
+	rawPoliciesResource            = serviceName + ":permission_policies"
+	groupingResource               = serviceName + ":permission_grouping_policies"
+	msgGroupingPolicyUpdateSkipped = "grouping policy update skipped"
 )
 
 var errRawPermissionRepositoryUnavailable = errors.New("raw permission repository unavailable")
@@ -94,6 +95,62 @@ func (r recordStoreRawPermissionRepository) CreateRawPermissionPolicy(ctx contex
 	return true, nil
 }
 
+func (r recordStoreRawPermissionRepository) CreateRawPermissionPolicyTx(ctx context.Context, tx platform.StoreTx, policy []string) (bool, error) {
+	if r.store == nil {
+		return false, errRawPermissionRepositoryUnavailable
+	}
+	if r.RawPermissionPolicyExists(ctx, policy) {
+		return false, nil
+	}
+	if _, err := tx.Create(ctx, rawPoliciesResource, rawPolicyRecord(policy)); err != nil {
+		if platform.IsCreateConflict(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func (r recordStoreRawPermissionRepository) CreateRawPermissionPolicyRecord(ctx context.Context, policy []string, metadata map[string]any) (bool, error) {
+	if r.store == nil {
+		return false, errRawPermissionRepositoryUnavailable
+	}
+	if r.RawPermissionPolicyExists(ctx, policy) {
+		return false, nil
+	}
+	record := rawPolicyRecord(policy)
+	for key, value := range metadata {
+		record[key] = value
+	}
+	if _, err := r.store.Create(ctx, rawPoliciesResource, record); err != nil {
+		if platform.IsCreateConflict(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func (r recordStoreRawPermissionRepository) ListRawPermissionPolicyRecords(ctx context.Context) []map[string]any {
+	if r.store == nil {
+		return nil
+	}
+	rows := []map[string]any{}
+	for _, record := range r.store.List(ctx, rawPoliciesResource) {
+		row := shared.CloneMap(record.Data)
+		row["id"] = record.ID
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+func (r recordStoreRawPermissionRepository) DeleteRawPermissionPolicyRecord(ctx context.Context, id string) bool {
+	if r.store == nil {
+		return false
+	}
+	return r.store.Delete(ctx, rawPoliciesResource, id)
+}
+
 func (r recordStoreRawPermissionRepository) UpdateRawPermissionPolicy(ctx context.Context, oldPolicy, newPolicy []string) (rawPermissionPolicyUpdateResult, error) {
 	if r.store == nil {
 		return rawPermissionPolicyUpdateResult{}, errRawPermissionRepositoryUnavailable
@@ -127,11 +184,57 @@ func (r recordStoreRawPermissionRepository) UpdateRawPermissionPolicy(ctx contex
 	return result, nil
 }
 
+func (r recordStoreRawPermissionRepository) UpdateRawPermissionPolicyTx(ctx context.Context, tx platform.StoreTx, oldPolicy, newPolicy []string) (rawPermissionPolicyUpdateResult, error) {
+	if r.store == nil {
+		return rawPermissionPolicyUpdateResult{}, errRawPermissionRepositoryUnavailable
+	}
+	oldID := rawPolicyID(oldPolicy)
+	if _, found := r.store.Get(ctx, rawPoliciesResource, oldID); !found {
+		return rawPermissionPolicyUpdateResult{}, nil
+	}
+	newID := rawPolicyID(newPolicy)
+	result := rawPermissionPolicyUpdateResult{Found: true}
+	if oldID != newID {
+		if _, found := r.store.Get(ctx, rawPoliciesResource, newID); found {
+			result.Conflict = true
+			return result, nil
+		}
+		if _, err := tx.Create(ctx, rawPoliciesResource, rawPolicyRecord(newPolicy)); err != nil {
+			if platform.IsCreateConflict(err) {
+				result.Conflict = true
+				return result, nil
+			}
+			return result, err
+		}
+		if _, err := tx.Delete(ctx, rawPoliciesResource, oldID); err != nil {
+			return result, err
+		}
+		result.Updated = true
+		return result, nil
+	}
+	_, updated, err := tx.Update(ctx, rawPoliciesResource, oldID, rawPolicyRecord(newPolicy))
+	if err != nil {
+		return result, err
+	}
+	result.Updated = updated
+	if !result.Updated {
+		slog.Warn("raw permission policy update skipped", "policy_id", oldID)
+	}
+	return result, nil
+}
+
 func (r recordStoreRawPermissionRepository) DeleteRawPermissionPolicy(ctx context.Context, policy []string) bool {
 	if r.store == nil {
 		return false
 	}
 	return r.store.Delete(ctx, rawPoliciesResource, rawPolicyID(policy))
+}
+
+func (r recordStoreRawPermissionRepository) DeleteRawPermissionPolicyTx(ctx context.Context, tx platform.StoreTx, policy []string) (bool, error) {
+	if r.store == nil {
+		return false, nil
+	}
+	return tx.Delete(ctx, rawPoliciesResource, rawPolicyID(policy))
 }
 
 func (r recordStoreRawPermissionRepository) RawPermissionAllowed(ctx context.Context, subject, domain, object, action string) (bool, error) {
@@ -162,6 +265,26 @@ func (r recordStoreRawPermissionRepository) ApplyPermissionOperation(ctx context
 	return nil
 }
 
+func (r recordStoreRawPermissionRepository) ApplyPermissionOperationTx(ctx context.Context, tx platform.StoreTx, op map[string]string) error {
+	var domain string
+	switch op["type"] {
+	case "project_member":
+		domain = op["project_id"]
+	case "group_role":
+		domain = op["group_id"]
+	default:
+		return fmt.Errorf("unsupported operation type: %s", op["type"])
+	}
+	switch op["action"] {
+	case "add", "update":
+		return r.UpsertGroupingPolicyTx(ctx, tx, op["type"], op["user_id"], op["role"], domain)
+	case "remove":
+		_, err := r.DeleteGroupingPolicyTx(ctx, tx, op["type"], op["user_id"], op["role"], domain)
+		return err
+	}
+	return nil
+}
+
 func (r recordStoreRawPermissionRepository) UpsertGroupingPolicy(ctx context.Context, opType, userID, role, domain string) error {
 	if r.store == nil {
 		return errRawPermissionRepositoryUnavailable
@@ -170,14 +293,42 @@ func (r recordStoreRawPermissionRepository) UpsertGroupingPolicy(ctx context.Con
 	record := groupingPolicyRecord(opType, userID, role, domain)
 	if _, found := r.store.Get(ctx, groupingResource, id); found {
 		if _, ok := r.store.Update(ctx, groupingResource, id, record); !ok {
-			slog.Warn("grouping policy update skipped", "grouping_id", id)
+			slog.Warn(msgGroupingPolicyUpdateSkipped, "grouping_id", id)
 		}
 		return nil
 	}
 	if _, err := r.store.Create(ctx, groupingResource, record); err != nil {
 		if platform.IsCreateConflict(err) {
 			if _, ok := r.store.Update(ctx, groupingResource, id, record); !ok {
-				slog.Warn("grouping policy update skipped", "grouping_id", id)
+				slog.Warn(msgGroupingPolicyUpdateSkipped, "grouping_id", id)
+			}
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func (r recordStoreRawPermissionRepository) UpsertGroupingPolicyTx(ctx context.Context, tx platform.StoreTx, opType, userID, role, domain string) error {
+	if r.store == nil {
+		return errRawPermissionRepositoryUnavailable
+	}
+	id := groupingPolicyID(opType, userID, role, domain)
+	record := groupingPolicyRecord(opType, userID, role, domain)
+	if _, found := r.store.Get(ctx, groupingResource, id); found {
+		if _, ok, err := tx.Update(ctx, groupingResource, id, record); err != nil {
+			return err
+		} else if !ok {
+			slog.Warn(msgGroupingPolicyUpdateSkipped, "grouping_id", id)
+		}
+		return nil
+	}
+	if _, err := tx.Create(ctx, groupingResource, record); err != nil {
+		if platform.IsCreateConflict(err) {
+			if _, ok, err := tx.Update(ctx, groupingResource, id, record); err != nil {
+				return err
+			} else if !ok {
+				slog.Warn(msgGroupingPolicyUpdateSkipped, "grouping_id", id)
 			}
 			return nil
 		}
@@ -191,6 +342,13 @@ func (r recordStoreRawPermissionRepository) DeleteGroupingPolicy(ctx context.Con
 		return false
 	}
 	return r.store.Delete(ctx, groupingResource, groupingPolicyID(opType, userID, role, domain))
+}
+
+func (r recordStoreRawPermissionRepository) DeleteGroupingPolicyTx(ctx context.Context, tx platform.StoreTx, opType, userID, role, domain string) (bool, error) {
+	if r.store == nil {
+		return false, errRawPermissionRepositoryUnavailable
+	}
+	return tx.Delete(ctx, groupingResource, groupingPolicyID(opType, userID, role, domain))
 }
 
 func (r recordStoreRawPermissionRepository) ListGroupingPolicies(ctx context.Context) []map[string]any {

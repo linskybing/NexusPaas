@@ -207,13 +207,25 @@ func dispatchResources(data map[string]any) ([]dispatchResource, error) {
 		if len(raw) == 0 {
 			continue
 		}
+		kind := shared.FirstNonEmpty(shared.TextValue(item, "kind", "Kind"), dispatchResourceKind(raw))
+		if strings.EqualFold(kind, "Secret") {
+			return nil, fmt.Errorf("raw Kubernetes Secret resources are rejected; use the platform secret API or an approved ExternalSecret profile")
+		}
 		out = append(out, dispatchResource{
 			Name: shared.TextValue(item, "name", "Name"),
-			Kind: shared.TextValue(item, "kind", "Kind"),
+			Kind: kind,
 			Raw:  raw,
 		})
 	}
 	return out, nil
+}
+
+func dispatchResourceKind(raw []byte) string {
+	var obj map[string]any
+	if json.Unmarshal(raw, &obj) != nil {
+		return ""
+	}
+	return shared.TextValue(obj, "kind", "Kind")
 }
 
 func resourceItems(value any) []map[string]any {

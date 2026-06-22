@@ -45,6 +45,66 @@ func (r recordStoreStorageRepository) CreateGroupStorage(ctx context.Context, da
 	return r.create(ctx, groupStorageResource, data)
 }
 
+// createWithEvent persists a storage record and its event in one transaction,
+// keeping resource-key ownership inside this repository (storage source guard).
+func (r recordStoreStorageRepository) createWithEvent(ctx context.Context, app *platform.App, resource string, data map[string]any, build func(map[string]any) contracts.Event) (map[string]any, error) {
+	if r.store == nil {
+		return nil, errStorageRepositoryUnavailable
+	}
+	record, err := app.CreateRecordWithEvent(ctx, resource, shared.CloneMap(data), func(rec contracts.Record[map[string]any]) contracts.Event {
+		return build(storageRecordMap(rec))
+	})
+	if err != nil {
+		return nil, err
+	}
+	return storageRecordMap(record), nil
+}
+
+func (r recordStoreStorageRepository) CreateGroupStorageWithEvent(ctx context.Context, app *platform.App, data map[string]any, build func(map[string]any) contracts.Event) (map[string]any, error) {
+	return r.createWithEvent(ctx, app, groupStorageResource, data, build)
+}
+
+func (r recordStoreStorageRepository) CreateProjectBindingWithEvent(ctx context.Context, app *platform.App, data map[string]any, build func(map[string]any) contracts.Event) (map[string]any, error) {
+	return r.createWithEvent(ctx, app, projectBindingsResource, data, build)
+}
+
+func (r recordStoreStorageRepository) CreateFastTransferWithEvent(ctx context.Context, app *platform.App, data map[string]any, build func(map[string]any) contracts.Event) (map[string]any, error) {
+	return r.createWithEvent(ctx, app, fastTransfersResource, data, build)
+}
+
+func (r recordStoreStorageRepository) upsertWithEvent(ctx context.Context, app *platform.App, resource, id string, data map[string]any, build func(map[string]any) contracts.Event) (map[string]any, error) {
+	if r.store == nil {
+		return nil, errStorageRepositoryUnavailable
+	}
+	record, err := app.UpsertRecordWithEvent(ctx, resource, id, shared.CloneMap(data), func(rec contracts.Record[map[string]any]) contracts.Event {
+		return build(storageRecordMap(rec))
+	})
+	if err != nil {
+		return nil, err
+	}
+	return storageRecordMap(record), nil
+}
+
+func (r recordStoreStorageRepository) updateWithEvent(ctx context.Context, app *platform.App, resource, id string, data map[string]any, build func(map[string]any) contracts.Event) (map[string]any, bool, error) {
+	if r.store == nil {
+		return nil, false, errStorageRepositoryUnavailable
+	}
+	record, ok, err := app.UpdateRecordWithEvent(ctx, resource, id, shared.CloneMap(data), func(rec contracts.Record[map[string]any]) contracts.Event {
+		return build(storageRecordMap(rec))
+	})
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	return storageRecordMap(record), true, nil
+}
+
+func (r recordStoreStorageRepository) deleteWithEvent(ctx context.Context, app *platform.App, resource, id string, build func(bool) contracts.Event) (bool, error) {
+	if r.store == nil {
+		return false, errStorageRepositoryUnavailable
+	}
+	return app.DeleteRecordWithEvent(ctx, resource, id, build)
+}
+
 func (r recordStoreStorageRepository) UpdateGroupStorageStatus(
 	ctx context.Context,
 	groupID, pvcID, status string,
@@ -54,6 +114,19 @@ func (r recordStoreStorageRepository) UpdateGroupStorageStatus(
 		"status":     status,
 		"updated_at": now.UTC(),
 	})
+}
+
+func (r recordStoreStorageRepository) UpdateGroupStorageStatusWithEvent(
+	ctx context.Context,
+	app *platform.App,
+	groupID, pvcID, status string,
+	now time.Time,
+	build func(map[string]any) contracts.Event,
+) (map[string]any, bool, error) {
+	return r.updateWithEvent(ctx, app, groupStorageResource, groupStorageID(groupID, pvcID), map[string]any{
+		"status":     status,
+		"updated_at": now.UTC(),
+	}, build)
 }
 
 func (r recordStoreStorageRepository) DeleteGroupStorageCascade(ctx context.Context, groupID, pvcID string) bool {
@@ -77,8 +150,16 @@ func (r recordStoreStorageRepository) UpsertStoragePermission(ctx context.Contex
 	return r.upsert(ctx, storagePermissionsResource, shared.TextValue(data, "id"), data)
 }
 
+func (r recordStoreStorageRepository) UpsertStoragePermissionWithEvent(ctx context.Context, app *platform.App, data map[string]any, build func(map[string]any) contracts.Event) (map[string]any, error) {
+	return r.upsertWithEvent(ctx, app, storagePermissionsResource, shared.TextValue(data, "id"), data, build)
+}
+
 func (r recordStoreStorageRepository) DeleteStoragePermission(ctx context.Context, groupID, pvcID, userID string) bool {
 	return r.delete(ctx, storagePermissionsResource, storagePermissionID(groupID, pvcID, userID))
+}
+
+func (r recordStoreStorageRepository) DeleteStoragePermissionWithEvent(ctx context.Context, app *platform.App, groupID, pvcID, userID string, build func(bool) contracts.Event) (bool, error) {
+	return r.deleteWithEvent(ctx, app, storagePermissionsResource, storagePermissionID(groupID, pvcID, userID), build)
 }
 
 func (r recordStoreStorageRepository) ListStoragePermissionsForPVC(ctx context.Context, groupID, pvcID string) []map[string]any {
@@ -89,6 +170,10 @@ func (r recordStoreStorageRepository) ListStoragePermissionsForPVC(ctx context.C
 
 func (r recordStoreStorageRepository) UpsertStoragePolicy(ctx context.Context, data map[string]any) (map[string]any, error) {
 	return r.upsert(ctx, storagePoliciesResource, storagePolicyID(text(data, "group_id"), text(data, "pvc_id")), data)
+}
+
+func (r recordStoreStorageRepository) UpsertStoragePolicyWithEvent(ctx context.Context, app *platform.App, data map[string]any, build func(map[string]any) contracts.Event) (map[string]any, error) {
+	return r.upsertWithEvent(ctx, app, storagePoliciesResource, storagePolicyID(text(data, "group_id"), text(data, "pvc_id")), data, build)
 }
 
 func (r recordStoreStorageRepository) GetStoragePolicy(ctx context.Context, groupID, pvcID string) (map[string]any, bool) {
@@ -123,8 +208,16 @@ func (r recordStoreStorageRepository) UpsertProjectPermission(ctx context.Contex
 	return r.upsert(ctx, projectPermissionsResource, shared.TextValue(data, "id"), data)
 }
 
+func (r recordStoreStorageRepository) UpsertProjectPermissionWithEvent(ctx context.Context, app *platform.App, data map[string]any, build func(map[string]any) contracts.Event) (map[string]any, error) {
+	return r.upsertWithEvent(ctx, app, projectPermissionsResource, shared.TextValue(data, "id"), data, build)
+}
+
 func (r recordStoreStorageRepository) DeleteProjectPermission(ctx context.Context, projectID, pvcID, userID string) bool {
 	return r.delete(ctx, projectPermissionsResource, projectPermissionID(projectID, pvcID, userID))
+}
+
+func (r recordStoreStorageRepository) DeleteProjectPermissionWithEvent(ctx context.Context, app *platform.App, projectID, pvcID, userID string, build func(bool) contracts.Event) (bool, error) {
+	return r.deleteWithEvent(ctx, app, projectPermissionsResource, projectPermissionID(projectID, pvcID, userID), build)
 }
 
 func (r recordStoreStorageRepository) ListProjectPermissionsForPVC(ctx context.Context, projectID, pvcID string) []map[string]any {
@@ -159,8 +252,25 @@ func (r recordStoreStorageRepository) CancelFastTransfer(
 	})
 }
 
+func (r recordStoreStorageRepository) CancelFastTransferWithEvent(
+	ctx context.Context,
+	app *platform.App,
+	projectID, namespace, name string,
+	now time.Time,
+	build func(map[string]any) contracts.Event,
+) (map[string]any, bool, error) {
+	return r.updateWithEvent(ctx, app, fastTransfersResource, fastTransferID(projectID, namespace, name), map[string]any{
+		"status":     "cancelled",
+		"updated_at": now.UTC(),
+	}, build)
+}
+
 func (r recordStoreStorageRepository) UpsertUserStorage(ctx context.Context, username string, data map[string]any) (map[string]any, error) {
 	return r.upsert(ctx, userStorageResource, username, data)
+}
+
+func (r recordStoreStorageRepository) UpsertUserStorageWithEvent(ctx context.Context, app *platform.App, username string, data map[string]any, build func(map[string]any) contracts.Event) (map[string]any, error) {
+	return r.upsertWithEvent(ctx, app, userStorageResource, username, data, build)
 }
 
 func (r recordStoreStorageRepository) UserStorageStatus(ctx context.Context, username string) map[string]any {
@@ -288,6 +398,57 @@ func (r recordStoreStorageRepository) deleteMatching(
 		}
 	}
 	return deleted
+}
+
+// deleteMatchingTx deletes matching rows through the transaction (rows are found
+// from the committed store). Resource-key ownership stays in this repository.
+func (r recordStoreStorageRepository) deleteMatchingTx(ctx context.Context, tx platform.StoreTx, resource string, matches func(map[string]any) bool) error {
+	if r.store == nil {
+		return nil
+	}
+	for _, record := range r.store.List(ctx, resource) {
+		if matches(record.Data) {
+			if _, err := tx.Delete(ctx, resource, record.ID); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// DeleteGroupStorageCascadeTx deletes the group storage plus its permissions and
+// policies in one transaction so the GroupStorageDeleted event commits atomically.
+func (r recordStoreStorageRepository) DeleteGroupStorageCascadeTx(ctx context.Context, tx platform.StoreTx, groupID, pvcID string) (bool, error) {
+	deleted, err := tx.Delete(ctx, groupStorageResource, groupStorageID(groupID, pvcID))
+	if err != nil || !deleted {
+		return false, err
+	}
+	if err := r.deleteMatchingTx(ctx, tx, storagePermissionsResource, func(row map[string]any) bool {
+		return text(row, "group_id") == groupID && text(row, "pvc_id") == pvcID
+	}); err != nil {
+		return false, err
+	}
+	if err := r.deleteMatchingTx(ctx, tx, storagePoliciesResource, func(row map[string]any) bool {
+		return text(row, "group_id") == groupID && text(row, "pvc_id") == pvcID
+	}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// DeleteProjectBindingCascadeTx deletes the binding plus its project permissions
+// in one transaction.
+func (r recordStoreStorageRepository) DeleteProjectBindingCascadeTx(ctx context.Context, tx platform.StoreTx, projectID, pvcID string) (bool, error) {
+	deleted, err := tx.Delete(ctx, projectBindingsResource, projectBindingID(projectID, pvcID))
+	if err != nil || !deleted {
+		return false, err
+	}
+	if err := r.deleteMatchingTx(ctx, tx, projectPermissionsResource, func(row map[string]any) bool {
+		return text(row, "project_id") == projectID && text(row, "pvc_id") == pvcID
+	}); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func storageRecordMap(record contracts.Record[map[string]any]) map[string]any {

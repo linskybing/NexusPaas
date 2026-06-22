@@ -2,7 +2,10 @@ package auditcompliance
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/csv"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -19,21 +22,27 @@ const (
 	serviceName               = "audit-compliance-service"
 	auditLogResource          = serviceName + ":audit_logs"
 	projectMemberConsumer     = serviceName + ":project_member_projection"
+	groupMemberConsumer       = serviceName + ":group_member_projection"
 	projectReportMembers      = serviceName + ":project_report_members"
+	groupReportMembers        = serviceName + ":group_report_members"
 	orgProjectMembersResource = "org-project-service:project_members"
+	orgUserGroupsResource     = "org-project-service:user_groups"
 )
 
 type AuditLog struct {
-	ID           string         `json:"id"`
-	UserID       string         `json:"user_id"`
-	ProjectID    *string        `json:"project_id,omitempty"`
-	Action       string         `json:"action"`
-	ResourceType string         `json:"resource_type"`
-	ResourceID   string         `json:"resource_id"`
-	OldData      map[string]any `json:"old_data,omitempty"`
-	NewData      map[string]any `json:"new_data,omitempty"`
-	Metadata     AuditMetadata  `json:"metadata"`
-	CreatedAt    time.Time      `json:"created_at"`
+	ID            string         `json:"id"`
+	UserID        string         `json:"user_id"`
+	ProjectID     *string        `json:"project_id,omitempty"`
+	GroupID       *string        `json:"group_id,omitempty"`
+	Action        string         `json:"action"`
+	ResourceType  string         `json:"resource_type"`
+	ResourceID    string         `json:"resource_id"`
+	OldData       map[string]any `json:"old_data,omitempty"`
+	NewData       map[string]any `json:"new_data,omitempty"`
+	Metadata      AuditMetadata  `json:"metadata"`
+	CreatedAt     time.Time      `json:"created_at"`
+	IntegrityHash string         `json:"integrity_hash"`
+	PreviousHash  string         `json:"previous_hash,omitempty"`
 }
 
 type AuditMetadata struct {
@@ -64,6 +73,8 @@ type SecurityPosture struct {
 
 type queryParams struct {
 	UserID       string
+	ProjectID    string
+	GroupID      string
 	ResourceType string
 	Action       string
 	StartTime    *time.Time
@@ -77,6 +88,7 @@ func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/audit/logs", getAuditLogs)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/audit/report", downloadProjectReport)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/admin/security/posture", getSecurityPosture)
+	app.RegisterCustomHandler(http.MethodPost, "/api/v1/internal/audit/cleanup", cleanupAuditRetention)
 	registerAuditRetention(app)
 }
 
@@ -85,12 +97,15 @@ func getAuditLogs(app *platform.App, r *http.Request, _ platform.RouteSpec) (int
 	if userID == "" {
 		return http.StatusUnauthorized, shared.ErrorData("unauthorized"), nil
 	}
-	if !isAdmin(r) {
-		return http.StatusForbidden, shared.ErrorData("admin access required"), nil
-	}
 	params, status, data, ok := parseQueryParams(r)
 	if !ok {
 		return status, data, nil
+	}
+	if !canQueryAuditLogs(app, r, userID, &params) {
+		if !hasScopedAuditQuery(params) {
+			return http.StatusBadRequest, shared.ErrorData("project_id or group_id is required for scoped audit query"), nil
+		}
+		return http.StatusForbidden, shared.ErrorData("project or group admin access required"), nil
 	}
 	logs := filterLogs(auditLogs(app, r), params)
 	total := len(logs)
@@ -142,8 +157,23 @@ func downloadProjectReport(app *platform.App, r *http.Request, _ platform.RouteS
 	}
 	var buf bytes.Buffer
 	writer := csv.NewWriter(&buf)
-	_ = writer.Write([]string{"Time", "User", "Action", "Resource Type", "Resource ID", "Description"})
-	for _, log := range filtered {
+	writeProjectReportCSV(writer, app.Config.EffectiveProductName(), projectID, filtered)
+	writer.Flush()
+	return http.StatusOK, platform.RawResponse{
+		ContentType: "text/csv",
+		Headers: map[string]string{
+			"Content-Disposition": "attachment;filename=" + auditReportFilename(app.Config.EffectiveProductName(), projectID),
+		},
+		Body: buf.Bytes(),
+	}, nil
+}
+
+func writeProjectReportCSV(writer *csv.Writer, productName, projectID string, logs []AuditLog) {
+	_ = writer.Write([]string{"Product", productName})
+	_ = writer.Write([]string{"Project", projectID})
+	_ = writer.Write(nil)
+	_ = writer.Write([]string{"Time", "User", "Action", "Resource Type", "Resource ID", "Description", "Integrity Hash", "Previous Hash"})
+	for _, log := range logs {
 		_ = writer.Write([]string{
 			log.CreatedAt.Format(time.RFC3339),
 			log.UserID,
@@ -151,16 +181,38 @@ func downloadProjectReport(app *platform.App, r *http.Request, _ platform.RouteS
 			log.ResourceType,
 			log.ResourceID,
 			log.Metadata.Description,
+			log.IntegrityHash,
+			log.PreviousHash,
 		})
 	}
-	writer.Flush()
-	return http.StatusOK, platform.RawResponse{
-		ContentType: "text/csv",
-		Headers: map[string]string{
-			"Content-Disposition": "attachment;filename=audit_report_" + projectID + ".csv",
-		},
-		Body: buf.Bytes(),
-	}, nil
+}
+
+func auditReportFilename(productName, projectID string) string {
+	product := safeFilenameToken(productName, "nexuspaas")
+	project := safeFilenameToken(projectID, "project")
+	return product + "_audit_report_" + project + ".csv"
+}
+
+func safeFilenameToken(value, fallback string) string {
+	var b strings.Builder
+	lastDash := false
+	for _, r := range strings.ToLower(strings.TrimSpace(value)) {
+		switch {
+		case r >= 'a' && r <= 'z' || r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastDash = false
+		case r == ' ' || r == '-' || r == '_':
+			if b.Len() > 0 && !lastDash {
+				b.WriteByte('-')
+				lastDash = true
+			}
+		}
+	}
+	token := strings.Trim(b.String(), "-")
+	if token == "" {
+		return fallback
+	}
+	return token
 }
 
 func getSecurityPosture(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
@@ -189,6 +241,8 @@ func parseQueryParams(r *http.Request) (queryParams, int, any, bool) {
 	params := queryParams{Limit: 100, Offset: 0}
 	query := r.URL.Query()
 	params.UserID = strings.TrimSpace(query.Get("user_id"))
+	params.ProjectID = strings.TrimSpace(query.Get("project_id"))
+	params.GroupID = strings.TrimSpace(query.Get("group_id"))
 	params.ResourceType = strings.TrimSpace(query.Get("resource_type"))
 	params.Action = strings.TrimSpace(query.Get("action"))
 	if parsed, status, data, ok := parseOptionalTime(query.Get("start_time"), "Invalid start_time"); !ok {
@@ -276,6 +330,9 @@ func RecentAuditLogMaps(app *platform.App, r *http.Request, limit int) []map[str
 		if entry.ProjectID != nil {
 			row["project_id"] = *entry.ProjectID
 		}
+		if entry.GroupID != nil {
+			row["group_id"] = *entry.GroupID
+		}
 		out = append(out, row)
 	}
 	return out
@@ -293,7 +350,8 @@ func auditLogs(app *platform.App, r *http.Request) []AuditLog {
 		logs = append(logs, AuditLog{
 			ID:           auditEventLogID(event),
 			UserID:       auditEventActorID(event.Data),
-			ProjectID:    optionalString(shared.TextValue(event.Data, "project_id")),
+			ProjectID:    optionalString(shared.TextValue(event.Data, "project_id", "projectId")),
+			GroupID:      optionalString(shared.TextValue(event.Data, "group_id", "groupId")),
 			Action:       shared.TextValue(event.Data, "action"),
 			ResourceType: shared.FirstNonEmpty(shared.TextValue(event.Data, "resource_type"), shared.TextValue(event.Data, "resource")),
 			ResourceID:   shared.TextValue(event.Data, "resource_id"),
@@ -310,8 +368,73 @@ func auditLogs(app *platform.App, r *http.Request) []AuditLog {
 			logs = append(logs, logFromMap(record.ID, record.Data, record.CreatedAt))
 		}
 	}
-	sort.Slice(logs, func(i, j int) bool { return logs[i].CreatedAt.After(logs[j].CreatedAt) })
+	sortAuditLogs(logs)
+	applyAuditIntegrityChain(logs)
 	return logs
+}
+
+func sortAuditLogs(logs []AuditLog) {
+	sort.Slice(logs, func(i, j int) bool {
+		if !logs[i].CreatedAt.Equal(logs[j].CreatedAt) {
+			return logs[i].CreatedAt.After(logs[j].CreatedAt)
+		}
+		return logs[i].ID > logs[j].ID
+	})
+}
+
+func applyAuditIntegrityChain(logs []AuditLog) {
+	previousHash := ""
+	for i := len(logs) - 1; i >= 0; i-- {
+		logs[i].PreviousHash = previousHash
+		logs[i].IntegrityHash = auditLogIntegrityHash(previousHash, logs[i])
+		previousHash = logs[i].IntegrityHash
+	}
+}
+
+type auditLogIntegrityPayload struct {
+	PreviousHash string         `json:"previous_hash"`
+	ID           string         `json:"id"`
+	UserID       string         `json:"user_id"`
+	ProjectID    string         `json:"project_id,omitempty"`
+	GroupID      string         `json:"group_id,omitempty"`
+	Action       string         `json:"action"`
+	ResourceType string         `json:"resource_type"`
+	ResourceID   string         `json:"resource_id"`
+	OldData      map[string]any `json:"old_data,omitempty"`
+	NewData      map[string]any `json:"new_data,omitempty"`
+	Metadata     AuditMetadata  `json:"metadata"`
+	CreatedAt    string         `json:"created_at"`
+}
+
+func auditLogIntegrityHash(previousHash string, log AuditLog) string {
+	projectID := ""
+	if log.ProjectID != nil {
+		projectID = *log.ProjectID
+	}
+	groupID := ""
+	if log.GroupID != nil {
+		groupID = *log.GroupID
+	}
+	payload := auditLogIntegrityPayload{
+		PreviousHash: previousHash,
+		ID:           log.ID,
+		UserID:       log.UserID,
+		ProjectID:    projectID,
+		GroupID:      groupID,
+		Action:       log.Action,
+		ResourceType: log.ResourceType,
+		ResourceID:   log.ResourceID,
+		OldData:      log.OldData,
+		NewData:      log.NewData,
+		Metadata:     log.Metadata,
+		CreatedAt:    log.CreatedAt.UTC().Format(time.RFC3339Nano),
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		raw = []byte(previousHash + log.ID + log.UserID + log.Action + log.ResourceType + log.ResourceID + log.CreatedAt.UTC().Format(time.RFC3339Nano))
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }
 
 func auditEventLogID(event contracts.Event) string {
@@ -324,6 +447,7 @@ func auditEventActorID(data map[string]any) string {
 
 func logFromMap(id string, data map[string]any, fallback time.Time) AuditLog {
 	projectID := optionalString(shared.TextValue(data, "project_id", "projectId"))
+	groupID := optionalString(shared.TextValue(data, "group_id", "groupId"))
 	createdAt := timeValue(data, "created_at", "createdAt")
 	if createdAt.IsZero() {
 		createdAt = fallback
@@ -332,6 +456,7 @@ func logFromMap(id string, data map[string]any, fallback time.Time) AuditLog {
 		ID:           shared.FirstNonEmpty(shared.TextValue(data, "id"), id),
 		UserID:       shared.TextValue(data, "user_id", "userId"),
 		ProjectID:    projectID,
+		GroupID:      groupID,
 		Action:       shared.TextValue(data, "action"),
 		ResourceType: shared.TextValue(data, "resource_type", "resourceType"),
 		ResourceID:   shared.TextValue(data, "resource_id", "resourceId"),
@@ -357,22 +482,93 @@ func filterLogs(logs []AuditLog, params queryParams) []AuditLog {
 }
 
 func auditLogMatches(log AuditLog, params queryParams) bool {
-	if params.UserID != "" && log.UserID != params.UserID {
+	return stringFilterMatches(params.UserID, log.UserID) &&
+		optionalStringFilterMatches(params.ProjectID, log.ProjectID) &&
+		optionalStringFilterMatches(params.GroupID, log.GroupID) &&
+		stringFilterMatches(params.ResourceType, log.ResourceType) &&
+		stringFilterMatches(params.Action, log.Action) &&
+		timeWindowMatches(log.CreatedAt, params.StartTime, params.EndTime)
+}
+
+func stringFilterMatches(filter, value string) bool {
+	return filter == "" || value == filter
+}
+
+func optionalStringFilterMatches(filter string, value *string) bool {
+	return filter == "" || (value != nil && *value == filter)
+}
+
+func timeWindowMatches(value time.Time, start, end *time.Time) bool {
+	if start != nil && value.Before(*start) {
 		return false
 	}
-	if params.ResourceType != "" && log.ResourceType != params.ResourceType {
-		return false
-	}
-	if params.Action != "" && log.Action != params.Action {
-		return false
-	}
-	if params.StartTime != nil && log.CreatedAt.Before(*params.StartTime) {
-		return false
-	}
-	if params.EndTime != nil && log.CreatedAt.After(*params.EndTime) {
+	if end != nil && value.After(*end) {
 		return false
 	}
 	return true
+}
+
+func canQueryAuditLogs(app *platform.App, r *http.Request, userID string, params *queryParams) bool {
+	if isAdmin(r) || isPlatformAuditor(r) {
+		return true
+	}
+	if !hasScopedAuditQuery(*params) {
+		return false
+	}
+	if params.ProjectID != "" && canQueryProjectAuditLogs(app, r, userID, params.ProjectID) {
+		return true
+	}
+	if params.GroupID != "" && canQueryGroupAuditLogs(app, r, userID, params.GroupID) {
+		return true
+	}
+	return false
+}
+
+func hasScopedAuditQuery(params queryParams) bool {
+	return params.ProjectID != "" || params.GroupID != ""
+}
+
+func canQueryProjectAuditLogs(app *platform.App, r *http.Request, userID, projectID string) bool {
+	if app == nil || app.Store == nil {
+		return false
+	}
+	syncProjectMemberReadModel(app, r)
+	for _, member := range projectMemberRecords(app, r) {
+		if shared.TextValue(member, "project_id", "projectId") != projectID || shared.TextValue(member, "user_id", "userId") != userID {
+			continue
+		}
+		switch shared.TextValue(member, "role") {
+		case "admin", "project_admin":
+			return true
+		}
+	}
+	return false
+}
+
+func canQueryGroupAuditLogs(app *platform.App, r *http.Request, userID, groupID string) bool {
+	if app == nil || app.Store == nil {
+		return false
+	}
+	syncGroupMemberReadModel(app, r)
+	for _, member := range groupMemberRecords(app, r) {
+		if shared.TextValue(member, "group_id", "groupId", "gid", "g_id") != groupID ||
+			shared.TextValue(member, "user_id", "userId", "uid", "u_id") != userID {
+			continue
+		}
+		if isGroupAuditAdminRole(shared.TextValue(member, "role")) {
+			return true
+		}
+	}
+	return false
+}
+
+func isGroupAuditAdminRole(role string) bool {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "admin", "group_admin":
+		return true
+	default:
+		return false
+	}
 }
 
 func pageLogs(logs []AuditLog, limit, offset int) []AuditLog {
@@ -576,6 +772,113 @@ func mergeProjectMemberRecords(source, local []map[string]any) []map[string]any 
 	return out
 }
 
+func syncGroupMemberReadModel(app *platform.App, r *http.Request) {
+	if app == nil || app.Store == nil || app.Events == nil {
+		return
+	}
+	app.RunProjection(r.Context(), groupMemberConsumer, func(event contracts.Event) error {
+		return groupMemberEvent(app, r, event)
+	})
+}
+
+func groupMemberEvent(app *platform.App, r *http.Request, event contracts.Event) error {
+	data, deleted, ok := groupMemberProjection(event)
+	if !ok {
+		return nil
+	}
+	if deleted {
+		deleteGroupMemberReadModel(app, r, data)
+		return nil
+	}
+	return upsertGroupMemberReadModel(app, r, data)
+}
+
+func groupMemberProjection(event contracts.Event) (map[string]any, bool, bool) {
+	if strings.ToLower(event.Name) != "groupmembershipchanged" {
+		return nil, false, false
+	}
+	if next, ok := event.Data["new"].(map[string]any); ok {
+		return shared.CloneMap(next), false, true
+	}
+	data := shared.CloneMap(event.Data)
+	deleted := strings.ToLower(shared.TextValue(data, "action")) == "delete"
+	if deleted {
+		return data, true, true
+	}
+	return data, false, true
+}
+
+func upsertGroupMemberReadModel(app *platform.App, r *http.Request, data map[string]any) error {
+	id := groupMemberReadModelID(data)
+	if id == "" {
+		return nil
+	}
+	data["id"] = id
+	if _, ok := app.Store.Update(r.Context(), groupReportMembers, id, data); ok {
+		return nil
+	}
+	if _, err := app.Store.Create(r.Context(), groupReportMembers, data); err != nil {
+		if platform.IsCreateConflict(err) {
+			if _, ok := app.Store.Update(r.Context(), groupReportMembers, id, data); !ok {
+				return fmt.Errorf("audit group-member projection conflict update missed for %s", id)
+			}
+			return nil
+		}
+		return fmt.Errorf("audit group-member projection create failed for %s: %w", id, err)
+	}
+	return nil
+}
+
+func deleteGroupMemberReadModel(app *platform.App, r *http.Request, data map[string]any) {
+	if deleted, ok := data["deleted"].(bool); ok && !deleted {
+		return
+	}
+	if id := groupMemberReadModelID(data); id != "" {
+		app.Store.Delete(r.Context(), groupReportMembers, id)
+	}
+}
+
+func groupMemberReadModelID(data map[string]any) string {
+	id := shared.TextValue(data, "id")
+	groupID := shared.TextValue(data, "group_id", "groupId", "gid", "g_id")
+	userID := shared.TextValue(data, "user_id", "userId", "uid", "u_id")
+	if groupID != "" && userID != "" {
+		return groupID + ":" + userID
+	}
+	return shared.FirstNonEmpty(id, userID, groupID)
+}
+
+func groupMemberRecords(app *platform.App, r *http.Request) []map[string]any {
+	local := recordMaps(app, r, groupReportMembers)
+	if !groupMemberSourceCoHosted(app) {
+		return local
+	}
+	source := recordMaps(app, r, orgUserGroupsResource)
+	if len(local) == 0 {
+		return source
+	}
+	return mergeGroupMemberRecords(source, local)
+}
+
+func mergeGroupMemberRecords(source, local []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(source)+len(local))
+	seen := map[string]bool{}
+	for _, record := range local {
+		if id := groupMemberReadModelID(record); id != "" {
+			seen[id] = true
+		}
+		out = append(out, record)
+	}
+	for _, record := range source {
+		id := groupMemberReadModelID(record)
+		if id != "" && seen[id] {
+			continue
+		}
+		out = append(out, record)
+	}
+	return out
+}
+
 func recordMaps(app *platform.App, r *http.Request, resource string) []map[string]any {
 	if app == nil || app.Store == nil {
 		return nil
@@ -592,6 +895,10 @@ func projectMemberSourceCoHosted(app *platform.App) bool {
 	return app != nil && app.Config.AllowsService("org-project-service")
 }
 
+func groupMemberSourceCoHosted(app *platform.App) bool {
+	return app != nil && app.Config.AllowsService("org-project-service")
+}
+
 func currentUserID(r *http.Request) string {
 	return strings.TrimSpace(r.Header.Get("X-User-ID"))
 }
@@ -599,6 +906,10 @@ func currentUserID(r *http.Request) string {
 func isAdmin(r *http.Request) bool {
 	role := strings.ToLower(r.Header.Get("X-User-Role"))
 	return role == "admin" || role == "super-admin"
+}
+
+func isPlatformAuditor(r *http.Request) bool {
+	return strings.TrimSpace(r.Header.Get("X-User-Role")) == "platform_auditor"
 }
 
 func mapValue(data map[string]any, keys ...string) map[string]any {

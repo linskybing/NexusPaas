@@ -46,15 +46,27 @@ func runningPod(name, nodeName, cpu, mem, gpu string) *corev1.Pod {
 	}
 }
 
+func jobLabeledPod(pod *corev1.Pod, namespace, jobID, projectID, userID string) *corev1.Pod {
+	pod.Namespace = namespace
+	pod.Labels = map[string]string{
+		cluster.LabelJobID:     jobID,
+		cluster.LabelProjectID: projectID,
+		cluster.LabelUserID:    userID,
+	}
+	return pod
+}
+
 func TestCollectClusterResourcesPopulatesReadModel(t *testing.T) {
 	now := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
 	objs := []runtime.Object{
 		node("node-a", "4", "8Gi", "2"),
 		node("node-b", "8", "16Gi", ""),
 		runningPod("p1", "node-a", "500m", "1Gi", "1"),
+		jobLabeledPod(runningPod("gpu-job", "node-a", "500m", "1Gi", "1"), "proj-p1-alice", "job-gpu", "P1", "U1"),
+		jobLabeledPod(runningPod("cpu-job", "node-a", "500m", "1Gi", ""), "proj-p1-alice", "job-cpu", "P1", "U1"),
 		// Terminal pods and unscheduled pods must not count toward usage.
 		func() runtime.Object {
-			p := runningPod("done", "node-a", "1", "1Gi", "1")
+			p := jobLabeledPod(runningPod("done", "node-a", "1", "1Gi", "1"), "proj-p1-alice", "job-done", "P1", "U1")
 			p.Status.Phase = corev1.PodSucceeded
 			return p
 		}(),
@@ -77,12 +89,25 @@ func TestCollectClusterResourcesPopulatesReadModel(t *testing.T) {
 	}
 
 	assertInt(t, summary, "nodeCount", 2)
-	// CPU allocatable: 4000 + 8000 milli; used: 500 milli (terminal pod excluded).
+	// CPU allocatable: 4000 + 8000 milli; used: active scheduled pods only.
 	assertInt64(t, summary, "totalCpuAllocatableMilli", 12000)
-	assertInt64(t, summary, "totalCpuUsedMilli", 500)
-	// GPU allocatable: only node-a contributes 2; used: 1 (terminal pod excluded).
+	assertInt64(t, summary, "totalCpuUsedMilli", 1500)
+	// GPU allocatable: only node-a contributes 2; used: active scheduled GPU pods.
 	assertInt64(t, summary, "totalGpuAllocatable", 2)
-	assertInt64(t, summary, "totalGpuUsed", 1)
+	assertInt64(t, summary, "totalGpuUsed", 2)
+	podRows, ok := summary["podGpuUsages"].([]any)
+	if !ok || len(podRows) != 1 {
+		t.Fatalf("podGpuUsages = %#v, want one active GPU job pod row", summary["podGpuUsages"])
+	}
+	row := podRows[0].(map[string]any)
+	if row["job_id"] != "job-gpu" || row["project_id"] != "P1" || row["user_id"] != "U1" ||
+		row["namespace"] != "proj-p1-alice" || row["pod_name"] != "gpu-job" || row["requested_gpu"] != float64(1) ||
+		row["phase"] != "Running" || row["active"] != true {
+		t.Fatalf("pod GPU row = %#v, want request-derived project pod-count metadata", row)
+	}
+	if _, ok := row["gpu_uuid"]; ok {
+		t.Fatalf("pod GPU row = %#v, must not synthesize per-device telemetry", row)
+	}
 }
 
 func TestCollectClusterResourcesUpsertsSingleRecord(t *testing.T) {

@@ -270,8 +270,8 @@ func executePreemption(exec preemptionExecution) (int, map[string]any) {
 		cleanup, err := exec.app.Cluster.CleanupJobResources(exec.request.Context(), victim.Namespace, victim.JobID)
 		cleanupData := cleanupResultData(cleanup)
 		victimData := victimResultData(victim, cleanupData, err)
-		appendVictimResult(exec.request.Context(), exec.repo, exec.recordID, victimData)
 		if err != nil {
+			appendVictimResult(exec.request.Context(), exec.repo, exec.recordID, victimData)
 			data := finishPreemptionRecord(exec.request.Context(), exec.repo, exec.recordID, "partial_failure", map[string]any{
 				"reason":  err.Error(),
 				"victims": preemptionRecordVictims(exec.request.Context(), exec.repo, exec.recordID),
@@ -279,6 +279,7 @@ func executePreemption(exec preemptionExecution) (int, map[string]any) {
 			return http.StatusServiceUnavailable, data
 		}
 		if cleanup.Total() == 0 {
+			appendVictimResult(exec.request.Context(), exec.repo, exec.recordID, victimData)
 			data := finishPreemptionRecord(exec.request.Context(), exec.repo, exec.recordID, "preflight_failed", map[string]any{
 				"reason":  "selected victim has no Kubernetes resources to clean up",
 				"victims": preemptionRecordVictims(exec.request.Context(), exec.repo, exec.recordID),
@@ -292,6 +293,7 @@ func executePreemption(exec preemptionExecution) (int, map[string]any) {
 			Cleanup:        cleanupData,
 		})
 		if err != nil {
+			appendVictimResult(exec.request.Context(), exec.repo, exec.recordID, victimData)
 			data := finishPreemptionRecord(exec.request.Context(), exec.repo, exec.recordID, "failed", map[string]any{
 				"reason":  err.Error(),
 				"victims": preemptionRecordVictims(exec.request.Context(), exec.repo, exec.recordID),
@@ -299,7 +301,7 @@ func executePreemption(exec preemptionExecution) (int, map[string]any) {
 			return http.StatusBadGateway, data
 		}
 		completed = append(completed, victimData)
-		publish(exec.app, exec.request, "JobPreempted", "preempted", map[string]any{
+		eventData := map[string]any{
 			"preemption_id":    exec.recordID,
 			"requester_job_id": exec.req.RequesterJobID,
 			"victim_job_id":    victim.JobID,
@@ -307,7 +309,20 @@ func executePreemption(exec preemptionExecution) (int, map[string]any) {
 			"namespace":        victim.Namespace,
 			"reason":           reason,
 			"cleanup":          cleanupData,
-		})
+		}
+		if err := exec.app.WithTx(exec.request.Context(), func(tx platform.StoreTx) error {
+			if err := exec.repo.AppendPreemptionVictimTx(exec.request.Context(), tx, exec.recordID, victimData); err != nil {
+				return err
+			}
+			tx.Emit(schedulerEvent(exec.request, "JobPreempted", "preempted", eventData))
+			return nil
+		}); err != nil {
+			data := finishPreemptionRecord(exec.request.Context(), exec.repo, exec.recordID, "failed", map[string]any{
+				"reason":  err.Error(),
+				"victims": preemptionRecordVictims(exec.request.Context(), exec.repo, exec.recordID),
+			})
+			return http.StatusInternalServerError, data
+		}
 	}
 	data := finishPreemptionRecord(exec.request.Context(), exec.repo, exec.recordID, "completed", map[string]any{
 		"accepted":  true,

@@ -68,7 +68,7 @@ func getClusterSummary(app *platform.App, r *http.Request, _ platform.RouteSpec)
 	if currentUserID(r) == "" {
 		return http.StatusUnauthorized, map[string]any{"message": "unauthorized"}, nil
 	}
-	return http.StatusOK, publicSummary(clusterSummary(app, r)), nil
+	return http.StatusOK, publicSummary(app, clusterSummary(app, r)), nil
 }
 
 func listClusterNodes(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
@@ -112,12 +112,11 @@ func getProjectsGPUUsageByUser(app *platform.App, r *http.Request, _ platform.Ro
 		out[projectID] = 0
 	}
 	for _, usage := range podGPUUsages(clusterSummary(app, r)) {
-		projectID := strings.TrimPrefix(textValue(usage, "namespace", "Namespace"), "project-")
-		if projectID == "" || projectID == textValue(usage, "namespace", "Namespace") {
-			continue
-		}
-		if _, ok := out[projectID]; ok {
-			out[projectID]++
+		for projectID := range out {
+			if podGPUUsageBelongsToProject(usage, projectID) {
+				out[projectID]++
+				break
+			}
 		}
 	}
 	return http.StatusOK, out, nil
@@ -138,14 +137,26 @@ func getProjectGPUUsage(app *platform.App, r *http.Request, _ platform.RouteSpec
 	if !hasAdminPanel(app, r, userID) && !isProjectMember(app, r, userID, projectID) {
 		return http.StatusForbidden, map[string]any{"message": "project access required"}, nil
 	}
+	summary := clusterSummary(app, r)
 	var used int64
-	namespace := "project-" + projectID
-	for _, usage := range podGPUUsages(clusterSummary(app, r)) {
-		if textValue(usage, "namespace", "Namespace") == namespace {
+	for _, usage := range podGPUUsages(summary) {
+		if podGPUUsageBelongsToProject(usage, projectID) {
 			used++
 		}
 	}
-	return http.StatusOK, map[string]any{"used": used}, nil
+	out := map[string]any{"used": used}
+	addTelemetryMetadata(out, app, summary)
+	return http.StatusOK, out, nil
+}
+
+func podGPUUsageBelongsToProject(usage map[string]any, projectID string) bool {
+	if projectID == "" {
+		return false
+	}
+	if textValue(usage, keyProjectID, keyProjectIDCamel, keyProjectIDTitle) == projectID {
+		return true
+	}
+	return textValue(usage, "namespace", "Namespace") == "project-"+projectID
 }
 
 func requireAdmin(app *platform.App, r *http.Request) (int, any, bool) {
@@ -190,14 +201,54 @@ func emptySummary() map[string]any {
 	}
 }
 
-func publicSummary(summary map[string]any) map[string]any {
+func publicSummary(app *platform.App, summary map[string]any) map[string]any {
 	out := shared.CloneMap(summary)
 	delete(out, "nodes")
 	delete(out, "Nodes")
 	delete(out, "podGpuUsages")
 	delete(out, "pod_gpu_usages")
 	delete(out, "PodGPUUsages")
+	addTelemetryMetadata(out, app, summary)
 	return out
+}
+
+func addTelemetryMetadata(out map[string]any, app *platform.App, summary map[string]any) {
+	collectedAt, ok := collectedAtTime(summary)
+	out["telemetry_stale"] = !ok || telemetryStale(app, collectedAt)
+	if ok {
+		out["collected_at"] = collectedAt.Format(time.RFC3339)
+		out["telemetry_age_seconds"] = int64(time.Since(collectedAt).Seconds())
+		return
+	}
+	out["collected_at"] = ""
+	out["telemetry_age_seconds"] = int64(0)
+}
+
+func telemetryStale(app *platform.App, collectedAt time.Time) bool {
+	interval := 15 * time.Minute
+	if app != nil && app.Config.MaintenanceInterval > 0 {
+		interval = app.Config.MaintenanceInterval
+	}
+	return time.Since(collectedAt) > 2*interval
+}
+
+func collectedAtTime(summary map[string]any) (time.Time, bool) {
+	value, ok := summary["collectedAt"]
+	if !ok {
+		value = summary["collected_at"]
+	}
+	switch typed := value.(type) {
+	case time.Time:
+		if typed.IsZero() {
+			return time.Time{}, false
+		}
+		return typed.UTC(), true
+	case string:
+		if parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(typed)); err == nil && !parsed.IsZero() {
+			return parsed.UTC(), true
+		}
+	}
+	return time.Time{}, false
 }
 
 func nodeList(summary map[string]any) []map[string]any {
@@ -332,6 +383,9 @@ func isProjectMember(app *platform.App, r *http.Request, userID, projectID strin
 }
 
 func hasAdminPanel(app *platform.App, r *http.Request, userID string) bool {
+	if requestRoleGrantsAdminPanel(app, r) {
+		return true
+	}
 	if app == nil || app.Store == nil {
 		return false
 	}
@@ -344,6 +398,10 @@ func hasAdminPanel(app *platform.App, r *http.Request, userID string) bool {
 		return allowed
 	}
 	return directRoleGrant(userID, allRoles) || policyRoleAssignmentGrant(userID, clusterRecords(app, r, clusterPolicyRoleAssignments, ""), policyRoles)
+}
+
+func requestRoleGrantsAdminPanel(app *platform.App, r *http.Request) bool {
+	return app != nil && app.Config.RequireAuth && strings.EqualFold(strings.TrimSpace(r.Header.Get("X-User-Role")), "admin")
 }
 
 func projectedUserAdminAccess(userID string, users, roles []map[string]any) (bool, bool) {

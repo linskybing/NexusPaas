@@ -56,14 +56,23 @@ func bindProjectPlan(app *platform.App, r *http.Request, _ platform.RouteSpec) (
 	if planID == "" {
 		return http.StatusBadRequest, shared.ErrorData("plan_id is required"), nil
 	}
-	old, updated, ok := projectRepository(app).BindProjectPlan(r.Context(), projectID, planID, time.Now().UTC())
-	if !ok {
+	var updated orgProjectRecord
+	var bound bool
+	if err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		old, next, ok, e := projectRepository(app).BindProjectPlanTx(r.Context(), tx, projectID, planID, time.Now().UTC())
+		if e != nil || !ok {
+			return e
+		}
+		bound = true
+		updated = next
+		tx.Emit(eventFor(r, eventProjectPlanUpdate, map[string]any{"old": old.Data, "new": next.Data}))
+		return nil
+	}); err != nil || !bound {
 		if _, found := projectRepository(app).FindProject(r.Context(), projectID); !found {
 			return http.StatusNotFound, shared.ErrorData(msgProjectNotFound), nil
 		}
 		return http.StatusInternalServerError, shared.ErrorData("project plan binding failed"), nil
 	}
-	publishEvent(app, r, eventFor(r, eventProjectPlanUpdate, map[string]any{"old": old.Data, "new": updated.Data}))
 	return http.StatusOK, contracts.Record[map[string]any]{ID: updated.ID, Data: updated.Data}, nil
 }
 
@@ -78,9 +87,15 @@ func clearProjectsPlan(app *platform.App, r *http.Request, _ platform.RouteSpec)
 	if planID == "" {
 		return http.StatusBadRequest, shared.ErrorData("plan_id is required"), nil
 	}
-	updates := projectRepository(app).ClearProjectsPlan(r.Context(), planID, time.Now().UTC())
-	for _, update := range updates {
-		publishEvent(app, r, eventFor(r, eventProjectPlanUpdate, map[string]any{"old": update.Old.Data, "new": update.New.Data}))
+	var cleared int
+	if err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		var e error
+		cleared, e = projectRepository(app).ClearProjectsPlanTx(r.Context(), tx, planID, time.Now().UTC(), func(update orgProjectPlanUpdate) {
+			tx.Emit(eventFor(r, eventProjectPlanUpdate, map[string]any{"old": update.Old.Data, "new": update.New.Data}))
+		})
+		return e
+	}); err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("project plan bindings clear failed"), nil
 	}
-	return http.StatusOK, map[string]any{"plan_id": planID, "cleared": len(updates)}, nil
+	return http.StatusOK, map[string]any{"plan_id": planID, "cleared": cleared}, nil
 }

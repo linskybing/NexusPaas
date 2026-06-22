@@ -174,7 +174,7 @@ func publishAPITokenEvent(app *platform.App, r *http.Request, userID, action, to
 		"resource":      "api_token",
 		"resource_id":   tokenID,
 		"success":       true,
-		"source_ip":     requestIP(r),
+		"source_ip":     requestIPForApp(app, r),
 		"user_agent":    r.UserAgent(),
 	}
 	if data != nil {

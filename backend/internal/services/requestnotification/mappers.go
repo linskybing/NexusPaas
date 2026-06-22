@@ -11,15 +11,12 @@ import (
 	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
 
-func publishFormEvent(app *platform.App, r *http.Request, name string, form Form) {
-	if app == nil || app.Events == nil {
-		return
-	}
+func formEvent(r *http.Request, name string, form Form) contracts.Event {
 	traceID := platform.TraceID(r)
 	if traceID == "" {
 		traceID = platform.NewUUID()
 	}
-	if err := app.Events.Publish(r.Context(), contracts.Event{
+	return contracts.Event{
 		EventID:        platform.NewUUID(),
 		Name:           name,
 		Source:         serviceName,
@@ -28,7 +25,14 @@ func publishFormEvent(app *platform.App, r *http.Request, name string, form Form
 		SchemaVersion:  1,
 		IdempotencyKey: r.Header.Get("Idempotency-Key"),
 		Data:           formToMap(&form),
-	}); err != nil {
+	}
+}
+
+func publishFormEvent(app *platform.App, r *http.Request, name string, form Form) {
+	if app == nil || app.Events == nil {
+		return
+	}
+	if err := app.Events.Publish(r.Context(), formEvent(r, name, form)); err != nil {
 		slog.Error("form event publish failed", "event", name, "form_id", form.ID, "error", err)
 	}
 }

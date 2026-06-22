@@ -17,6 +17,16 @@ type admissionResourceFloor struct {
 	memoryMB int
 }
 
+type admissionSecretPolicyViolation struct {
+	ResourceName string
+	ResourceKind string
+	Reason       string
+}
+
+func (v admissionSecretPolicyViolation) Error() string {
+	return v.Reason
+}
+
 func admissionResourceFloorFromRequest(req submitAdmissionRequest) (admissionResourceFloor, error) {
 	var floor admissionResourceFloor
 	if err := validateAdmissionResourceAccounting(req); err != nil {
@@ -72,11 +82,69 @@ func validateAdmissionResourceAccounting(req submitAdmissionRequest) error {
 func rejectUnsupportedAdmissionKind(obj map[string]any) error {
 	kind := stringField(obj, "kind")
 	switch strings.ToLower(kind) {
+	case "secret":
+		return admissionSecretPolicyViolation{
+			ResourceName: admissionObjectName(obj),
+			ResourceKind: kind,
+			Reason:       rawSecretPolicyReason(),
+		}
 	case "cronjob", "daemonset", "statefulset", "replicaset", "replicationcontroller":
 		return fmt.Errorf("unsupported workload kind %s for job submit; use Pod, Deployment, or Job", kind)
 	default:
 		return nil
 	}
+}
+
+func admissionSecretPolicyViolationFromRequest(req submitAdmissionRequest) (admissionSecretPolicyViolation, bool) {
+	for _, resource := range req.Resources {
+		kind := admissionResourceKind(resource)
+		if !strings.EqualFold(kind, "Secret") {
+			continue
+		}
+		return admissionSecretPolicyViolation{
+			ResourceName: admissionResourceName(resource),
+			ResourceKind: shared.FirstNonEmpty(kind, resource.Kind),
+			Reason:       rawSecretPolicyReason(),
+		}, true
+	}
+	return admissionSecretPolicyViolation{}, false
+}
+
+func admissionResourceKind(resource admissionResourcePayload) string {
+	if strings.TrimSpace(resource.Kind) != "" {
+		return strings.TrimSpace(resource.Kind)
+	}
+	if len(resource.Raw) == 0 {
+		return ""
+	}
+	var obj map[string]any
+	if json.Unmarshal(resource.Raw, &obj) != nil {
+		return ""
+	}
+	return stringField(obj, "kind")
+}
+
+func admissionResourceName(resource admissionResourcePayload) string {
+	if strings.TrimSpace(resource.Name) != "" {
+		return strings.TrimSpace(resource.Name)
+	}
+	if len(resource.Raw) == 0 {
+		return ""
+	}
+	var obj map[string]any
+	if json.Unmarshal(resource.Raw, &obj) != nil {
+		return ""
+	}
+	return admissionObjectName(obj)
+}
+
+func admissionObjectName(obj map[string]any) string {
+	metadata, _ := obj["metadata"].(map[string]any)
+	return stringField(metadata, "name")
+}
+
+func rawSecretPolicyReason() string {
+	return "raw Kubernetes Secret resources are rejected; use the platform secret API or an approved ExternalSecret profile"
 }
 
 func admissionPayloadGPU(obj map[string]any) float64 {

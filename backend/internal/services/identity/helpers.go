@@ -136,17 +136,25 @@ func rawJSON(r *http.Request, status int, data any, cookies []string) (int, plat
 	return status, platform.RawResponse{ContentType: contentTypeJSON, Headers: headers, HeaderValues: values, Body: body}, nil
 }
 
-func publish(app *platform.App, r *http.Request, name string, data map[string]any) {
-	if err := app.Events.Publish(r.Context(), contracts.Event{
+func identityEvent(r *http.Request, name string, data map[string]any) contracts.Event {
+	traceID := platform.TraceID(r)
+	if traceID == "" {
+		traceID = platform.NewUUID()
+	}
+	return contracts.Event{
 		EventID:        platform.NewUUID(),
 		Name:           name,
 		Source:         serviceName,
 		OccurredAt:     time.Now().UTC(),
-		TraceID:        platform.TraceID(r),
+		TraceID:        traceID,
 		SchemaVersion:  1,
 		IdempotencyKey: r.Header.Get("Idempotency-Key"),
 		Data:           data,
-	}); err != nil {
+	}
+}
+
+func publish(app *platform.App, r *http.Request, name string, data map[string]any) {
+	if err := app.Events.Publish(r.Context(), identityEvent(r, name, data)); err != nil {
 		slog.Error("identity event publish failed", "event", name, "error", err)
 	}
 }
