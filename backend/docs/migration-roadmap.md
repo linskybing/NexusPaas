@@ -4,9 +4,15 @@
 
 The backend is still a modular monolith with a shared physical PostgreSQL
 runtime. Identity has started moving toward owned records and service-local
-migrations, but most core domains still use generic `platform_records` JSONB
-storage. That store is acceptable for low-value, temporary, or compatibility
-data only.
+migrations, and request-notification's owned-write data is now fully typed and
+service-owned as well: `forms` + `form_messages` (migration
+`request-notification-service/migrations/0002_request_notification_typed_forms.sql`)
+and `announcements` + `announcement_reads` + `notifications` (migration `0003`),
+with store routing in `internal/platform/store_postgres_requestnotification.go`.
+Its `project_access_*` resources remain on the generic store as read-model
+projections. Most other core domains still use generic `platform_records` JSONB
+storage. That store is acceptable for low-value, temporary, or compatibility data
+only.
 
 No new core domain should be added to `platform_records` unless an ADR states
 why the data is temporary, who owns it, and when it will move to a typed schema.
