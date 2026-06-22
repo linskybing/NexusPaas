@@ -4,6 +4,12 @@ references/
 backend/coverage.out
 backend/.tmp/
 backend/.e2e-gate/
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/test-results/
+frontend/playwright-report/
+frontend/*.tsbuildinfo
 
 # Secrets — never commit
 .env

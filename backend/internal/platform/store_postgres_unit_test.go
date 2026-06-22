@@ -613,6 +613,11 @@ func TestNewBackingResourcesRelaysPostgresOutboxToRedisWhenBothAreConfigured(t *
 	if got, want := app.MaintenanceTaskNames(), []string{"event-outbox-relay"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("maintenance tasks = %#v, want %#v", got, want)
 	}
+
+	isolated := NewApp(Config{ServiceName: "identity-service"}, backing.Options...)
+	if got := isolated.MaintenanceTaskNames(); len(got) != 0 {
+		t.Fatalf("isolated maintenance tasks = %#v, want none", got)
+	}
 }
 
 func TestNewBackingResourcesKeepsDefaultsWithoutDatabaseURL(t *testing.T) {

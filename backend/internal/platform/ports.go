@@ -140,7 +140,7 @@ func WithEventRelay(relay eventRelay, batchSize int) Option {
 		if relay == nil {
 			return
 		}
-		a.RegisterMaintenanceTask("event-outbox-relay", func(ctx context.Context) error {
+		a.RegisterMaintenanceTaskForService("all", "event-outbox-relay", func(ctx context.Context) error {
 			_, err := relay.RelayPending(ctx, batchSize)
 			return err
 		})
