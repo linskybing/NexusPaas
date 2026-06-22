@@ -32,7 +32,7 @@ func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 }
 
 func (s *PostgresStore) Create(ctx context.Context, resource string, data map[string]any) (contracts.Record[map[string]any], error) {
-	if spec, ok := identityPostgresResourceFor(resource); ok {
+	if spec, ok := typedPostgresResourceFor(resource); ok {
 		return s.createIdentityRecord(ctx, spec, data)
 	}
 	return createPostgresRecord(ctx, s.db, resource, data)
@@ -46,7 +46,7 @@ func (s *PostgresStore) CreateWithEvent(ctx context.Context, resource string, da
 	defer tx.Rollback(ctx) //nolint:errcheck // rollback after commit is a no-op
 
 	var record contracts.Record[map[string]any]
-	if spec, ok := identityPostgresResourceFor(resource); ok {
+	if spec, ok := typedPostgresResourceFor(resource); ok {
 		record, err = createIdentityRecordIn(ctx, tx, spec, data)
 	} else {
 		record, err = createPostgresRecord(ctx, tx, resource, data)
@@ -96,7 +96,7 @@ func createPostgresRecord(ctx context.Context, db postgresStoreExecutor, resourc
 }
 
 func (s *PostgresStore) Get(ctx context.Context, resource, id string) (contracts.Record[map[string]any], bool) {
-	if spec, ok := identityPostgresResourceFor(resource); ok {
+	if spec, ok := typedPostgresResourceFor(resource); ok {
 		return s.getIdentityRecord(ctx, spec, id)
 	}
 	var rec contracts.Record[map[string]any]
@@ -118,7 +118,7 @@ func (s *PostgresStore) Get(ctx context.Context, resource, id string) (contracts
 }
 
 func (s *PostgresStore) List(ctx context.Context, resource string) []contracts.Record[map[string]any] {
-	if spec, ok := identityPostgresResourceFor(resource); ok {
+	if spec, ok := typedPostgresResourceFor(resource); ok {
 		return s.listIdentityRecords(ctx, spec)
 	}
 	rows, err := s.db.Query(ctx, `
@@ -151,7 +151,7 @@ func (s *PostgresStore) List(ctx context.Context, resource string) []contracts.R
 }
 
 func (s *PostgresStore) Update(ctx context.Context, resource, id string, data map[string]any) (contracts.Record[map[string]any], bool) {
-	if spec, ok := identityPostgresResourceFor(resource); ok {
+	if spec, ok := typedPostgresResourceFor(resource); ok {
 		return s.updateIdentityRecord(ctx, spec, id, data)
 	}
 	record, ok, err := updatePostgresRecord(ctx, s.db, resource, id, data)
@@ -171,7 +171,7 @@ func (s *PostgresStore) UpdateWithEvent(ctx context.Context, resource, id string
 
 	var record contracts.Record[map[string]any]
 	var ok bool
-	if spec, identity := identityPostgresResourceFor(resource); identity {
+	if spec, identity := typedPostgresResourceFor(resource); identity {
 		record, ok, err = updateIdentityRecordIn(ctx, tx, spec, id, data)
 	} else {
 		record, ok, err = updatePostgresRecord(ctx, tx, resource, id, data)
@@ -247,7 +247,7 @@ func upsertRecordIn(ctx context.Context, db postgresStoreExecutor, resource, id 
 		id = newID()
 	}
 	payload["id"] = id
-	if spec, ok := identityPostgresResourceFor(resource); ok {
+	if spec, ok := typedPostgresResourceFor(resource); ok {
 		return upsertIdentityRecordIn(ctx, db, spec, id, payload)
 	}
 	return upsertPlatformRecordIn(ctx, db, resource, id, payload)
@@ -302,7 +302,7 @@ func upsertPlatformRecordIn(
 }
 
 func (s *PostgresStore) Delete(ctx context.Context, resource, id string) bool {
-	if spec, ok := identityPostgresResourceFor(resource); ok {
+	if spec, ok := typedPostgresResourceFor(resource); ok {
 		return s.deleteIdentityRecord(ctx, spec, id)
 	}
 	deleted, err := deletePostgresRecord(ctx, s.db, resource, id)
@@ -321,7 +321,7 @@ func (s *PostgresStore) DeleteWithEvent(ctx context.Context, resource, id string
 	defer tx.Rollback(ctx) //nolint:errcheck // rollback after commit is a no-op
 
 	var deleted bool
-	if spec, ok := identityPostgresResourceFor(resource); ok {
+	if spec, ok := typedPostgresResourceFor(resource); ok {
 		deleted, err = deleteIdentityRecordIn(ctx, tx, spec, id)
 	} else {
 		deleted, err = deletePostgresRecord(ctx, tx, resource, id)
@@ -380,21 +380,21 @@ type postgresStoreTxAdapter struct {
 }
 
 func (a *postgresStoreTxAdapter) Create(ctx context.Context, resource string, data map[string]any) (contracts.Record[map[string]any], error) {
-	if spec, ok := identityPostgresResourceFor(resource); ok {
+	if spec, ok := typedPostgresResourceFor(resource); ok {
 		return createIdentityRecordIn(ctx, a.exec, spec, data)
 	}
 	return createPostgresRecord(ctx, a.exec, resource, data)
 }
 
 func (a *postgresStoreTxAdapter) Update(ctx context.Context, resource, id string, data map[string]any) (contracts.Record[map[string]any], bool, error) {
-	if spec, ok := identityPostgresResourceFor(resource); ok {
+	if spec, ok := typedPostgresResourceFor(resource); ok {
 		return updateIdentityRecordIn(ctx, a.exec, spec, id, data)
 	}
 	return updatePostgresRecord(ctx, a.exec, resource, id, data)
 }
 
 func (a *postgresStoreTxAdapter) Delete(ctx context.Context, resource, id string) (bool, error) {
-	if spec, ok := identityPostgresResourceFor(resource); ok {
+	if spec, ok := typedPostgresResourceFor(resource); ok {
 		return deleteIdentityRecordIn(ctx, a.exec, spec, id)
 	}
 	return deletePostgresRecord(ctx, a.exec, resource, id)
@@ -408,7 +408,7 @@ func (a *postgresStoreTxAdapter) Emit(event contracts.Event) {
 // never reused after the highest record is deleted. A transaction-scoped
 // advisory lock serialises concurrent allocators across processes.
 func (s *PostgresStore) NextID(resource, prefix string, base, width int) string {
-	if spec, ok := identityPostgresResourceFor(resource); ok {
+	if spec, ok := typedPostgresResourceFor(resource); ok {
 		return s.nextIdentityID(spec, prefix, base, width)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
