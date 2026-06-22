@@ -3,12 +3,15 @@ package platform
 import (
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
+
+const rateLimitRetryAfterSeconds = 60
 
 func setCORSHeaders(header http.Header, origin string, allowedOrigins map[string]bool) {
 	if allowedOrigin(origin, allowedOrigins) {
@@ -62,6 +65,9 @@ var requestGuards = []routeGuard{
 		return false, 0, "", ""
 	}},
 	{"ratelimit", func(a *App, r *http.Request, route RouteSpec) (bool, int, string, string) {
+		if !rateLimitApplies(route) {
+			return false, 0, "", ""
+		}
 		if !a.Rate.Allow(rateLimitKey(r, route, a.Config.TrustedProxyCIDRs)) {
 			return true, http.StatusTooManyRequests, "rate_limited", "too many requests"
 		}
@@ -73,6 +79,10 @@ var requestGuards = []routeGuard{
 		}
 		return false, 0, "", ""
 	}},
+}
+
+func rateLimitApplies(route RouteSpec) bool {
+	return !route.ServiceAuthRequired
 }
 
 func (a *App) wrap(service string, route RouteSpec) http.HandlerFunc {
@@ -95,21 +105,10 @@ func (a *App) wrap(service string, route RouteSpec) http.HandlerFunc {
 
 		setCORSHeaders(rec.Header(), withIDs.Header.Get("Origin"), a.Config.AllowedOrigins)
 		defer func() {
-			a.Metrics.Observe(route.Pattern, route.Method, rec.status, time.Since(start))
-			span.SetAttributes(attribute.Int("http.response.status_code", rec.status))
-			if rec.status >= 500 {
-				span.SetStatus(codes.Error, http.StatusText(rec.status))
-			}
-			slog.Info("request", "service", service, "method", route.Method, "path", r.URL.Path, "status", rec.status, "request_id", RequestID(withIDs), "trace_id", TraceID(withIDs), "span_id", spanID(span), "user_id", logPrincipal(withIDs), "project_id", withIDs.URL.Query().Get("project_id"))
+			a.observeRequest(service, route, rec.status, start, r, withIDs, span)
 		}()
-
-		for _, guard := range requestGuards {
-			if denied, status, code, message := guard.apply(a, withIDs, route); denied {
-				rec.status = status
-				span.SetAttributes(attribute.String("nexuspaas.denied_by", guard.name))
-				WriteError(rec, withIDs, status, code, message)
-				return
-			}
+		if a.writeMiddlewareDenial(rec, withIDs, route, span) {
+			return
 		}
 
 		req := &httpRequest{
@@ -118,21 +117,78 @@ func (a *App) wrap(service string, route RouteSpec) http.HandlerFunc {
 			TraceID:        TraceID(withIDs),
 			IdempotencyKey: withIDs.Header.Get("Idempotency-Key"),
 		}
-		if status, handled := a.maybeHandleStreamingProxy(rec, req, route); handled {
-			rec.status = status
-			if shouldPublishRouteAudit(route, status) {
-				a.publishAudit(req, route, status < 400)
-			}
-			return
-		}
-		status, data, degraded := a.handleRoute(req, route)
-		rec.status = status
-		if degraded != nil {
-			WriteDegraded(rec, withIDs, status, data, *degraded)
-			return
-		}
-		WriteJSON(rec, withIDs, status, data)
+		a.writeRouteResponse(rec, req, route)
 	}
+}
+
+func (a *App) observeRequest(service string, route RouteSpec, status int, start time.Time, original, withIDs *http.Request, span trace.Span) {
+	a.Metrics.Observe(route.Pattern, route.Method, status, time.Since(start))
+	span.SetAttributes(attribute.Int("http.response.status_code", status))
+	if status >= 500 {
+		span.SetStatus(codes.Error, http.StatusText(status))
+	}
+	slog.Info("request", "service", service, "method", route.Method, "path", original.URL.Path, "status", status, "request_id", RequestID(withIDs), "trace_id", TraceID(withIDs), "span_id", spanID(span), "user_id", logPrincipal(withIDs), "project_id", withIDs.URL.Query().Get("project_id"))
+}
+
+func (a *App) writeMiddlewareDenial(rec *statusRecorder, r *http.Request, route RouteSpec, span trace.Span) bool {
+	if denied, status, code, message := a.limitRequestBody(rec, r, route); denied {
+		writeDenied(rec, r, status, code, message)
+		return true
+	}
+	for _, guard := range requestGuards {
+		if denied, status, code, message := guard.apply(a, r, route); denied {
+			span.SetAttributes(attribute.String("nexuspaas.denied_by", guard.name))
+			a.writeGuardDenial(rec, r, guard.name, status, code, message)
+			return true
+		}
+	}
+	return false
+}
+
+func (a *App) writeGuardDenial(rec *statusRecorder, r *http.Request, guardName string, status int, code, message string) {
+	if guardName == "ratelimit" {
+		rec.Header().Set("Retry-After", strconv.Itoa(rateLimitRetryAfterSeconds))
+		message = "too many requests; retry after 60 seconds"
+	}
+	writeDenied(rec, r, status, code, message)
+}
+
+func writeDenied(rec *statusRecorder, r *http.Request, status int, code, message string) {
+	rec.status = status
+	WriteError(rec, r, status, code, message)
+}
+
+func (a *App) writeRouteResponse(rec *statusRecorder, req *httpRequest, route RouteSpec) {
+	if status, handled := a.maybeHandleStreamingProxy(rec, req, route); handled {
+		rec.status = status
+		a.publishRouteAudit(req, route, status)
+		return
+	}
+	status, data, degraded := a.handleRoute(req, route)
+	rec.status = status
+	if degraded != nil {
+		WriteDegraded(rec, req.Request, status, data, *degraded)
+		return
+	}
+	WriteJSON(rec, req.Request, status, data)
+}
+
+func (a *App) publishRouteAudit(req *httpRequest, route RouteSpec, status int) {
+	if shouldPublishRouteAudit(route, status) {
+		a.publishAudit(req, route, status < 400)
+	}
+}
+
+func (a *App) limitRequestBody(w http.ResponseWriter, r *http.Request, route RouteSpec) (bool, int, string, string) {
+	if !route.StateChanging || r.Body == nil {
+		return false, 0, "", ""
+	}
+	limit := int64(a.Config.EffectiveMaxAPIBodyBytes())
+	if r.ContentLength > limit {
+		return true, http.StatusRequestEntityTooLarge, "request_body_too_large", "request body exceeds max byte size"
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	return false, 0, "", ""
 }
 
 // alignTraceHeaders sets X-Trace-ID to the active span's trace id so logs, the

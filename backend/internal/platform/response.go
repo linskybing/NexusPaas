@@ -3,6 +3,8 @@ package platform
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 )
@@ -105,6 +107,10 @@ func DecodeMapWithError(r *http.Request) (map[string]any, error) {
 	defer r.Body.Close()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			return nil, InputLimitError{Status: http.StatusRequestEntityTooLarge, Message: fmt.Sprintf("request body exceeds max byte size of %d bytes", maxErr.Limit)}
+		}
 		return nil, err
 	}
 	if len(bytes.TrimSpace(body)) == 0 {

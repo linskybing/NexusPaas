@@ -137,6 +137,6 @@ func verifyCaptcha(app *platform.App, r *http.Request, id, answer string) bool {
 }
 
 func captchaRequired(app *platform.App, r *http.Request, username string) bool {
-	record, ok := app.Store.Get(r.Context(), loginFailuresResource, loginFailureID(username, requestIP(r)))
+	record, ok := app.Store.Get(r.Context(), loginFailuresResource, loginFailureID(username, requestIPForApp(app, r)))
 	return ok && intValue(record.Data, "failures", 0) >= defaultLoginMaxFailed
 }

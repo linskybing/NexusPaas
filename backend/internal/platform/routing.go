@@ -21,6 +21,21 @@ func (a *App) routeCandidates(method, path string) []RouteSpec {
 	return candidates
 }
 
+func (a *App) catalogRouteCandidates(method, path string) []RouteSpec {
+	bucket := routeBucket(path)
+	candidates := []RouteSpec{}
+	for _, route := range a.CatalogRoutes {
+		if route.Method != method {
+			continue
+		}
+		routeBucket := routeBucket(route.Pattern)
+		if routeBucket == bucket || routeBucket == routeWildcardBucket {
+			candidates = append(candidates, route)
+		}
+	}
+	return candidates
+}
+
 func (a *App) rebuildRouteIndex() {
 	next := map[string][]RouteSpec{}
 	for _, route := range a.Routes {
@@ -163,4 +178,13 @@ func routeService(route RouteSpec) string {
 		return parts[0]
 	}
 	return ""
+}
+
+func isInternalRoutePattern(pattern string) bool {
+	pattern = "/" + strings.TrimLeft(pattern, "/")
+	return strings.HasPrefix(pattern, "/internal/") || strings.HasPrefix(pattern, "/api/v1/internal/")
+}
+
+func IsInternalRoutePattern(pattern string) bool {
+	return isInternalRoutePattern(pattern)
 }

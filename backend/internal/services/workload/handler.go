@@ -56,22 +56,26 @@ func Register(app *platform.App) {
 func createConfigFile(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
 	payload, err := platform.DecodeMapWithError(r)
 	if err != nil {
-		return http.StatusBadRequest, shared.ErrorData(msgInvalidBody), nil
+		return decodeBodyError(err)
 	}
 	configs := configRepository(app)
 	config, err := configPayload(configs, r, payload)
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(err.Error()), nil
 	}
+	if err := validateConfigFileManifestLimits(app.Config, config); err != nil {
+		return platform.InputLimitStatus(err, http.StatusBadRequest), shared.ErrorData(platform.InputLimitMessage(err, err.Error())), nil
+	}
 	if status, data, ok := requireProjectAccess(app, r, shared.TextValue(config, "project_id", "projectId")); !ok {
 		return status, data, nil
 	}
-	record, err := configs.CreateConfig(r.Context(), config)
+	record, err := configs.CreateConfigWithEvent(r.Context(), app, config, func(rec contracts.Record[map[string]any]) contracts.Event {
+		return buildEvent(r, "ConfigFileChanged", "created", rec.Data)
+	})
 	if err != nil {
 		return createStatus(err), shared.ErrorData("config file could not be created"), nil
 	}
 	createVersion(configs, r, record.ID, config, "created")
-	publish(app, r, "ConfigFileChanged", "created", record.Data)
 	return http.StatusCreated, record, nil
 }
 
@@ -89,7 +93,7 @@ func getConfigFile(app *platform.App, r *http.Request, _ platform.RouteSpec) (in
 func updateConfigFile(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
 	payload, err := platform.DecodeMapWithError(r)
 	if err != nil {
-		return http.StatusBadRequest, shared.ErrorData(msgInvalidBody), nil
+		return decodeBodyError(err)
 	}
 	id := pathValue(r, "id")
 	configs := configRepository(app)
@@ -98,6 +102,9 @@ func updateConfigFile(app *platform.App, r *http.Request, _ platform.RouteSpec) 
 		return http.StatusNotFound, shared.ErrorData(msgConfigNotFound), nil
 	}
 	update := normalizeConfigUpdate(payload)
+	if err := validateConfigFileManifestLimits(app.Config, update); err != nil {
+		return platform.InputLimitStatus(err, http.StatusBadRequest), shared.ErrorData(platform.InputLimitMessage(err, err.Error())), nil
+	}
 	currentProjectID := configProjectID(existing)
 	if targetProjectID := shared.TextValue(update, "project_id", "projectId"); targetProjectID != "" && targetProjectID != currentProjectID {
 		return http.StatusBadRequest, shared.ErrorData("project_id is immutable"), nil
@@ -105,12 +112,13 @@ func updateConfigFile(app *platform.App, r *http.Request, _ platform.RouteSpec) 
 	if status, data, ok := requireProjectAccess(app, r, currentProjectID); !ok {
 		return status, data, nil
 	}
-	record, ok := configs.UpdateConfig(r.Context(), id, update)
-	if !ok {
+	record, ok, err := configs.UpdateConfigWithEvent(r.Context(), app, id, update, func(rec contracts.Record[map[string]any]) contracts.Event {
+		return buildEvent(r, "ConfigFileChanged", "updated", rec.Data)
+	})
+	if err != nil || !ok {
 		return http.StatusInternalServerError, shared.ErrorData("config file update failed"), nil
 	}
 	createVersion(configs, r, id, record.Data, "updated")
-	publish(app, r, "ConfigFileChanged", "updated", record.Data)
 	return http.StatusOK, record, nil
 }
 
@@ -124,8 +132,11 @@ func deleteConfigFile(app *platform.App, r *http.Request, _ platform.RouteSpec) 
 	if status, data, ok := requireProjectAccess(app, r, configProjectID(record)); !ok {
 		return status, data, nil
 	}
-	configs.DeleteConfig(r.Context(), id)
-	publish(app, r, "ConfigFileChanged", "deleted", map[string]any{"id": id})
+	if _, err := configs.DeleteConfigWithEvent(r.Context(), app, id, func(bool) contracts.Event {
+		return buildEvent(r, "ConfigFileChanged", "deleted", map[string]any{"id": id})
+	}); err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("config file delete failed"), nil
+	}
 	return http.StatusOK, map[string]any{"id": id, "deleted": true}, nil
 }
 
@@ -209,13 +220,17 @@ func commitConfigFileVersion(app *platform.App, r *http.Request, _ platform.Rout
 	}
 	payload, err := platform.DecodeMapWithError(r)
 	if err != nil {
-		return http.StatusBadRequest, shared.ErrorData(msgInvalidBody), nil
+		return decodeBodyError(err)
 	}
-	record, err := configRepository(app).CommitVersion(r.Context(), configID, payload, time.Now().UTC())
+	if err := validateConfigFileManifestLimits(app.Config, payload); err != nil {
+		return platform.InputLimitStatus(err, http.StatusBadRequest), shared.ErrorData(platform.InputLimitMessage(err, err.Error())), nil
+	}
+	record, err := configRepository(app).CommitVersionWithEvent(r.Context(), app, configID, payload, time.Now().UTC(), func(record contracts.Record[map[string]any]) contracts.Event {
+		return buildEvent(r, "ConfigCommitted", "committed", record.Data)
+	})
 	if err != nil {
 		return createStatus(err), shared.ErrorData("config version could not be created"), nil
 	}
-	publish(app, r, "ConfigCommitted", "committed", record.Data)
 	return http.StatusCreated, record, nil
 }
 
@@ -263,13 +278,14 @@ func configInstanceCommand(app *platform.App, r *http.Request, action string) (i
 	}
 	payload, err := platform.DecodeMapWithError(r)
 	if err != nil {
-		return http.StatusBadRequest, shared.ErrorData(msgInvalidBody), nil
+		return decodeBodyError(err)
 	}
-	command, err := configs.CreateInstanceCommand(r.Context(), id, action, payload, time.Now().UTC())
+	command, err := configs.CreateInstanceCommandWithEvent(r.Context(), app, id, action, payload, time.Now().UTC(), func(command contracts.Record[map[string]any]) contracts.Event {
+		return buildEvent(r, "ConfigInstanceCommanded", action, command.Data)
+	})
 	if err != nil {
 		return createStatus(err), shared.ErrorData("instance command could not be created"), nil
 	}
-	publish(app, r, "ConfigInstanceCommanded", action, command.Data)
 	return http.StatusAccepted, command, nil
 }
 
@@ -301,6 +317,23 @@ func normalizeConfigUpdate(payload map[string]any) map[string]any {
 	return update
 }
 
+func validateConfigFileManifestLimits(cfg platform.Config, payload map[string]any) error {
+	for _, key := range []string{"content", "manifest", "yaml", "json_data", "jsonData", "json", "object"} {
+		value, ok := payload[key]
+		if !ok {
+			continue
+		}
+		if err := platform.ValidateManifestValue(value, cfg.EffectiveMaxConfigFileBytes(), cfg.EffectiveMaxConfigFileDocuments()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func decodeBodyError(err error) (int, any, *platform.Degraded) {
+	return platform.InputLimitStatus(err, http.StatusBadRequest), shared.ErrorData(platform.InputLimitMessage(err, msgInvalidBody)), nil
+}
+
 func configFilesForProject(app *platform.App, r *http.Request, projectID string) []contracts.Record[map[string]any] {
 	return configRepository(app).ListConfigsByProject(r.Context(), projectID)
 }
@@ -326,7 +359,7 @@ func pathValue(r *http.Request, name string) string {
 	return strings.TrimSpace(r.PathValue(name))
 }
 
-func publish(app *platform.App, r *http.Request, name, action string, data map[string]any) {
+func buildEvent(r *http.Request, name, action string, data map[string]any) contracts.Event {
 	event := contracts.Event{
 		EventID:        platform.NewUUID(),
 		Name:           name,
@@ -338,7 +371,11 @@ func publish(app *platform.App, r *http.Request, name, action string, data map[s
 		Data:           shared.CloneMap(data),
 	}
 	event.Data["action"] = action
-	if err := app.Events.Publish(r.Context(), event); err != nil {
+	return event
+}
+
+func publish(app *platform.App, r *http.Request, name, action string, data map[string]any) {
+	if err := app.Events.Publish(r.Context(), buildEvent(r, name, action, data)); err != nil {
 		slog.Error("workload event publish failed", "event", name, "error", err)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
 	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
@@ -171,11 +172,12 @@ func (s *Service) createForm(app *platform.App, r *http.Request, _ platform.Rout
 		Tag:         tag,
 		Status:      "Pending",
 	}
-	if _, err := store.Create(r.Context(), formsResource, formToMap(form)); err != nil {
+	if _, err := app.CreateRecordWithEvent(r.Context(), formsResource, formToMap(form), func(contracts.Record[map[string]any]) contracts.Event {
+		return formEvent(r, "FormCreated", *form)
+	}); err != nil {
 		slog.Error("form create failed", "form_id", form.ID, "error", err)
 		return http.StatusInternalServerError, shared.ErrorData("form could not be created"), nil
 	}
-	publishFormEvent(app, r, "FormCreated", *form)
 	return http.StatusCreated, cloneForm(form), nil
 }
 
@@ -292,10 +294,11 @@ func (s *Service) transitionForm(app *platform.App, r *http.Request, id, status 
 	}
 	form.Status = status
 	form.UpdatedAt = time.Now().UTC()
-	if _, updated := store.Update(r.Context(), formsResource, id, formToMap(&form)); !updated {
+	if _, updated, err := app.UpdateRecordWithEvent(r.Context(), formsResource, id, formToMap(&form), func(contracts.Record[map[string]any]) contracts.Event {
+		return formEvent(r, "FormUpdated", form)
+	}); err != nil || !updated {
 		return http.StatusNotFound, shared.ErrorData(msgFormNotFound), nil
 	}
-	publishFormEvent(app, r, "FormUpdated", form)
 	return http.StatusOK, form, nil
 }
 

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
 	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
@@ -52,11 +53,12 @@ func register(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, an
 		"role_id":       roleID,
 		"system_role":   systemRole,
 	}
-	record, statusCode, errData := createUserWithLDAP(app, r, user, password)
+	_, statusCode, errData := createUserWithLDAP(app, r, user, password, func(rec contracts.Record[map[string]any]) contracts.Event {
+		return identityEvent(r, "UserCreated", publicUser(rec.Data))
+	})
 	if statusCode != http.StatusOK {
 		return statusCode, errData, nil
 	}
-	publish(app, r, "UserCreated", publicUser(record.Data))
 	return http.StatusOK, nil, nil
 }
 
@@ -270,13 +272,13 @@ func publishLoginFailure(app *platform.App, r *http.Request, username, path, rea
 		"resource_id":   path,
 		"success":       false,
 		"reason":        reason,
-		"source_ip":     requestIP(r),
+		"source_ip":     requestIPForApp(app, r),
 		"user_agent":    r.UserAgent(),
 	})
 }
 
 func loginLocked(app *platform.App, r *http.Request, username string) bool {
-	record, ok := app.Store.Get(r.Context(), loginFailuresResource, loginFailureID(username, requestIP(r)))
+	record, ok := app.Store.Get(r.Context(), loginFailuresResource, loginFailureID(username, requestIPForApp(app, r)))
 	if !ok {
 		return false
 	}
@@ -296,7 +298,7 @@ func loginLocked(app *platform.App, r *http.Request, username string) bool {
 }
 
 func recordLoginFailure(app *platform.App, r *http.Request, username string) {
-	ip := requestIP(r)
+	ip := requestIPForApp(app, r)
 	id := loginFailureID(username, ip)
 	count := 1
 	updates := map[string]any{
@@ -342,20 +344,22 @@ func updateConflictingLoginFailure(app *platform.App, r *http.Request, id string
 }
 
 func clearLoginFailures(app *platform.App, r *http.Request, username string) {
-	app.Store.Delete(r.Context(), loginFailuresResource, loginFailureID(username, requestIP(r)))
+	app.Store.Delete(r.Context(), loginFailuresResource, loginFailureID(username, requestIPForApp(app, r)))
 }
 
 func loginFailureID(username, ip string) string {
 	return "LF" + hex.EncodeToString([]byte(strings.ToLower(strings.TrimSpace(username))+"|"+strings.TrimSpace(ip)))
 }
 
-func requestIP(r *http.Request) string {
-	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwarded != "" {
-		if first := strings.TrimSpace(strings.Split(forwarded, ",")[0]); first != "" {
-			return first
-		}
+func requestIPForApp(app *platform.App, r *http.Request) string {
+	if app == nil {
+		return requestIP(r)
 	}
-	return strings.TrimSpace(r.RemoteAddr)
+	return platform.ClientIPFromRequest(r, app.Config.TrustedProxyCIDRs)
+}
+
+func requestIP(r *http.Request) string {
+	return platform.ClientIPFromRequest(r, nil)
 }
 
 func passwordMatches(user map[string]any, password string) bool {

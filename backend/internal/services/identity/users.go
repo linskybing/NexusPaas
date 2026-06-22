@@ -106,12 +106,9 @@ func batchResetPassword(app *platform.App, r *http.Request, _ platform.RouteSpec
 	}
 	result := batchResult()
 	for _, id := range firstUserIDs(payload) {
-		ok := resetUserPasswordWithLDAP(app, r, id, password)
-		if ok {
-			if updated, found := principalRepository(app).GetUser(r.Context(), id); found {
-				publish(app, r, "UserUpdated", publicUser(updated.Data))
-			}
-		}
+		ok := resetUserPasswordWithLDAP(app, r, id, password, func(rec contracts.Record[map[string]any]) contracts.Event {
+			return identityEvent(r, "UserUpdated", publicUser(rec.Data))
+		})
 		addBatchResult(result, ok, map[string]any{"id": id})
 	}
 	return http.StatusOK, result, nil
@@ -129,9 +126,10 @@ func batchUpdateRole(app *platform.App, r *http.Request, _ platform.RouteSpec) (
 	systemRole := systemRoleFor(role, intValue(payload, "system_role", 2))
 	result := batchResult()
 	for _, id := range firstUserIDs(payload) {
-		updated, ok := updateUserRoleWithLDAP(app, r, id, map[string]any{"role": role, "system_role": systemRole, "role_id": shared.FirstNonEmpty(textValue(payload, "role_id"), defaultRoleID)})
+		updated, ok := updateUserRoleWithLDAP(app, r, id, map[string]any{"role": role, "system_role": systemRole, "role_id": shared.FirstNonEmpty(textValue(payload, "role_id"), defaultRoleID)}, func(rec contracts.Record[map[string]any]) contracts.Event {
+			return identityEvent(r, "UserUpdated", publicUser(rec.Data))
+		})
 		if ok {
-			publish(app, r, "UserUpdated", publicUser(updated))
 			addBatchResult(result, true, publicUser(updated))
 			continue
 		}
@@ -165,11 +163,12 @@ func updateUser(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, 
 	if len(update) == 0 {
 		return http.StatusBadRequest, map[string]any{"message": "no updatable fields"}, nil
 	}
-	updated, statusCode, errData := updateUserWithLDAP(app, r, targetID, payload, update)
+	updated, statusCode, errData := updateUserWithLDAP(app, r, targetID, payload, update, func(rec contracts.Record[map[string]any]) contracts.Event {
+		return identityEvent(r, "UserUpdated", publicUser(rec.Data))
+	})
 	if statusCode != http.StatusOK {
 		return statusCode, errData, nil
 	}
-	publish(app, r, "UserUpdated", publicUser(updated.Data))
 	return http.StatusOK, publicUser(updated.Data), nil
 }
 
@@ -178,12 +177,13 @@ func deleteUser(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, 
 		return status, data, nil
 	}
 	id := pathValue(r, "id")
-	statusCode, errData := deleteUserWithLDAP(app, r, id)
+	statusCode, errData := deleteUserWithLDAP(app, r, id, func() contracts.Event {
+		return identityEvent(r, "UserDisabled", map[string]any{"id": id, "deleted": true})
+	})
 	if statusCode != http.StatusOK {
 		return statusCode, errData, nil
 	}
 	revokeUserCredentials(app, r, id)
-	publish(app, r, "UserDisabled", map[string]any{"id": id, "deleted": true})
 	return http.StatusOK, map[string]any{"id": id, "deleted": true}, nil
 }
 

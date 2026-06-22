@@ -44,6 +44,19 @@ func TestRawPermissionHandlers(t *testing.T) {
 		t.Fatalf("enforce decision = %#v, want allowed", data)
 	}
 
+	app.Config.ServiceAPIKey = "svc-key"
+	serviceKeyReq := policyRequest(http.MethodPost, "/api/v1/permissions/enforce", `{"sub":"alice","dom":"project-1","obj":"model","act":"write"}`, "")
+	serviceKeyReq.Header.Set("X-Service-Key", "svc-key")
+	code, data, _ = enforcePermission(app, serviceKeyReq, platform.RouteSpec{})
+	assertPolicyStatus(t, code, data, http.StatusOK)
+	if !data.(contracts.Decision).Allowed {
+		t.Fatalf("service-key enforce decision = %#v, want allowed", data)
+	}
+	wrongServiceKeyReq := policyRequest(http.MethodPost, "/api/v1/permissions/enforce", `{"sub":"alice","dom":"project-1","obj":"model","act":"write"}`, "")
+	wrongServiceKeyReq.Header.Set("X-Service-Key", "wrong")
+	code, data, _ = enforcePermission(app, wrongServiceKeyReq, platform.RouteSpec{})
+	assertPolicyStatus(t, code, data, http.StatusForbidden)
+
 	batch := `{"operations":[{"type":"project_member","action":"add","project_id":"P1","user_id":"U1","role":"user"},{"type":"group_role","action":"remove","group_id":"G1","user_id":"U1","role":"admin"}]}`
 	code, data, _ = batchProcessPermissions(app, policyRequest(http.MethodPost, "/api/v1/permissions/batch", batch, "ADMIN"), platform.RouteSpec{})
 	assertPolicyStatus(t, code, data, http.StatusOK)

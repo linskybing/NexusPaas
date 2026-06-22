@@ -47,8 +47,11 @@ func TestRemotePDPEnforceUsesServiceAPIKeyAndEnvelope(t *testing.T) {
 		if r.Method != http.MethodPost || r.URL.Path != remotePDPEnforcePath {
 			t.Fatalf("remote PDP request = %s %s, want POST %s", r.Method, r.URL.Path, remotePDPEnforcePath)
 		}
+		if got := r.Header.Get("X-Service-Key"); got != "secret" {
+			t.Fatalf("X-Service-Key = %q, want service API key", got)
+		}
 		if got := r.Header.Get("X-API-Key"); got != "secret" {
-			t.Fatalf("X-API-Key = %q, want service API key", got)
+			t.Fatalf("X-API-Key = %q, want rolling-upgrade compatibility API key", got)
 		}
 		var payload map[string]string
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -85,5 +88,137 @@ func TestRemotePDPEnforceFailsClosedOnUpstreamError(t *testing.T) {
 	}
 	if decision.Allowed {
 		t.Fatalf("decision = %#v, want fail-closed denial", decision)
+	}
+}
+
+func TestPrincipalScopesAllowRecognizesRouteActionScopes(t *testing.T) {
+	route := RouteSpec{
+		Method:      http.MethodPost,
+		Resource:    "authorization-policy-service:permissions",
+		Action:      "enforce",
+		OperationID: "post_authorization_policy_service_api_v1_permissions_enforce",
+	}
+	adminRoute := route
+	adminRoute.Admin = true
+
+	tests := []struct {
+		name  string
+		user  map[string]any
+		route RouteSpec
+		want  bool
+	}{
+		{
+			name:  "resource action scope",
+			user:  scopedUser("svc", "service", "permissions:enforce"),
+			route: route,
+			want:  true,
+		},
+		{
+			name:  "service action scope",
+			user:  scopedUser("svc", "service", "authorization-policy-service:enforce"),
+			route: route,
+			want:  true,
+		},
+		{
+			name:  "operation id scope still works",
+			user:  scopedUser("svc", "service", "post_authorization_policy_service_api_v1_permissions_enforce"),
+			route: route,
+			want:  true,
+		},
+		{
+			name:  "wildcard scope still works",
+			user:  scopedUser("svc", "service", "*"),
+			route: route,
+			want:  true,
+		},
+		{
+			name:  "admin scope still requires admin principal",
+			user:  scopedAdmin("admin", "admin"),
+			route: adminRoute,
+			want:  true,
+		},
+		{
+			name:  "unmatched scope denies",
+			user:  scopedUser("svc", "service", "permissions:read"),
+			route: route,
+			want:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/permissions/enforce", nil)
+			setVerifiedUser(req, tt.user)
+			if got := principalScopesAllow(req, tt.route); got != tt.want {
+				t.Fatalf("principalScopesAllow() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func scopedUser(id, role string, scopes ...string) map[string]any {
+	return map[string]any{
+		"id":          id,
+		"username":    id,
+		"role":        role,
+		"system_role": 2,
+		"status":      "online",
+		"scopes":      scopes,
+	}
+}
+
+func scopedAdmin(id, role string) map[string]any {
+	user := scopedUser(id, role, "admin")
+	user["system_role"] = 0
+	user["admin_panel"] = true
+	return user
+}
+
+func TestOperationalEndpointsBypassPDPForVerifiedAdmin(t *testing.T) {
+	app := NewApp(
+		Config{
+			RequireAuth: true,
+			APIKeys:     map[string]bool{"admin-key": true},
+			APIKeyPrincipals: map[string]APIKeyPrincipal{
+				"admin-key": {ID: "admin", Username: "admin", Role: "admin", Admin: true},
+			},
+		},
+		WithPDP(StaticPDP{Allowed: false, Reason: "deny all"}),
+	)
+
+	for _, path := range []string{"/metrics", "/openapi.json", "/service-registry"} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.Header.Set("X-API-Key", "admin-key")
+			rec := httptest.NewRecorder()
+
+			app.Mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s status = %d body = %s, want 200 despite denying PDP", path, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestOperationalEndpointsStillRequireAdminWhenPolicyBypassed(t *testing.T) {
+	app := NewApp(
+		Config{
+			RequireAuth: true,
+			APIKeys:     map[string]bool{"service-key": true},
+			APIKeyPrincipals: map[string]APIKeyPrincipal{
+				"service-key": {ID: "svc", Username: "svc", Role: "service"},
+			},
+		},
+		WithPDP(StaticPDP{Allowed: true, Reason: "would allow"}),
+	)
+	req := httptest.NewRequest(http.MethodGet, "/service-registry", nil)
+	req.Header.Set("X-API-Key", "service-key")
+	rec := httptest.NewRecorder()
+
+	app.Mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body = %s, want admin-gate 403", rec.Code, rec.Body.String())
 	}
 }

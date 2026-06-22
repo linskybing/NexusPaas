@@ -3,7 +3,6 @@ package platform
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"log/slog"
 	"time"
 
@@ -32,8 +31,8 @@ func NewRedisEventBus(rdb *redis.Client) *RedisEventBus {
 }
 
 func (b *RedisEventBus) Publish(ctx context.Context, event contracts.Event) error {
-	if event.Name == "" || event.Source == "" || event.EventID == "" || event.TraceID == "" || event.SchemaVersion == 0 {
-		return errors.New("event metadata is incomplete")
+	if err := validateEventMetadata(event); err != nil {
+		return err
 	}
 	payload, err := json.Marshal(event)
 	if err != nil {
@@ -47,7 +46,7 @@ func (b *RedisEventBus) Publish(ctx context.Context, event contracts.Event) erro
 
 func (b *RedisEventBus) Consume(ctx context.Context, consumer string, event contracts.Event) (bool, error) {
 	if consumer == "" || event.EventID == "" {
-		return false, errors.New("consumer and event_id are required")
+		return false, errConsumerEventRequired
 	}
 	added, err := b.rdb.SAdd(ctx, inboxKey(consumer), event.EventID).Result()
 	if err != nil {
@@ -61,6 +60,21 @@ func (b *RedisEventBus) ResetConsumer(consumer string) {
 	defer cancel()
 	if err := b.rdb.Del(ctx, inboxKey(consumer), checkpointKey(consumer)).Err(); err != nil {
 		slog.Error("redis reset consumer failed", "consumer", consumer, "error", err)
+	}
+}
+
+func (b *RedisEventBus) ResetConsumerEvents(consumer string, eventIDs []string) {
+	if len(eventIDs) == 0 {
+		return
+	}
+	members := make([]any, len(eventIDs))
+	for i, eventID := range eventIDs {
+		members[i] = eventID
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := b.rdb.SRem(ctx, inboxKey(consumer), members...).Err(); err != nil {
+		slog.Error("redis reset consumer events failed", "consumer", consumer, "error", err)
 	}
 }
 

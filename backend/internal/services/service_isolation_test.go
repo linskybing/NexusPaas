@@ -264,6 +264,7 @@ func TestRegisterAllCoHostedOwnsAllMaintenanceSideEffects(t *testing.T) {
 		"audit-log-retention",
 		"cluster-resource-collector",
 		"gpu-usage-telemetry-collector",
+		"harbor-catalog-sync",
 		"harbor-health",
 		"identity-auth-cleanup",
 		"idle-reaper",

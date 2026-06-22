@@ -47,6 +47,7 @@ func Register(app *platform.App) {
 	if app.Config.RequireAuth && app.Config.AllowsService(serviceName) {
 		app.PDP = RawPolicyPDP{Policies: rawPermissionRepo(app)}
 	}
+	reconcileAdminBootstrapPolicies(app)
 	app.RegisterCustomHandler(http.MethodGet, pathRawPermissionPolicy, listRawPermissionPolicies)
 	app.RegisterCustomHandler(http.MethodPost, pathRawPermissionPolicy, addRawPermissionPolicy)
 	app.RegisterCustomHandler(http.MethodPut, pathRawPermissionPolicy, updateRawPermissionPolicy)

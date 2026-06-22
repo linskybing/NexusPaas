@@ -9,7 +9,12 @@ import (
 
 	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
+	"github.com/linskybing/nexuspaas/backend/internal/platform/cluster"
 	"github.com/linskybing/nexuspaas/backend/internal/services/orgproject"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
 )
 
 func TestWorkloadConfigFileWorkflow(t *testing.T) {
@@ -86,12 +91,122 @@ func TestWorkloadConfigInstanceCommands(t *testing.T) {
 	}
 }
 
+func TestJobLogsReturnStoredRowsWithoutCluster(t *testing.T) {
+	app := newAuthWorkloadTestApp()
+	seedWorkloadProject(t, app, "P1")
+	seedWorkloadProjectMember(t, app, "P1", "U1")
+	createWorkloadRecord(t, app, jobsResource, map[string]any{"id": "j1", "job_id": "j1", "project_id": "P1", "namespace": "proj-p1"})
+	createWorkloadRecord(t, app, jobLogsResource, map[string]any{"job_id": "j1", "message": "stored log"})
+
+	records := serveJobLogs(t, app, "j1", "U1", http.StatusOK)
+	if len(records) != 1 || records[0].Data["message"] != "stored log" {
+		t.Fatalf("logs = %#v, want stored log only", records)
+	}
+}
+
+func TestJobLogsAppendKubernetesLogsFromCreatedResources(t *testing.T) {
+	app := newAuthWorkloadTestAppWithCluster(workloadLogPod("proj-p1", "created", "j1"))
+	seedWorkloadProject(t, app, "P1")
+	seedWorkloadProjectMember(t, app, "P1", "U1")
+	createWorkloadRecord(t, app, jobsResource, map[string]any{
+		"id": "j1", "job_id": "j1", "project_id": "P1", "namespace": "proj-p1",
+		"created_resources": []map[string]any{{"kind": "Pod", "namespace": "proj-p1", "name": "created"}},
+	})
+
+	records := serveJobLogs(t, app, "j1", "U1", http.StatusOK)
+	k8sLog := findLogRecordBySource(records, "kubernetes_pod_logs")
+	if k8sLog == nil || k8sLog.Data["pod"] != "created" || k8sLog.Data["line"] != "fake logs" {
+		t.Fatalf("logs = %#v, want kubernetes log from created pod", records)
+	}
+}
+
+func TestJobLogsFallBackToJobLabelSelector(t *testing.T) {
+	app := newAuthWorkloadTestAppWithCluster(
+		workloadLogPod("proj-p1", "matching", "j1"),
+		workloadLogPod("proj-p1", "other", "j2"),
+	)
+	seedWorkloadProject(t, app, "P1")
+	seedWorkloadProjectMember(t, app, "P1", "U1")
+	createWorkloadRecord(t, app, jobsResource, map[string]any{"id": "j1", "job_id": "j1", "project_id": "P1", "namespace": "proj-p1"})
+
+	records := serveJobLogs(t, app, "j1", "U1", http.StatusOK)
+	if len(records) != 1 || records[0].Data["pod"] != "matching" || records[0].Data["line"] != "fake logs" {
+		t.Fatalf("logs = %#v, want label-selected kubernetes log", records)
+	}
+}
+
+func TestJobLogsRejectUnauthorizedBeforeClusterRead(t *testing.T) {
+	pod := workloadLogPod("proj-p2", "secret-job", "j2")
+	clientset := k8sfake.NewSimpleClientset(pod)
+	app := newAuthWorkloadTestAppWithClientset(clientset)
+	seedWorkloadProject(t, app, "P1")
+	seedWorkloadProject(t, app, "P2")
+	seedWorkloadProjectMember(t, app, "P1", "U1")
+	createWorkloadRecord(t, app, jobsResource, map[string]any{"id": "j2", "job_id": "j2", "project_id": "P2", "namespace": "proj-p2"})
+
+	_ = serveJobLogs(t, app, "j2", "U1", http.StatusForbidden)
+	if len(clientset.Actions()) != 0 {
+		t.Fatalf("cluster actions = %#v, want none before authorization succeeds", clientset.Actions())
+	}
+}
+
+func TestJobLogsIgnoreNamespaceOutsideProjectBoundary(t *testing.T) {
+	pod := workloadLogPod("proj-p2", "spoofed", "j1")
+	clientset := k8sfake.NewSimpleClientset(pod)
+	app := newAuthWorkloadTestAppWithClientset(clientset)
+	seedWorkloadProject(t, app, "P1")
+	seedWorkloadProjectMember(t, app, "P1", "U1")
+	createWorkloadRecord(t, app, jobsResource, map[string]any{"id": "j1", "job_id": "j1", "project_id": "P1", "namespace": "proj-p2"})
+
+	records := serveJobLogs(t, app, "j1", "U1", http.StatusOK)
+	if len(records) != 0 {
+		t.Fatalf("logs = %#v, want no logs from namespace outside project boundary", records)
+	}
+	if len(clientset.Actions()) != 0 {
+		t.Fatalf("cluster actions = %#v, want none for namespace outside project boundary", clientset.Actions())
+	}
+}
+
+func TestJobNamespaceIgnoresPayloadNamespace(t *testing.T) {
+	got := jobNamespace("proj", "P1", map[string]any{"namespace": "proj-p2"})
+	if got != "proj-p1" {
+		t.Fatalf("jobNamespace = %q, want server-derived project namespace", got)
+	}
+}
+
 func TestWorkloadMalformedJSONDoesNotWrite(t *testing.T) {
 	app := newWorkloadTestApp()
 	code, data, _ := createConfigFile(app, workloadRequest(http.MethodPost, "/api/v1/configfiles", `{`), platform.RouteSpec{})
 	assertWorkloadStatus(t, code, data, http.StatusBadRequest)
 	if got := len(app.Store.List(context.Background(), configsResource)); got != 0 {
 		t.Fatalf("config count = %d, want 0", got)
+	}
+}
+
+func TestWorkloadConfigFileRejectsOversizedManifest(t *testing.T) {
+	app := newWorkloadTestApp()
+	app.Config.MaxConfigFileBytes = 8
+
+	code, data, _ := createConfigFile(app, workloadRequest(http.MethodPost, "/api/v1/configfiles?project_id=P1", `{"id":"cfg-big","name":"big.yaml","content":"kind: Deployment"}`), platform.RouteSpec{})
+
+	assertWorkloadStatus(t, code, data, http.StatusRequestEntityTooLarge)
+	if got := len(app.Store.List(context.Background(), configsResource)); got != 0 {
+		t.Fatalf("config count = %d, want 0", got)
+	}
+}
+
+func TestWorkloadConfigVersionRejectsTooManyManifestDocuments(t *testing.T) {
+	app := newWorkloadTestApp()
+	app.Config.MaxConfigFileDocuments = 1
+	createWorkloadRecord(t, app, configsResource, map[string]any{"id": "cfg1", "project_id": "P1", "name": "one.yaml"})
+
+	req := workloadRequest(http.MethodPost, "/api/v1/configfiles/cfg1/versions", `{"content":"kind: Pod\n---\nkind: Service"}`)
+	req.SetPathValue("id", "cfg1")
+	code, data, _ := commitConfigFileVersion(app, req, platform.RouteSpec{})
+
+	assertWorkloadStatus(t, code, data, http.StatusUnprocessableEntity)
+	if got := len(app.Store.List(context.Background(), versionsResource)); got != 0 {
+		t.Fatalf("version count = %d, want 0", got)
 	}
 }
 
@@ -270,6 +385,16 @@ func newAuthWorkloadTestApp() *platform.App {
 	return app
 }
 
+func newAuthWorkloadTestAppWithCluster(objects ...runtime.Object) *platform.App {
+	return newAuthWorkloadTestAppWithClientset(k8sfake.NewSimpleClientset(objects...))
+}
+
+func newAuthWorkloadTestAppWithClientset(clientset *k8sfake.Clientset) *platform.App {
+	app := platform.NewApp(platform.Config{ServiceName: "all", HTTPAddr: ":0", RequireAuth: true}, platform.WithCluster(cluster.New(clientset, "proj")))
+	Register(app)
+	return app
+}
+
 func workloadRequest(method, target, body string) *http.Request {
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	if body != "" {
@@ -309,4 +434,38 @@ func assertWorkloadStatus(t *testing.T, code int, data any, want int) {
 	if code != want {
 		t.Fatalf("status=%d data=%#v, want %d", code, data, want)
 	}
+}
+
+func serveJobLogs(t *testing.T, app *platform.App, jobID, userID string, want int) []contracts.Record[map[string]any] {
+	t.Helper()
+	req := workloadAuthRequest(http.MethodGet, "/api/v1/jobs/"+jobID+"/logs", "", userID, "user")
+	req.SetPathValue("id", jobID)
+	code, data, _ := listJobLogs(app, req, platform.RouteSpec{})
+	assertWorkloadStatus(t, code, data, want)
+	if want != http.StatusOK {
+		return nil
+	}
+	records, ok := data.([]contracts.Record[map[string]any])
+	if !ok {
+		t.Fatalf("logs data = %T, want records", data)
+	}
+	return records
+}
+
+func workloadLogPod(namespace, name, jobID string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name, Labels: map[string]string{cluster.LabelJobID: jobID}},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "main",
+		}}},
+	}
+}
+
+func findLogRecordBySource(records []contracts.Record[map[string]any], source string) *contracts.Record[map[string]any] {
+	for i := range records {
+		if records[i].Data["source"] == source {
+			return &records[i]
+		}
+	}
+	return nil
 }

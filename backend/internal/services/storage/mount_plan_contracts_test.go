@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
 )
 
@@ -35,6 +36,30 @@ func TestStorageMountPlanContractResolvesProjectBindingAndPermission(t *testing.
 		data.PVCShareOperations[0].SourcePVC != "pvc1" || data.PVCShareOperations[0].TargetPVC != "pvc1" {
 		t.Fatalf("share operations = %#v, want group source pvc1", data.PVCShareOperations)
 	}
+}
+
+func TestStorageMountPlanContractPublishesAuditableDecision(t *testing.T) {
+	app := newStorageMountPlanTestApp(t)
+	createProjectStorageFixtures(t, app)
+
+	code, _, errBody := postStorageMountPlan(t, app, "service-key", `{
+		"user_id":"U2",
+		"namespace":"proj-p1",
+		"mounts":[{
+			"pvc_id":"pvc1",
+			"mount_path":"/mnt/data",
+			"read_only":true,
+			"source_namespace":"forged-storage",
+			"source_pvc":"forged-source",
+			"target_pvc":"forged-target"
+		}]
+	}`)
+	if code != http.StatusOK || errBody != nil {
+		t.Fatalf("status=%d error=%#v, want resolved plan", code, errBody)
+	}
+
+	assertStorageMountPlanDecisionEvent(t, requireStorageEvent(t, app, "StorageMountPlanResolved"))
+	assertStorageMountPlanAuditEvent(t, requireStorageEvent(t, app, "AuditEvent"))
 }
 
 func TestStorageMountPlanContractFailsClosed(t *testing.T) {
@@ -162,11 +187,14 @@ func newStorageMountPlanTestApp(t *testing.T) *platform.App {
 	app.RegisterService(platform.ServiceSpec{
 		Name: serviceName,
 		Routes: []platform.RouteSpec{{
-			Method:       http.MethodPost,
-			Pattern:      pathInternalStorageMountPlan,
-			Resource:     "mount_plans",
-			Action:       "resolve",
-			PolicyBypass: true,
+			Method:              http.MethodPost,
+			Pattern:             pathInternalStorageMountPlan,
+			Resource:            "mount_plans",
+			Action:              "resolve",
+			IDParam:             "project_id",
+			PolicyBypass:        true,
+			ServiceAuthRequired: true,
+			StateChanging:       true,
 		}},
 	})
 	return app
@@ -205,4 +233,90 @@ func postStorageMountPlan(t *testing.T, app *platform.App, key, body string) (in
 		}
 	}
 	return rec.Code, data, errBody
+}
+
+func assertStorageMountPlanDecisionEvent(t *testing.T, event contracts.Event) {
+	t.Helper()
+	if event.Source != serviceName || event.SchemaVersion != 1 {
+		t.Fatalf("decision event metadata = %#v, want storage source/schema v1", event)
+	}
+	assertEventValue(t, event.Data, "project_id", "P1")
+	assertEventValue(t, event.Data, "user_id", "U2")
+	assertEventValue(t, event.Data, "namespace", "proj-p1")
+	assertEventValue(t, event.Data, "mount_count", 1)
+	assertEventValue(t, event.Data, "manifest_mount_count", 1)
+	assertEventValue(t, event.Data, "share_operation_count", 1)
+	assertEventStringValues(t, event.Data, "pvc_ids", []string{"pvc1"})
+	assertEventStringValues(t, event.Data, "target_pvcs", []string{"pvc1"})
+	assertEventKeyAbsent(t, event.Data, "source_pvc")
+	assertEventKeyAbsent(t, event.Data, "source_namespace")
+}
+
+func assertStorageMountPlanAuditEvent(t *testing.T, event contracts.Event) {
+	t.Helper()
+	assertEventValue(t, event.Data, "resource_id", "P1")
+	assertEventValue(t, event.Data, "resource_type", "mount_plans")
+	assertEventValue(t, event.Data, "success", true)
+}
+
+func assertEventValue(t *testing.T, data map[string]any, key string, want any) {
+	t.Helper()
+	if data[key] != want {
+		t.Fatalf("event[%s] = %#v, want %#v in %#v", key, data[key], want, data)
+	}
+}
+
+func assertEventKeyAbsent(t *testing.T, data map[string]any, key string) {
+	t.Helper()
+	if _, ok := data[key]; ok {
+		t.Fatalf("event leaked %s: %#v", key, data)
+	}
+}
+
+func assertEventStringValues(t *testing.T, data map[string]any, key string, want []string) {
+	t.Helper()
+	got := stringValues(data[key])
+	if !sameStrings(got, want) {
+		t.Fatalf("event[%s] = %#v, want %#v in %#v", key, data[key], want, data)
+	}
+}
+
+func requireStorageEvent(t *testing.T, app *platform.App, name string) contracts.Event {
+	t.Helper()
+	for _, event := range app.Events.Outbox() {
+		if event.Name == name {
+			return event
+		}
+	}
+	t.Fatalf("missing event %s in %#v", name, app.Events.Outbox())
+	return contracts.Event{}
+}
+
+func stringValues(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		return typed
+	case []any:
+		values := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text, ok := item.(string); ok {
+				values = append(values, text)
+			}
+		}
+		return values
+	default:
+		return nil
+	}
+}
+
+func sameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }

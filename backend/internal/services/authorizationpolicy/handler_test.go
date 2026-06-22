@@ -197,3 +197,84 @@ func TestRawPolicyPDPEnforcesStoredPolicy(t *testing.T) {
 		t.Fatalf("stored policy denied request: %#v", allowed)
 	}
 }
+
+func TestAdminBootstrapPoliciesSeedOnlyPDPPublicRoutes(t *testing.T) {
+	app := platform.NewApp(platform.Config{
+		ServiceName: serviceName,
+		RequireAuth: true,
+		APIKeyPrincipals: map[string]platform.APIKeyPrincipal{
+			"admin-key":   {UserID: "ops-admin", Name: "ops", Role: "superadmin"},
+			"service-key": {ID: "svc", Role: "service"},
+		},
+	})
+	registerAdminBootstrapTestCatalog(app)
+
+	Register(app)
+
+	want := []string{"ops-admin", "", "org-project-service:projects", "get_org_project_service_api_v1_projects"}
+	record, found := app.Store.Get(context.Background(), rawPoliciesResource, rawPolicyID(want))
+	if !found {
+		t.Fatalf("bootstrap policy %q was not seeded", rawPolicyID(want))
+	}
+	if !adminBootstrapManaged(record.Data) {
+		t.Fatalf("bootstrap metadata missing: %#v", record.Data)
+	}
+	for _, policy := range [][]string{
+		{"svc", "", "org-project-service:projects", "get_org_project_service_api_v1_projects"},
+		{"ops-admin", "", "org-project-service:public", "get_public"},
+		{"ops-admin", "", "org-project-service:bypass", "get_bypass"},
+		{"ops-admin", "", "org-project-service:internal", "get_internal"},
+		{"ops-admin", "", "org-project-service:service_internal", "get_service_internal"},
+	} {
+		if _, found := app.Store.Get(context.Background(), rawPoliciesResource, rawPolicyID(policy)); found {
+			t.Fatalf("unexpected bootstrap policy seeded: %#v", policy)
+		}
+	}
+}
+
+func TestAdminBootstrapPoliciesReconcileStaleManagedRowsOnly(t *testing.T) {
+	app := platform.NewApp(platform.Config{
+		ServiceName: serviceName,
+		RequireAuth: true,
+		APIKeyPrincipals: map[string]platform.APIKeyPrincipal{
+			"admin-key": {ID: "ops-admin", Role: "admin"},
+		},
+	})
+	registerAdminBootstrapTestCatalog(app)
+	Register(app)
+	reconcileAdminBootstrapPolicies(app)
+
+	bootstrap := []string{"ops-admin", "", "org-project-service:projects", "get_org_project_service_api_v1_projects"}
+	manual := []string{"manual-admin", "", "org-project-service:projects", "get_org_project_service_api_v1_projects"}
+	if _, err := app.Store.Create(context.Background(), rawPoliciesResource, rawPolicyRecord(manual)); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(app.Store.List(context.Background(), rawPoliciesResource)); got != 2 {
+		t.Fatalf("raw policy count after idempotent reconcile = %d, want 2", got)
+	}
+
+	app.Config.APIKeyPrincipals = map[string]platform.APIKeyPrincipal{
+		"admin-key": {ID: "ops-admin", Role: "user"},
+	}
+	reconcileAdminBootstrapPolicies(app)
+
+	if _, found := app.Store.Get(context.Background(), rawPoliciesResource, rawPolicyID(bootstrap)); found {
+		t.Fatal("stale bootstrap-managed admin policy was not removed")
+	}
+	if _, found := app.Store.Get(context.Background(), rawPoliciesResource, rawPolicyID(manual)); !found {
+		t.Fatal("manual raw policy was removed")
+	}
+}
+
+func registerAdminBootstrapTestCatalog(app *platform.App) {
+	app.RegisterService(platform.ServiceSpec{
+		Name: "org-project-service",
+		Routes: []platform.RouteSpec{
+			{Method: http.MethodGet, Pattern: "/api/v1/projects", Resource: "projects", OperationID: "get_org_project_service_api_v1_projects", AuthRequired: true},
+			{Method: http.MethodGet, Pattern: "/api/v1/public", Resource: "public", OperationID: "get_public", AuthRequired: false},
+			{Method: http.MethodGet, Pattern: "/api/v1/bypass", Resource: "bypass", OperationID: "get_bypass", AuthRequired: true, PolicyBypass: true},
+			{Method: http.MethodGet, Pattern: "/internal/projects", Resource: "internal", OperationID: "get_internal", AuthRequired: true},
+			{Method: http.MethodGet, Pattern: "/api/v1/service-internal", Resource: "service_internal", OperationID: "get_service_internal", AuthRequired: true, ServiceAuthRequired: true},
+		},
+	})
+}

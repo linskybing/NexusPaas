@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
 	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
@@ -53,11 +54,12 @@ func submitJob(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, a
 	}
 	applyAdmissionReview(job, review)
 	applyAutoPreemptionResult(job, preemption)
-	record, err := jobs.CreateSubmittedJob(r.Context(), job)
+	record, err := jobs.CreateSubmittedJobWithEvent(r.Context(), app, job, func(record contracts.Record[map[string]any]) contracts.Event {
+		return buildEvent(r, "JobSubmitted", "submitted", record.Data)
+	})
 	if err != nil {
 		return createStatus(err), shared.ErrorData("job could not be submitted"), nil
 	}
-	publish(app, r, "JobSubmitted", "submitted", record.Data)
 	return http.StatusCreated, record, nil
 }
 
@@ -337,9 +339,6 @@ func admissionDenialWithPreemptionData(review, preemption map[string]any, fallba
 }
 
 func jobNamespace(prefix, projectID string, payload map[string]any) string {
-	if namespace := shared.TextValue(payload, "namespace"); namespace != "" {
-		return namespace
-	}
 	if projectID == "" {
 		return ""
 	}

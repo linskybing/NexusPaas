@@ -48,14 +48,24 @@ func createRole(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, 
 		return http.StatusBadRequest, shared.ErrorData("role name already exists"), nil
 	}
 	now := time.Now().UTC()
-	role, err := authorizationPolicyRepo(app).CreateProxyRole(r.Context(), map[string]any{
-		"id":           shared.FirstNonEmpty(shared.TextValue(payload, "id"), authorizationPolicyRepo(app).NextProxyRoleID(r.Context())),
-		"name":         name,
-		"display_name": displayName,
-		"description":  shared.TextValue(payload, "description"),
-		"is_system":    false,
-		"created_at":   now,
-		"updated_at":   now,
+	repo := authorizationPolicyRepo(app)
+	var role map[string]any
+	err = app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		created, e := repo.CreateProxyRoleTx(r.Context(), tx, map[string]any{
+			"id":           shared.FirstNonEmpty(shared.TextValue(payload, "id"), repo.NextProxyRoleID(r.Context())),
+			"name":         name,
+			"display_name": displayName,
+			"description":  shared.TextValue(payload, "description"),
+			"is_system":    false,
+			"created_at":   now,
+			"updated_at":   now,
+		})
+		if e != nil {
+			return e
+		}
+		role = created
+		tx.Emit(proxyPolicyEvent(r, "role_create", role))
+		return nil
 	})
 	if err != nil {
 		if platform.IsCreateConflict(err) {
@@ -63,7 +73,6 @@ func createRole(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, 
 		}
 		return http.StatusInternalServerError, shared.ErrorData("role could not be created"), nil
 	}
-	publishProxyPolicyChanged(app, r, "role_create", role)
 	return http.StatusCreated, role, nil
 }
 
@@ -88,11 +97,24 @@ func updateRole(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, 
 	if _, ok := present["description"]; ok {
 		update["description"] = shared.TextValue(payload, "description")
 	}
-	role, ok := authorizationPolicyRepo(app).UpdateProxyRole(r.Context(), id, update)
+	repo := authorizationPolicyRepo(app)
+	var role map[string]any
+	var ok bool
+	err = app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		var e error
+		role, ok, e = repo.UpdateProxyRoleTx(r.Context(), tx, id, update)
+		if e != nil || !ok {
+			return e
+		}
+		tx.Emit(proxyPolicyEvent(r, "role_update", role))
+		return nil
+	})
+	if err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("role could not be updated"), nil
+	}
 	if !ok {
 		return http.StatusNotFound, shared.ErrorData(msgRoleNotFound), nil
 	}
-	publishProxyPolicyChanged(app, r, "role_update", role)
 	return http.StatusOK, role, nil
 }
 
@@ -101,8 +123,18 @@ func deleteRole(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, 
 		return status, data, nil
 	}
 	id := strings.TrimSpace(r.PathValue("id"))
-	current, _ := authorizationPolicyRepo(app).DeleteProxyRoleCascade(r.Context(), id)
-	publishProxyPolicyChanged(app, r, "role_delete", current)
+	var current map[string]any
+	if err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		c, _, e := authorizationPolicyRepo(app).DeleteProxyRoleCascadeTx(r.Context(), tx, id)
+		if e != nil {
+			return e
+		}
+		current = c
+		tx.Emit(proxyPolicyEvent(r, "role_delete", current))
+		return nil
+	}); err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("role could not be deleted"), nil
+	}
 	return http.StatusOK, nil, nil
 }
 
@@ -133,7 +165,18 @@ func assignRoleUser(app *platform.App, r *http.Request, _ platform.RouteSpec) (i
 	if userID == "" {
 		return http.StatusBadRequest, shared.ErrorData(msgUserIDRequired), nil
 	}
-	member, created, err := createRoleUser(app, r, roleID, userID, r.Header.Get(headerUserID))
+	repo := authorizationPolicyRepo(app)
+	var member map[string]any
+	var created bool
+	err = app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		var e error
+		member, created, e = repo.CreateRoleUserTx(r.Context(), tx, roleID, userID, r.Header.Get(headerUserID))
+		if e != nil || !created {
+			return e
+		}
+		tx.Emit(proxyPolicyEvent(r, "role_user_assign", member))
+		return nil
+	})
 	if err != nil {
 		if platform.IsCreateConflict(err) {
 			return http.StatusConflict, shared.ErrorData("role user already exists"), nil
@@ -141,7 +184,6 @@ func assignRoleUser(app *platform.App, r *http.Request, _ platform.RouteSpec) (i
 		return http.StatusInternalServerError, shared.ErrorData("role user could not be created"), nil
 	}
 	if created {
-		publishProxyPolicyChanged(app, r, "role_user_assign", member)
 		return http.StatusCreated, member, nil
 	}
 	return http.StatusOK, member, nil
@@ -164,18 +206,26 @@ func batchAssignRoleUsers(app *platform.App, r *http.Request, _ platform.RouteSp
 		return http.StatusBadRequest, shared.ErrorData("user_ids is required and must contain 1 to 100 items"), nil
 	}
 	result := map[string]any{"succeeded": 0, "failed": 0, "errors": []string{}}
+	repo := authorizationPolicyRepo(app)
 	for _, userID := range userIDs {
 		if strings.TrimSpace(userID) == "" {
 			batchFailure(result, msgUserIDRequired)
 			continue
 		}
-		member, created, err := createRoleUser(app, r, roleID, userID, r.Header.Get(headerUserID))
+		var member map[string]any
+		var created bool
+		err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+			var e error
+			member, created, e = repo.CreateRoleUserTx(r.Context(), tx, roleID, userID, r.Header.Get(headerUserID))
+			if e != nil || !created {
+				return e
+			}
+			tx.Emit(proxyPolicyEvent(r, "role_user_assign", member))
+			return nil
+		})
 		if err != nil {
 			batchFailure(result, err.Error())
 			continue
-		}
-		if created {
-			publishProxyPolicyChanged(app, r, "role_user_assign", member)
 		}
 		result["succeeded"] = result["succeeded"].(int) + 1
 	}
@@ -188,8 +238,18 @@ func unassignRoleUser(app *platform.App, r *http.Request, _ platform.RouteSpec) 
 	}
 	roleID := strings.TrimSpace(r.PathValue("id"))
 	userID := strings.TrimSpace(r.PathValue("user_id"))
-	if member, found := authorizationPolicyRepo(app).UnassignRoleUser(r.Context(), roleID, userID); found {
-		publishProxyPolicyChanged(app, r, "role_user_unassign", member)
+	var member map[string]any
+	var found bool
+	if err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		var e error
+		member, found, e = authorizationPolicyRepo(app).UnassignRoleUserTx(r.Context(), tx, roleID, userID)
+		if e != nil || !found {
+			return e
+		}
+		tx.Emit(proxyPolicyEvent(r, "role_user_unassign", member))
+		return nil
+	}); err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("role user could not be deleted"), nil
 	}
 	return http.StatusOK, nil, nil
 }

@@ -220,7 +220,7 @@ func startupChecksPass(cfg platform.Config, checks ...startupCheck) bool {
 		if check.err == nil {
 			continue
 		}
-		if cfg.Production {
+		if cfg.StrictRuntimeChecks() {
 			slog.Error(check.failureMessage, "error", check.err)
 			return false
 		}

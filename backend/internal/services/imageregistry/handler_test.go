@@ -2,10 +2,14 @@ package imageregistry
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
@@ -95,6 +99,413 @@ func TestImageRegistryCatalogRequestsAndBuildWorkflow(t *testing.T) {
 	}
 }
 
+func TestImageRegistryBuildAndListRoutesSurfaceHarborDegradedAdditively(t *testing.T) {
+	app := newImageRegistryTestApp(t)
+	app.Adapters["harbor"] = fakeImageHarborAdapter{result: contracts.AdapterResult{Adapter: "harbor"}}
+
+	publishReq := imageRequest(http.MethodPost, "/api/v1/image-catalog/publish", `{"tag_id":"tag-1","project_id":"P1"}`, "ADMIN")
+	code, data, degraded := publishCatalog(app, publishReq, platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusOK)
+	assertImageNoDegraded(t, degraded)
+
+	buildRoute := platform.RouteSpec{Method: http.MethodPost, OperationID: "imageBuild"}
+	buildReq := imageRequest(http.MethodPost, "/api/v1/images/build", `{"id":"build-harbor-ok","project_id":"P1","image_reference":"registry.local/team/app:ok"}`, "U1")
+	code, data, degraded = startImageBuild(app, buildReq, buildRoute)
+	assertImageStatus(t, code, data, http.StatusAccepted)
+	assertImageNoDegraded(t, degraded)
+	assertImageMapValue(t, data, "id", "build-harbor-ok")
+	assertImageMapValue(t, data, "status", "queued")
+
+	imageListRoute := platform.RouteSpec{Method: http.MethodGet, OperationID: "projectImages"}
+	code, data, degraded = listProjectImages(app, imageProjectRequest(http.MethodGet, "/api/v1/projects/P1/images", "", "U2", "P1"), imageListRoute)
+	assertImageStatus(t, code, data, http.StatusOK)
+	assertImageNoDegraded(t, degraded)
+	assertProjectImagePayload(t, data, "tag-1")
+
+	buildListRoute := platform.RouteSpec{Method: http.MethodGet, OperationID: "projectBuilds"}
+	code, data, degraded = listProjectBuilds(app, imageProjectRequest(http.MethodGet, "/api/v1/projects/P1/builds", "", "U2", "P1"), buildListRoute)
+	assertImageStatus(t, code, data, http.StatusOK)
+	assertImageNoDegraded(t, degraded)
+	assertProjectBuildPayload(t, data, "build-harbor-ok")
+
+	app.Adapters["harbor"] = fakeImageHarborAdapter{
+		result: contracts.AdapterResult{Adapter: "harbor", Degraded: true, Code: "adapter_unavailable", Retryable: true},
+	}
+
+	code, data, degraded = listProjectImages(app, imageProjectRequest(http.MethodGet, "/api/v1/projects/P1/images", "", "U2", "P1"), imageListRoute)
+	assertImageStatus(t, code, data, http.StatusOK)
+	assertHarborDegraded(t, degraded)
+	assertProjectImagePayload(t, data, "tag-1")
+
+	code, data, degraded = listProjectBuilds(app, imageProjectRequest(http.MethodGet, "/api/v1/projects/P1/builds", "", "U2", "P1"), buildListRoute)
+	assertImageStatus(t, code, data, http.StatusOK)
+	assertHarborDegraded(t, degraded)
+	assertProjectBuildPayload(t, data, "build-harbor-ok")
+
+	aliasBuildListRoute := platform.RouteSpec{Method: http.MethodGet, OperationID: "projectImageBuilds"}
+	code, data, degraded = listProjectBuilds(app, imageProjectRequest(http.MethodGet, "/api/v1/projects/P1/image-builds", "", "U2", "P1"), aliasBuildListRoute)
+	assertImageStatus(t, code, data, http.StatusOK)
+	assertHarborDegraded(t, degraded)
+	assertProjectBuildPayload(t, data, "build-harbor-ok")
+
+	degradedBuildReq := imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", `{"id":"build-harbor-down","project_id":"P1","image_reference":"registry.local/team/app:down"}`, "U1")
+	code, data, degraded = startDockerfileImageBuild(app, degradedBuildReq, buildRoute)
+	assertImageStatus(t, code, data, http.StatusAccepted)
+	assertHarborDegraded(t, degraded)
+	assertImageMapValue(t, data, "id", "build-harbor-down")
+	assertImageMapValue(t, data, "build_type", "dockerfile")
+	assertImageMapValue(t, data, "status", "queued")
+
+	storageBuildRoute := platform.RouteSpec{Method: http.MethodPost, OperationID: "imageBuildFromStorage"}
+	storageBuildReq := imageRequest(http.MethodPost, "/api/v1/images/build/from-storage", `{"id":"build-harbor-storage-down","project_id":"P1","image_reference":"registry.local/team/app:storage-down"}`, "U1")
+	code, data, degraded = startStorageImageBuild(app, storageBuildReq, storageBuildRoute)
+	assertImageStatus(t, code, data, http.StatusAccepted)
+	assertHarborDegraded(t, degraded)
+	assertImageMapValue(t, data, "id", "build-harbor-storage-down")
+	assertImageMapValue(t, data, "build_type", "storage")
+	assertImageMapValue(t, data, "status", "queued")
+}
+
+func TestProjectImagesPromoteCatalogStatusFields(t *testing.T) {
+	app := newImageRegistryTestApp(t)
+	app.Adapters["harbor"] = fakeImageHarborAdapter{result: contracts.AdapterResult{Adapter: "harbor"}}
+	createImageRecords(t, app, imageCatalogResource, []map[string]any{
+		{
+			"id":          "tag-status",
+			"registry":    "registry.local",
+			"repository":  "library/status",
+			"tag":         "2.0",
+			"digest":      "sha256:feedface",
+			"scanStatus":  "Success",
+			"deleted":     "TRUE",
+			"unavailable": "false",
+			"status":      "catalog-available",
+		},
+	})
+	createImageRecords(t, app, projectImagesResource, []map[string]any{
+		{
+			"id":              ruleID("P1", "tag-status"),
+			"project_id":      "P1",
+			"tag_id":          "tag-status",
+			"repository":      "library/status",
+			"tag":             "2.0",
+			"image_reference": "registry.local/library/status:2.0",
+			"enabled":         true,
+			"status":          "project-allowed",
+		},
+	})
+
+	code, data, degraded := listProjectImages(app, imageProjectRequest(http.MethodGet, "/api/v1/projects/P1/images", "", "U2", "P1"), platform.RouteSpec{Method: http.MethodGet, OperationID: "projectImages"})
+	assertImageStatus(t, code, data, http.StatusOK)
+	assertImageNoDegraded(t, degraded)
+	images := data.([]map[string]any)
+	if len(images) != 1 {
+		t.Fatalf("project images = %#v, want one status-enriched image", images)
+	}
+	image := images[0]
+	if image["digest"] != "sha256:feedface" || image["scan_status"] != "Success" {
+		t.Fatalf("project image scan metadata = %#v, want digest and scan_status promoted", image)
+	}
+	if image["deleted"] != true || image["unavailable"] != false {
+		t.Fatalf("project image availability metadata = %#v, want canonical deleted/unavailable booleans", image)
+	}
+	if image["status"] != "project-allowed" {
+		t.Fatalf("project image status = %#v, want Project row precedence over catalog status", image["status"])
+	}
+	if catalog, ok := image["catalog"].(map[string]any); !ok || catalog["status"] != "catalog-available" {
+		t.Fatalf("project image catalog = %#v, want nested catalog preserved", image["catalog"])
+	}
+}
+
+func TestImageRegistryHarborCatalogSyncExecutesAndUpsertsCatalog(t *testing.T) {
+	app := newImageRegistryTestApp(t)
+	adapter := &fakeImageHarborProxyAdapter{
+		response: contracts.AdapterProxyResponse{
+			StatusCode: http.StatusOK,
+			Body: []byte(`[
+				{
+						"digest":"sha256:abc123",
+						"repository_name":"library/base",
+						"deleted":true,
+						"unavailable":"true",
+						"tags":[{"name":"1.0"}],
+						"scan_overview":{"application/vnd.security.vulnerability.report; version=1.1":{"scan_status":"Success"}},
+						"push_time":"2026-06-21T12:00:00Z"
+				}
+			]`),
+		},
+		result: contracts.AdapterResult{Adapter: "harbor", Operation: harborCatalogSyncOperation},
+	}
+	app.Adapters["harbor"] = adapter
+
+	code, data, _ := syncCatalog(app, imageRequest(http.MethodPost, "/api/v1/image-catalog/sync", `{"tag_id":"tag-live","project":"library","repository":"base","tag":"1.0"}`, "U1"), platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusAccepted)
+	status := data.(map[string]any)
+	if status["status"] != "synced" || status["degraded"] != false || status["retryable"] != false {
+		t.Fatalf("sync status = %#v, want synced non-degraded", status)
+	}
+	if status["code"] != "ok" {
+		t.Fatalf("sync code = %#v, want ok", status["code"])
+	}
+	if status["catalog_id"] != "tag-live" {
+		t.Fatalf("catalog_id = %#v, want tag-live", status["catalog_id"])
+	}
+	record, found := app.Store.Get(context.Background(), imageCatalogResource, "tag-live")
+	if !found {
+		t.Fatal("synced catalog record missing")
+	}
+	if record.Data["digest"] != "sha256:abc123" || record.Data["scan_status"] != "Success" {
+		t.Fatalf("catalog record = %#v, want Harbor digest and scan status", record.Data)
+	}
+	if record.Data["deleted"] != true || record.Data["unavailable"] != true || record.Data["status"] != "available" {
+		t.Fatalf("catalog availability = %#v, want upstream deleted/unavailable parsed", record.Data)
+	}
+	if len(adapter.requests) != 1 {
+		t.Fatalf("proxy requests = %#v, want one", adapter.requests)
+	}
+	if adapter.requests[0].Path != "/projects/library/artifacts" {
+		t.Fatalf("proxy path = %q", adapter.requests[0].Path)
+	}
+	if !strings.Contains(adapter.requests[0].RawQuery, "with_scan_overview=true") {
+		t.Fatalf("proxy query = %q, want scan overview", adapter.requests[0].RawQuery)
+	}
+}
+
+func TestImageRegistryHarborCatalogSyncFindsArtifactOnSecondPage(t *testing.T) {
+	app := newImageRegistryTestApp(t)
+	firstPage := make([]map[string]any, 0, harborArtifactPageSize)
+	for i := 0; i < harborArtifactPageSize; i++ {
+		firstPage = append(firstPage, map[string]any{
+			"digest":          "sha256:first",
+			"repository_name": "library/base",
+			"tags":            []any{map[string]any{"name": "not-target"}},
+		})
+	}
+	adapter := &fakeImageHarborProxyAdapter{
+		responses: []contracts.AdapterProxyResponse{
+			{StatusCode: http.StatusOK, Body: mustImageJSON(t, firstPage)},
+			{StatusCode: http.StatusOK, Body: []byte(`[{"digest":"sha256:second","repository_name":"library/base","tags":[{"name":"1.0"}]}]`)},
+		},
+		result: contracts.AdapterResult{Adapter: "harbor", Operation: harborCatalogSyncOperation},
+	}
+	app.Adapters["harbor"] = adapter
+
+	code, data, _ := syncCatalog(app, imageRequest(http.MethodPost, "/api/v1/image-catalog/sync", `{"tag_id":"tag-page","project":"library","repository":"base","tag":"1.0"}`, "U1"), platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusAccepted)
+	status := data.(map[string]any)
+	if status["status"] != "synced" || status["code"] != "ok" {
+		t.Fatalf("sync status = %#v, want second-page synced", status)
+	}
+	record, found := app.Store.Get(context.Background(), imageCatalogResource, "tag-page")
+	if !found || record.Data["digest"] != "sha256:second" {
+		t.Fatalf("catalog record = %#v found=%v, want second page digest", record.Data, found)
+	}
+	if len(adapter.requests) != 2 {
+		t.Fatalf("proxy requests = %#v, want two pages", adapter.requests)
+	}
+	assertImageQueryValue(t, adapter.requests[0].RawQuery, "page", "1")
+	assertImageQueryValue(t, adapter.requests[1].RawQuery, "page", "2")
+}
+
+func TestImageRegistryHarborCatalogSyncStopsPagingAfterMatch(t *testing.T) {
+	app := newImageRegistryTestApp(t)
+	adapter := &fakeImageHarborProxyAdapter{
+		responses: []contracts.AdapterProxyResponse{
+			{StatusCode: http.StatusOK, Body: []byte(`[{"digest":"sha256:first","repository_name":"library/base","tags":[{"name":"1.0"}]}]`)},
+			{StatusCode: http.StatusOK, Body: []byte(`[{"digest":"sha256:unexpected","repository_name":"library/base","tags":[{"name":"1.0"}]}]`)},
+		},
+		result: contracts.AdapterResult{Adapter: "harbor", Operation: harborCatalogSyncOperation},
+	}
+	app.Adapters["harbor"] = adapter
+
+	code, data, _ := syncCatalog(app, imageRequest(http.MethodPost, "/api/v1/image-catalog/sync", `{"tag_id":"tag-stop","project":"library","repository":"base","tag":"1.0"}`, "U1"), platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusAccepted)
+	status := data.(map[string]any)
+	if status["status"] != "synced" || status["code"] != "ok" {
+		t.Fatalf("sync status = %#v, want first-page synced", status)
+	}
+	if len(adapter.requests) != 1 {
+		t.Fatalf("proxy requests = %#v, want stop after first page match", adapter.requests)
+	}
+	assertImageQueryValue(t, adapter.requests[0].RawQuery, "page", "1")
+}
+
+func TestImageRegistryCatalogSyncDegradesWhenSelectorsAreMissing(t *testing.T) {
+	app := newImageRegistryTestApp(t)
+
+	code, data, _ := syncCatalog(app, imageRequest(http.MethodPost, "/api/v1/image-catalog/sync", `{"tag_id":"missing"}`, "U1"), platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusAccepted)
+	status := data.(map[string]any)
+	if status["status"] != "degraded" || status["code"] != "missing_selector" || status["retryable"] != false {
+		t.Fatalf("sync status = %#v, want missing_selector degraded", status)
+	}
+
+	code, data, _ = syncCatalog(app, imageRequest(http.MethodPost, "/api/v1/image-catalog/sync", `{"tag_id":"repo-only","project":"library","repository":"base"}`, "U1"), platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusAccepted)
+	status = data.(map[string]any)
+	if status["status"] != "degraded" || status["code"] != "missing_selector" || status["retryable"] != false {
+		t.Fatalf("repository-only sync status = %#v, want missing_selector degraded", status)
+	}
+}
+
+func TestImageRegistryHarborCatalogSyncDegradesWhenAdapterIsMissing(t *testing.T) {
+	app := newImageRegistryTestApp(t)
+
+	code, data, _ := syncCatalog(app, imageRequest(http.MethodPost, "/api/v1/image-catalog/sync", `{"tag_id":"tag-1"}`, "U1"), platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusAccepted)
+	status := data.(map[string]any)
+	if status["status"] != "degraded" || status["code"] != "adapter_not_configured" || status["retryable"] != true {
+		t.Fatalf("sync status = %#v, want adapter_not_configured degraded", status)
+	}
+}
+
+func TestImageRegistryHarborCatalogSyncDegradesWhenCatalogPersistFails(t *testing.T) {
+	app := newImageRegistryTestApp(t)
+	app.Store = failingImageCatalogCreateStore{RecordStore: app.Store}
+	app.Adapters["harbor"] = &fakeImageHarborProxyAdapter{
+		response: contracts.AdapterProxyResponse{
+			StatusCode: http.StatusOK,
+			Body:       []byte(`[{"digest":"sha256:abc123","repository_name":"library/base","tags":[{"name":"1.0"}]}]`),
+		},
+		result: contracts.AdapterResult{Adapter: "harbor", Operation: harborCatalogSyncOperation},
+	}
+
+	code, data, _ := syncCatalog(app, imageRequest(http.MethodPost, "/api/v1/image-catalog/sync", `{"tag_id":"new-tag","project":"library","repository":"base","tag":"1.0"}`, "U1"), platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusAccepted)
+	status := data.(map[string]any)
+	if status["status"] != "degraded" || status["code"] != "catalog_persist_failed" || status["retryable"] != true {
+		t.Fatalf("sync status = %#v, want catalog_persist_failed degraded", status)
+	}
+}
+
+func TestImageRegistryHarborCatalogSyncMarksMissingCatalogDeleted(t *testing.T) {
+	app := newImageRegistryTestApp(t)
+	app.Adapters["harbor"] = &fakeImageHarborProxyAdapter{
+		response: contracts.AdapterProxyResponse{
+			StatusCode: http.StatusOK,
+			Body:       []byte(`[{"digest":"sha256:abc123","repository_name":"library/base","tags":[{"name":"2.0"}]}]`),
+		},
+		result: contracts.AdapterResult{Adapter: "harbor", Operation: harborCatalogSyncOperation},
+	}
+
+	code, data, _ := syncCatalog(app, imageRequest(http.MethodPost, "/api/v1/image-catalog/sync", `{"tag_id":"tag-1","project":"library","repository":"base","tag":"1.0"}`, "U1"), platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusAccepted)
+	status := data.(map[string]any)
+	if status["status"] != "degraded" || status["code"] != "artifact_not_found" || status["retryable"] != true {
+		t.Fatalf("sync status = %#v, want artifact_not_found degraded", status)
+	}
+
+	record, found := app.Store.Get(context.Background(), imageCatalogResource, "tag-1")
+	if !found {
+		t.Fatal("expected catalog row to remain and be marked missing")
+	}
+	if record.Data["deleted"] != true || record.Data["unavailable"] != true || record.Data["status"] != "missing" {
+		t.Fatalf("catalog record = %#v, want deleted=true unavailable=true status=missing", record.Data)
+	}
+}
+
+func TestImageRegistryHarborCatalogSyncDegradesWhenMissingCatalogUpdateFails(t *testing.T) {
+	app := newImageRegistryTestApp(t)
+	app.Store = failingImageCatalogUpdateStore{RecordStore: app.Store}
+	app.Adapters["harbor"] = &fakeImageHarborProxyAdapter{
+		response: contracts.AdapterProxyResponse{
+			StatusCode: http.StatusOK,
+			Body:       []byte(`[{"digest":"sha256:abc123","repository_name":"library/base","tags":[{"name":"2.0"}]}]`),
+		},
+		result: contracts.AdapterResult{Adapter: "harbor", Operation: harborCatalogSyncOperation},
+	}
+
+	code, data, _ := syncCatalog(app, imageRequest(http.MethodPost, "/api/v1/image-catalog/sync", `{"tag_id":"tag-1","project":"library","repository":"base","tag":"1.0"}`, "U1"), platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusAccepted)
+	status := data.(map[string]any)
+	if status["status"] != "degraded" || status["code"] != "catalog_persist_failed" || status["retryable"] != true {
+		t.Fatalf("sync status = %#v, want catalog_persist_failed degraded", status)
+	}
+}
+
+func TestImageRegistryHarborCatalogSyncMissingWithoutCatalogStaysDegradedOnly(t *testing.T) {
+	app := newImageRegistryTestApp(t)
+	app.Adapters["harbor"] = &fakeImageHarborProxyAdapter{
+		response: contracts.AdapterProxyResponse{
+			StatusCode: http.StatusOK,
+			Body:       []byte(`[{"digest":"sha256:abc123","repository_name":"library/base","tags":[{"name":"2.0"}]}]`),
+		},
+		result: contracts.AdapterResult{Adapter: "harbor", Operation: harborCatalogSyncOperation},
+	}
+
+	code, data, _ := syncCatalog(app, imageRequest(http.MethodPost, "/api/v1/image-catalog/sync", `{"tag_id":"unknown-tag","project":"library","repository":"base","tag":"1.0"}`, "U1"), platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusAccepted)
+	status := data.(map[string]any)
+	if status["status"] != "degraded" || status["code"] != "artifact_not_found" || status["retryable"] != true {
+		t.Fatalf("sync status = %#v, want artifact_not_found degraded", status)
+	}
+
+	if _, found := app.Store.Get(context.Background(), imageCatalogResource, "unknown-tag"); found {
+		t.Fatalf("unexpected catalog row for missing tag")
+	}
+}
+
+func TestImageRegistryHarborSyncMaintenanceOwnerAndRetry(t *testing.T) {
+	other := platform.NewApp(platform.Config{ServiceName: "workload-service", HTTPAddr: ":0"})
+	Register(other)
+	if containsImageTask(other.MaintenanceTaskNames(), harborCatalogSyncTaskName) {
+		t.Fatalf("unowned maintenance tasks = %v, want no %s", other.MaintenanceTaskNames(), harborCatalogSyncTaskName)
+	}
+
+	app := newImageRegistryTestApp(t)
+	if !containsImageTask(app.MaintenanceTaskNames(), harborCatalogSyncTaskName) {
+		t.Fatalf("maintenance tasks = %v, want %s", app.MaintenanceTaskNames(), harborCatalogSyncTaskName)
+	}
+	app.Adapters["harbor"] = &fakeImageHarborProxyAdapter{
+		response: contracts.AdapterProxyResponse{
+			StatusCode: http.StatusOK,
+			Body:       []byte(`[{"digest":"sha256:retry","repository_name":"library/base","tags":[{"name":"1.0"}],"scan_overview":{"report":{"scan_status":"Success"}}}]`),
+		},
+		result: contracts.AdapterResult{Adapter: "harbor", Operation: harborCatalogSyncOperation},
+	}
+	createImageRecords(t, app, imageSyncResource, []map[string]any{{"id": "tag-1", "tag_id": "tag-1", "status": "sync_requested"}})
+
+	app.RunMaintenanceOnce(context.Background(), time.Second)
+	record, found := app.Store.Get(context.Background(), imageSyncResource, "tag-1")
+	if !found || record.Data["status"] != "synced" {
+		t.Fatalf("sync status record = %#v found=%v, want synced", record.Data, found)
+	}
+	catalog, found := app.Store.Get(context.Background(), imageCatalogResource, "tag-1")
+	if !found || catalog.Data["digest"] != "sha256:retry" {
+		t.Fatalf("catalog record = %#v found=%v, want retry digest", catalog.Data, found)
+	}
+}
+
+func TestImageRegistryHarborSyncMaintenanceSkipsNonRetryableDegraded(t *testing.T) {
+	app := newImageRegistryTestApp(t)
+	adapter := &fakeImageHarborProxyAdapter{
+		response: contracts.AdapterProxyResponse{
+			StatusCode: http.StatusOK,
+			Body:       []byte(`[{"digest":"sha256:retry","repository_name":"library/base","tags":[{"name":"1.0"}]}]`),
+		},
+		result: contracts.AdapterResult{Adapter: "harbor", Operation: harborCatalogSyncOperation},
+	}
+	app.Adapters["harbor"] = adapter
+	createImageRecords(t, app, imageSyncResource, []map[string]any{{
+		"id":         "terminal",
+		"tag_id":     "terminal",
+		"project":    "library",
+		"repository": "base",
+		"tag":        "1.0",
+		"status":     "degraded",
+		"retryable":  false,
+	}})
+
+	app.RunMaintenanceOnce(context.Background(), time.Second)
+	if len(adapter.requests) != 0 {
+		t.Fatalf("proxy requests = %#v, want non-retryable degraded status skipped", adapter.requests)
+	}
+	record, found := app.Store.Get(context.Background(), imageSyncResource, "terminal")
+	if !found || record.Data["status"] != "degraded" {
+		t.Fatalf("sync status record = %#v found=%v, want unchanged degraded", record.Data, found)
+	}
+}
+
 func TestImageRegistryValidationAndCatalogMutation(t *testing.T) {
 	app := newImageRegistryTestApp(t)
 
@@ -112,8 +523,8 @@ func TestImageRegistryValidationAndCatalogMutation(t *testing.T) {
 	statusReq.SetPathValue("tagId", "tag-1")
 	code, data, _ = getCatalogSyncStatus(app, statusReq, platform.RouteSpec{})
 	assertImageStatus(t, code, data, http.StatusOK)
-	if data.(map[string]any)["status"] != "sync_requested" {
-		t.Fatalf("sync status = %#v, want sync_requested", data)
+	if data.(map[string]any)["status"] != "degraded" {
+		t.Fatalf("sync status = %#v, want degraded without Harbor adapter", data)
 	}
 
 	deleteReq := imageRequest(http.MethodDelete, "/api/v1/image-catalog/tag-1", "", "ADMIN")
@@ -301,6 +712,47 @@ func assertImageMapValue(t *testing.T, data any, key string, want any) {
 	}
 }
 
+func assertImageNoDegraded(t *testing.T, degraded *platform.Degraded) {
+	t.Helper()
+	if degraded != nil {
+		t.Fatalf("degraded = %#v, want nil", degraded)
+	}
+}
+
+func assertHarborDegraded(t *testing.T, degraded *platform.Degraded) {
+	t.Helper()
+	if degraded == nil || degraded.Adapter != "harbor" || degraded.Code != "adapter_unavailable" || !degraded.Retryable {
+		t.Fatalf("degraded = %#v, want retryable harbor adapter_unavailable", degraded)
+	}
+}
+
+func assertProjectImagePayload(t *testing.T, data any, tagID string) {
+	t.Helper()
+	images := data.([]map[string]any)
+	if len(images) != 1 || images[0]["tag_id"] != tagID || images[0]["project_id"] != "P1" {
+		t.Fatalf("project images = %#v, want one unchanged image for tag %s", images, tagID)
+	}
+}
+
+func assertProjectBuildPayload(t *testing.T, data any, buildID string) {
+	t.Helper()
+	builds := data.([]map[string]any)
+	if len(builds) != 1 || builds[0]["id"] != buildID || builds[0]["project_id"] != "P1" || builds[0]["status"] != "queued" {
+		t.Fatalf("project builds = %#v, want one unchanged queued build %s", builds, buildID)
+	}
+}
+
+func assertImageQueryValue(t *testing.T, rawQuery, key, want string) {
+	t.Helper()
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		t.Fatalf("query %q parse failed: %v", rawQuery, err)
+	}
+	if got := values.Get(key); got != want {
+		t.Fatalf("query %q %s = %q, want %q", rawQuery, key, got, want)
+	}
+}
+
 func assertImageNoError(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
@@ -320,4 +772,64 @@ func assertImageRecordMissing(t *testing.T, app *platform.App, resource, id stri
 	if _, ok := app.Store.Get(context.Background(), resource, id); ok {
 		t.Fatalf("%s/%s unexpectedly exists", resource, id)
 	}
+}
+
+func mustImageJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("json marshal failed: %v", err)
+	}
+	return data
+}
+
+type fakeImageHarborProxyAdapter struct {
+	response  contracts.AdapterProxyResponse
+	responses []contracts.AdapterProxyResponse
+	result    contracts.AdapterResult
+	err       error
+	requests  []contracts.AdapterProxyRequest
+}
+
+type failingImageCatalogCreateStore struct {
+	platform.RecordStore
+}
+
+type failingImageCatalogUpdateStore struct {
+	platform.RecordStore
+}
+
+func (s failingImageCatalogCreateStore) Create(ctx context.Context, resource string, data map[string]any) (contracts.Record[map[string]any], error) {
+	if resource == imageCatalogResource {
+		return contracts.Record[map[string]any]{}, errors.New("catalog create blocked")
+	}
+	return s.RecordStore.Create(ctx, resource, data)
+}
+
+func (s failingImageCatalogUpdateStore) Update(ctx context.Context, resource, id string, data map[string]any) (contracts.Record[map[string]any], bool) {
+	if resource == imageCatalogResource {
+		return contracts.Record[map[string]any]{}, false
+	}
+	return s.RecordStore.Update(ctx, resource, id, data)
+}
+
+func (f *fakeImageHarborProxyAdapter) Call(context.Context, string, bool) (contracts.AdapterResult, error) {
+	return contracts.AdapterResult{Adapter: "harbor"}, nil
+}
+
+func (f *fakeImageHarborProxyAdapter) Proxy(_ context.Context, req contracts.AdapterProxyRequest) (contracts.AdapterProxyResponse, contracts.AdapterResult, error) {
+	f.requests = append(f.requests, req)
+	if len(f.responses) >= len(f.requests) {
+		return f.responses[len(f.requests)-1], f.result, f.err
+	}
+	return f.response, f.result, f.err
+}
+
+func containsImageTask(tasks []string, want string) bool {
+	for _, task := range tasks {
+		if task == want {
+			return true
+		}
+	}
+	return false
 }

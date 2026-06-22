@@ -93,6 +93,26 @@ func TestEventBusConsumeIdempotencyByConsumer(t *testing.T) {
 	}
 }
 
+func TestEventBusResetConsumerEventsDoesNotClearCheckpoint(t *testing.T) {
+	bus := NewEventBus()
+	ctx := context.Background()
+	event := testEvent(1)
+	if err := bus.Publish(ctx, event); err != nil {
+		t.Fatal(err)
+	}
+	if processed, err := bus.Consume(ctx, "consumer-a", event); err != nil || !processed {
+		t.Fatalf("first Consume() = (%v, %v), want processed nil-error", processed, err)
+	}
+	bus.Checkpoint("consumer-a")
+	bus.ResetConsumerEvents("consumer-a", []string{event.EventID})
+	if lag := bus.Lag("consumer-a"); lag != 0 {
+		t.Fatalf("lag after targeted reset = %d, want checkpoint preserved", lag)
+	}
+	if processed, err := bus.Consume(ctx, "consumer-a", event); err != nil || !processed {
+		t.Fatalf("Consume() after targeted reset = (%v, %v), want processed nil-error", processed, err)
+	}
+}
+
 func TestRedactedOutboxHidesSensitivePayloadFields(t *testing.T) {
 	event := testEvent(1)
 	event.Data = map[string]any{

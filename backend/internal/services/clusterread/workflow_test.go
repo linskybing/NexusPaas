@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
+	"github.com/linskybing/nexuspaas/backend/internal/services/resourcehours"
 )
 
 func TestClusterHandlersServeSummaryNodesAndGPUUsage(t *testing.T) {
@@ -20,6 +21,9 @@ func TestClusterHandlersServeSummaryNodesAndGPUUsage(t *testing.T) {
 	summary := data.(map[string]any)
 	if summary["nodes"] != nil || summary["podGpuUsages"] != nil || summary["nodeCount"] != 2 {
 		t.Fatalf("public summary = %#v, want sanitized cluster counters", summary)
+	}
+	if summary["telemetry_stale"] != false || summary["collected_at"] == "" {
+		t.Fatalf("public summary telemetry = %#v, want fresh telemetry metadata", summary)
 	}
 
 	code, data, _ = listClusterNodes(app, clusterRequest("/api/v1/cluster/nodes", "ADMIN"), platform.RouteSpec{})
@@ -62,8 +66,12 @@ func TestClusterProjectGPUHandlersEnforceVisibility(t *testing.T) {
 	projectReq := clusterRequest("/api/v1/projects/P1/gpu-usage", "U1")
 	projectReq.SetPathValue("id", "P1")
 	code, data, _ = getProjectGPUUsage(app, projectReq, platform.RouteSpec{})
-	if code != http.StatusOK || data.(map[string]any)["used"] != int64(2) {
+	projectUsage := data.(map[string]any)
+	if code != http.StatusOK || projectUsage["used"] != int64(2) {
 		t.Fatalf("project P1 usage status=%d data=%#v, want used=2", code, data)
+	}
+	if projectUsage["telemetry_stale"] != false {
+		t.Fatalf("project P1 telemetry = %#v, want fresh", projectUsage)
 	}
 
 	forbiddenReq := clusterRequest("/api/v1/projects/P2/gpu-usage", "U1")
@@ -78,6 +86,49 @@ func TestClusterProjectGPUHandlersEnforceVisibility(t *testing.T) {
 	code, data, _ = getProjectGPUUsage(app, adminReq, platform.RouteSpec{})
 	if code != http.StatusOK || data.(map[string]any)["used"] != int64(1) {
 		t.Fatalf("project P2 admin status=%d data=%#v, want used=1", code, data)
+	}
+}
+
+func TestClusterTelemetryMetadataMarksStaleAndMissingSnapshots(t *testing.T) {
+	staleApp := newClusterHandlerAppWithSummary(t, clusterSummaryFixture(time.Now().UTC().Add(-3*time.Minute)))
+	staleReq := clusterRequest("/api/v1/projects/P1/gpu-usage", "U1")
+	staleReq.SetPathValue("id", "P1")
+	code, data, _ := getProjectGPUUsage(staleApp, staleReq, platform.RouteSpec{})
+	staleUsage := data.(map[string]any)
+	if code != http.StatusOK || staleUsage["telemetry_stale"] != true {
+		t.Fatalf("stale usage status=%d data=%#v, want telemetry_stale=true", code, data)
+	}
+
+	missing := clusterSummaryFixture(time.Now().UTC())
+	delete(missing, "collectedAt")
+	missingApp := newClusterHandlerAppWithSummary(t, missing)
+	code, data, _ = getClusterSummary(missingApp, clusterRequest("/api/v1/cluster/summary", "U1"), platform.RouteSpec{})
+	missingSummary := data.(map[string]any)
+	if code != http.StatusOK || missingSummary["telemetry_stale"] != true || missingSummary["collected_at"] != "" {
+		t.Fatalf("missing telemetry status=%d data=%#v, want missing timestamp marked stale", code, data)
+	}
+}
+
+func TestSpoofedAdminRoleHeaderCannotReadProjectGPUUsageThroughServeHTTP(t *testing.T) {
+	app := newStaticAdminClusterHTTPApp(t)
+
+	noKey := serveProjectGPUUsage(app, map[string]string{"X-User-Role": "admin"}, "P2")
+	if noKey.Code != http.StatusUnauthorized {
+		t.Fatalf("spoofed admin header without API key status = %d, want 401: %s", noKey.Code, noKey.Body.String())
+	}
+
+	reader := serveProjectGPUUsage(app, map[string]string{"X-API-Key": "reader-key", "X-User-Role": "admin"}, "P2")
+	if reader.Code != http.StatusForbidden {
+		t.Fatalf("spoofed admin header with reader key status = %d, want 403: %s", reader.Code, reader.Body.String())
+	}
+}
+
+func TestStaticAdminAPIKeyPrincipalCanReadProjectGPUUsageThroughServeHTTP(t *testing.T) {
+	app := newStaticAdminClusterHTTPApp(t)
+
+	rec := serveProjectGPUUsage(app, map[string]string{"X-API-Key": "admin-key"}, "P2")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("static admin project GPU usage status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -135,8 +186,12 @@ func TestClusterSummaryHelpersAndCoHostedFallbacks(t *testing.T) {
 }
 
 func newClusterHandlerApp(t *testing.T) *platform.App {
+	return newClusterHandlerAppWithSummary(t, clusterSummaryFixture(time.Now().UTC()))
+}
+
+func newClusterHandlerAppWithSummary(t *testing.T, summary map[string]any) *platform.App {
 	t.Helper()
-	app := platform.NewApp(platform.Config{ServiceName: serviceName, HTTPAddr: ":0"})
+	app := platform.NewApp(platform.Config{ServiceName: serviceName, HTTPAddr: ":0", MaintenanceInterval: time.Minute})
 	createClusterRows(t, app, clusterIdentityUsersResource, []map[string]any{
 		{"id": "ADMIN", "capabilities": map[string]any{"adminPanel": true}},
 		{"id": "U1", "role_id": "user"},
@@ -148,17 +203,41 @@ func newClusterHandlerApp(t *testing.T) *platform.App {
 	createClusterRows(t, app, clusterProjectMembersResource, []map[string]any{
 		{"project_id": "P1", "user_id": "U1"},
 	})
-	createClusterRows(t, app, clusterReadModelResource, []map[string]any{{"id": "cluster", "summary": clusterSummaryFixture()}})
+	createClusterRows(t, app, clusterReadModelResource, []map[string]any{{"id": "cluster", "summary": summary}})
 	return app
 }
 
-func clusterSummaryFixture() map[string]any {
+func newStaticAdminClusterHTTPApp(t *testing.T) *platform.App {
+	t.Helper()
+	app := platform.NewApp(platform.Config{
+		ServiceName:  serviceName,
+		HTTPAddr:     ":0",
+		RequireAuth:  true,
+		APIKeys:      map[string]bool{"admin-key": true, "reader-key": true},
+		ExternalURLs: map[string]string{},
+		APIKeyPrincipals: map[string]platform.APIKeyPrincipal{
+			"admin-key":  {ID: "ops-admin", Username: "ops-admin", Admin: true},
+			"reader-key": {ID: "ops-reader", Username: "ops-reader", Role: "user"},
+		},
+	})
+	app.RegisterService(resourcehours.Spec())
+	Register(app)
+	createClusterRows(t, app, clusterProjectsResource, []map[string]any{{"id": "P2", "project_name": "language"}})
+	createClusterRows(t, app, clusterReadModelResource, []map[string]any{{"id": "cluster", "summary": clusterSummaryFixture(time.Now().UTC())}})
+	return app
+}
+
+func clusterSummaryFixture(collectedAt time.Time) map[string]any {
 	return map[string]any{
 		"nodeCount":    2,
 		"totalGpuUsed": 3,
-		"collectedAt":  time.Date(2026, time.April, 2, 10, 0, 0, 0, time.UTC),
+		"collectedAt":  collectedAt,
 		"nodes":        []any{map[string]any{"name": "gpu-b"}, map[string]any{"name": "gpu-a"}},
-		"podGpuUsages": []any{map[string]any{"namespace": "project-P1"}, map[string]any{"namespace": "project-P1"}, map[string]any{"namespace": "project-P2"}},
+		"podGpuUsages": []any{
+			map[string]any{"project_id": "P1", "namespace": "proj-p1-alice"},
+			map[string]any{"namespace": "project-P1"},
+			map[string]any{"project_id": "P2", "namespace": "proj-p2-admin"},
+		},
 	}
 }
 
@@ -177,6 +256,16 @@ func clusterRequest(target, userID string) *http.Request {
 		req.Header.Set("X-User-ID", userID)
 	}
 	return req
+}
+
+func serveProjectGPUUsage(app *platform.App, headers map[string]string, projectID string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+projectID+"/gpu-usage", nil)
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, req)
+	return rec
 }
 
 func assertClusterStatus(t *testing.T, handler platform.HandlerFunc, app *platform.App, req *http.Request, want int) {

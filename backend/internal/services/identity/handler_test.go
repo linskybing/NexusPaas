@@ -9,8 +9,52 @@ import (
 	"testing"
 	"time"
 
+	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
 )
+
+type identityTxStore struct {
+	*platform.Store
+	runInTx  int
+	txEvents []contracts.Event
+}
+
+func (s *identityTxStore) RunInTx(ctx context.Context, fn func(platform.StoreTx) error) error {
+	s.runInTx++
+	tx := &identityRecordingTx{store: s.Store}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	s.txEvents = append(s.txEvents, tx.events...)
+	return nil
+}
+
+func (s *identityTxStore) resetTx() {
+	s.runInTx = 0
+	s.txEvents = nil
+}
+
+type identityRecordingTx struct {
+	store  *platform.Store
+	events []contracts.Event
+}
+
+func (tx *identityRecordingTx) Create(ctx context.Context, resource string, data map[string]any) (contracts.Record[map[string]any], error) {
+	return tx.store.Create(ctx, resource, data)
+}
+
+func (tx *identityRecordingTx) Update(ctx context.Context, resource, id string, data map[string]any) (contracts.Record[map[string]any], bool, error) {
+	record, ok := tx.store.Update(ctx, resource, id, data)
+	return record, ok, nil
+}
+
+func (tx *identityRecordingTx) Delete(ctx context.Context, resource, id string) (bool, error) {
+	return tx.store.Delete(ctx, resource, id), nil
+}
+
+func (tx *identityRecordingTx) Emit(event contracts.Event) {
+	tx.events = append(tx.events, event)
+}
 
 func TestInternalIdentityReadContractsRequireServiceAuth(t *testing.T) {
 	serviceKey := testServiceKey(t)
@@ -72,9 +116,12 @@ func assertNoCredentialLeak(t *testing.T, path, body string) {
 
 func TestInternalIdentityAuthContractsVerifyCredentials(t *testing.T) {
 	serviceKey := testServiceKey(t)
-	rawAPIToken := "nexuspaas_" + strings.ReplaceAll(t.Name(), "/", "_")
+	rawAPIToken := platform.FormatUserAPIToken("AT1", strings.ReplaceAll(t.Name(), "/", "_"))
+	expiredRawAPIToken := platform.FormatUserAPIToken("ATEXPIRED", strings.ReplaceAll(t.Name(), "/", "_")+"_expired")
+	revokedRawAPIToken := platform.FormatUserAPIToken("ATREVOKED", strings.ReplaceAll(t.Name(), "/", "_")+"_revoked")
 	app := platform.NewApp(platform.Config{ServiceName: serviceName, ServiceAPIKey: serviceKey})
 	Register(app)
+	now := time.Now().UTC()
 	if _, err := app.Store.Create(context.Background(), usersResource, map[string]any{
 		"id":            "US1",
 		"username":      "alice",
@@ -88,7 +135,14 @@ func TestInternalIdentityAuthContractsVerifyCredentials(t *testing.T) {
 	if _, err := app.Store.Create(context.Background(), sessionsResource, map[string]any{
 		"id":         "session-1",
 		"user_id":    "US1",
-		"expires_at": time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+		"expires_at": now.Add(time.Hour).Format(time.RFC3339),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.Store.Create(context.Background(), sessionsResource, map[string]any{
+		"id":         "session-expired",
+		"user_id":    "US1",
+		"expires_at": now.Add(-time.Hour).Format(time.RFC3339),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -96,8 +150,26 @@ func TestInternalIdentityAuthContractsVerifyCredentials(t *testing.T) {
 		"id":         "AT1",
 		"user_id":    "US1",
 		"token_hash": platform.HashSecret(rawAPIToken),
-		"expires_at": time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+		"expires_at": now.Add(time.Hour).Format(time.RFC3339),
 		"revoked":    false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.Store.Create(context.Background(), apiTokensResource, map[string]any{
+		"id":         "ATEXPIRED",
+		"user_id":    "US1",
+		"token_hash": platform.HashSecret(expiredRawAPIToken),
+		"expires_at": now.Add(-time.Hour).Format(time.RFC3339),
+		"revoked":    false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.Store.Create(context.Background(), apiTokensResource, map[string]any{
+		"id":         "ATREVOKED",
+		"user_id":    "US1",
+		"token_hash": platform.HashSecret(revokedRawAPIToken),
+		"expires_at": now.Add(time.Hour).Format(time.RFC3339),
+		"revoked":    true,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -106,6 +178,7 @@ func TestInternalIdentityAuthContractsVerifyCredentials(t *testing.T) {
 	if !strings.Contains(sessionBody, `"username":"alice"`) || strings.Contains(sessionBody, "password_hash") {
 		t.Fatalf("session auth body = %s, want sanitized verified user", sessionBody)
 	}
+	postInternalIdentityAuth(t, app, serviceKey, "/internal/identity/auth/session", "session-expired", http.StatusUnauthorized)
 
 	apiBody := postInternalIdentityAuth(t, app, serviceKey, "/internal/identity/auth/api-token", rawAPIToken, http.StatusOK)
 	if !strings.Contains(apiBody, `"api_token_id":"AT1"`) || strings.Contains(apiBody, "token_hash") {
@@ -115,6 +188,8 @@ func TestInternalIdentityAuthContractsVerifyCredentials(t *testing.T) {
 	if !ok || tokenRecord.Data["last_used_at"] == nil {
 		t.Fatalf("api token record = %#v, want identity-owned last_used_at update", tokenRecord)
 	}
+	postInternalIdentityAuth(t, app, serviceKey, "/internal/identity/auth/api-token", expiredRawAPIToken, http.StatusUnauthorized)
+	postInternalIdentityAuth(t, app, serviceKey, "/internal/identity/auth/api-token", revokedRawAPIToken, http.StatusUnauthorized)
 
 	postInternalIdentityAuth(t, app, serviceKey, "/internal/identity/auth/session", "missing", http.StatusUnauthorized)
 	postInternalIdentityAuth(t, app, "wrong-"+serviceKey, "/internal/identity/auth/api-token", rawAPIToken, http.StatusUnauthorized)
@@ -140,6 +215,37 @@ func TestIdentityUserAdministrationHandlers(t *testing.T) {
 	assertIdentityAdminSelfService(t, app)
 	assertIdentityAdminBatchOperations(t, app)
 	assertIdentityCLICertDownload(t, app)
+}
+
+func TestIdentityUserMutationsUseTransactionalEvents(t *testing.T) {
+	app, store := newIdentityTxAdminTestApp(t)
+
+	updateReq := identityAdminRequest(http.MethodPut, "/api/v1/users/U1", `{"name":"Alice Tx"}`, "U1")
+	updateReq.SetPathValue("id", "U1")
+	code, data, _ := updateUser(app, updateReq, platform.RouteSpec{})
+	assertIdentityAdminStatus(t, code, data, http.StatusOK)
+	assertIdentityTxEvents(t, app, store, "UserUpdated", 1)
+
+	store.resetTx()
+	roleReq := identityAdminRequest(http.MethodPut, "/api/v1/users/batch/role", `{"ids":["U1"],"role":"manager"}`, "ADMIN")
+	code, data, _ = batchUpdateRole(app, roleReq, platform.RouteSpec{})
+	assertIdentityAdminStatus(t, code, data, http.StatusOK)
+	assertIdentityTxEvents(t, app, store, "UserUpdated", 1)
+
+	store.resetTx()
+	passwordReq := identityAdminRequest(http.MethodPut, "/api/v1/users/batch/password", `{"ids":["U1"],"password":"new-password"}`, "ADMIN")
+	code, data, _ = batchResetPassword(app, passwordReq, platform.RouteSpec{})
+	assertIdentityAdminStatus(t, code, data, http.StatusOK)
+	assertIdentityTxEvents(t, app, store, "UserUpdated", 1)
+
+	store.resetTx()
+	deleteReq := identityAdminRequest(http.MethodDelete, "/api/v1/users/batch", `{"ids":["U1","missing"]}`, "ADMIN")
+	code, data, _ = batchDeleteUsers(app, deleteReq, platform.RouteSpec{})
+	assertIdentityAdminStatus(t, code, data, http.StatusOK)
+	if result := data.(map[string]any); result["succeeded"] != 1 || result["failed"] != 1 {
+		t.Fatalf("batch delete = %#v, want one success one failure", result)
+	}
+	assertIdentityTxEvents(t, app, store, "UserDisabled", 1)
 }
 
 func assertIdentityAdminListAuth(t *testing.T, app *platform.App) {
@@ -245,6 +351,32 @@ func postInternalIdentityAuth(t *testing.T, app *platform.App, serviceKey, path,
 		t.Fatalf("%s status = %d, want %d; body=%s", path, rec.Code, want, rec.Body.String())
 	}
 	return rec.Body.String()
+}
+
+func newIdentityTxAdminTestApp(t *testing.T) (*platform.App, *identityTxStore) {
+	t.Helper()
+	store := &identityTxStore{Store: platform.NewStore()}
+	app := platform.NewApp(platform.Config{ServiceName: serviceName}, platform.WithStore(store))
+	Register(app)
+	createIdentityRecord(t, app, usersResource, map[string]any{"id": "ADMIN", "username": "admin", "role": "admin", "system_role": 0, "status": "online"})
+	createIdentityRecord(t, app, usersResource, map[string]any{"id": "U1", "username": "alice", "email": "alice@test.local", "role": "user", "system_role": 2, "status": "online", "password_hash": "old"})
+	store.resetTx()
+	return app, store
+}
+
+func assertIdentityTxEvents(t *testing.T, app *platform.App, store *identityTxStore, name string, want int) {
+	t.Helper()
+	if got := len(app.Events.Outbox()); got != 0 {
+		t.Fatalf("direct events = %#v, want none", app.Events.Outbox())
+	}
+	if len(store.txEvents) != want {
+		t.Fatalf("tx events = %#v, want %d", store.txEvents, want)
+	}
+	for _, event := range store.txEvents {
+		if event.Name != name {
+			t.Fatalf("tx event = %s, want %s", event.Name, name)
+		}
+	}
 }
 
 func newIdentityAdminTestApp(t *testing.T) *platform.App {
@@ -370,5 +502,47 @@ func TestDexProxyFallsBackWhenDexURLUnset(t *testing.T) {
 	}
 	if got["reason"] != "oidc_provider_not_configured" {
 		t.Fatalf("response = %#v", got)
+	}
+}
+
+func TestDexBrowserProxyPreservesCookieAndLocationHeaders(t *testing.T) {
+	dex := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/dex/auth/local" || r.Header.Get("Cookie") != "dex-session=upstream" {
+			t.Fatalf("dex browser request = %s %s cookie=%q", r.Method, r.URL.Path, r.Header.Get("Cookie"))
+		}
+		w.Header().Set("Content-Type", "text/html")
+		w.Header().Add("Set-Cookie", "dex-session=next; Path=/dex; HttpOnly")
+		w.Header().Set("Location", "/dex/auth/local/login?state=abc")
+		w.WriteHeader(http.StatusFound)
+		_, _ = w.Write([]byte("<a>dex</a>"))
+	}))
+	defer dex.Close()
+	app := platform.NewApp(platform.Config{DexURL: dex.URL + "/dex"})
+	req := httptest.NewRequest(http.MethodGet, "/dex/auth/local", nil)
+	req.SetPathValue("path", "auth/local")
+	req.Header.Set("Cookie", "dex-session=upstream")
+
+	status, data, degraded := dexBrowserProxy(app, req, platform.RouteSpec{})
+	if degraded != nil || status != http.StatusFound {
+		t.Fatalf("status=%d degraded=%v data=%#v, want 302", status, degraded, data)
+	}
+	raw := data.(platform.RawResponse)
+	headers := http.Header(raw.HeaderValues)
+	if headers.Get("Location") != "/dex/auth/local/login?state=abc" {
+		t.Fatalf("Location = %q", headers.Get("Location"))
+	}
+	if headers.Get("Set-Cookie") == "" || raw.ContentType != "text/html" || string(raw.Body) != "<a>dex</a>" {
+		t.Fatalf("raw response = %#v", raw)
+	}
+}
+
+func TestIdentityDexBrowserProxyRoutesAreServiceOwned(t *testing.T) {
+	for _, route := range Spec().Routes {
+		if route.Pattern != "/dex/{path...}" {
+			continue
+		}
+		if route.Action == "proxy" || route.ExternalAdapter != "" {
+			t.Fatalf("%s %s action=%q adapter=%q, want identity-owned browser proxy", route.Method, route.Pattern, route.Action, route.ExternalAdapter)
+		}
 	}
 }

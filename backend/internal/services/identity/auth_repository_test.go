@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
 )
 
@@ -39,7 +40,7 @@ func newAuthRepoAPITokenFixture(t *testing.T) authRepoAPITokenFixture {
 	now := time.Date(2026, 6, 15, 10, 0, 0, 0, time.UTC)
 	store := platform.NewStore()
 	repo := newRecordStoreIdentityAuthRepository(store)
-	repo.apiTokenGenerator = func() string { return "nexuspaas_active_token" }
+	repo.apiTokenGenerator = func() string { return "active_token" }
 
 	seedAuthRepoUser(t, store, "US1", "alice", "online")
 	seedAuthRepoUser(t, store, "US2", "bob", "online")
@@ -49,16 +50,16 @@ func newAuthRepoAPITokenFixture(t *testing.T) authRepoAPITokenFixture {
 	if err != nil {
 		t.Fatalf("create token: %v", err)
 	}
-	seedAuthRepoAPIToken(t, store, "expired", "US1", "nexuspaas_expired", now.Add(-time.Hour), false)
-	seedAuthRepoAPIToken(t, store, "revoked", "US1", "nexuspaas_revoked", now.Add(time.Hour), true)
-	seedAuthRepoAPIToken(t, store, "wrong-user", "US2", "nexuspaas_wrong", now.Add(time.Hour), false)
+	seedAuthRepoAPIToken(t, store, "ATEXPIRED", "US1", platform.FormatUserAPIToken("ATEXPIRED", "expired"), now.Add(-time.Hour), false)
+	seedAuthRepoAPIToken(t, store, "ATREVOKED", "US1", platform.FormatUserAPIToken("ATREVOKED", "revoked"), now.Add(time.Hour), true)
+	seedAuthRepoAPIToken(t, store, "ATWRONGUSER", "US2", platform.FormatUserAPIToken("ATWRONGUSER", "wrong"), now.Add(time.Hour), false)
 
 	return authRepoAPITokenFixture{ctx: ctx, now: now, store: store, repo: repo, created: created}
 }
 
 func assertAPITokenCreateStoresHashOnly(t *testing.T, fixture authRepoAPITokenFixture) {
 	t.Helper()
-	if fixture.created.RawToken != "nexuspaas_active_token" {
+	if fixture.created.RawToken != "nexuspaas_AT2600001_active_token" {
 		t.Fatalf("raw token = %q, want generated token", fixture.created.RawToken)
 	}
 	stored, ok := fixture.store.Get(fixture.ctx, apiTokensResource, fixture.created.ID)
@@ -86,7 +87,7 @@ func assertAPITokenActiveFilteringAndVerification(t *testing.T, fixture authRepo
 		t.Fatalf("token metadata = %#v, want sanitized created token", metadata)
 	}
 
-	token, user, ok := fixture.repo.FindActiveAPITokenByRaw(fixture.ctx, "nexuspaas_active_token", fixture.now)
+	token, user, ok := fixture.repo.FindActiveAPITokenByRaw(fixture.ctx, "nexuspaas_AT2600001_active_token", fixture.now)
 	if !ok || token.ID != fixture.created.ID || user.ID != "US1" {
 		t.Fatalf("verify active token = token:%#v user:%#v ok:%v, want created token/user", token, user, ok)
 	}
@@ -97,7 +98,12 @@ func assertAPITokenActiveFilteringAndVerification(t *testing.T, fixture authRepo
 	if touched.Data["last_used_at"] == nil {
 		t.Fatalf("touched token = %#v, want last_used_at", touched.Data)
 	}
-	assertAPITokenRawValuesFailClosed(t, fixture, []string{"nexuspaas_expired", "nexuspaas_revoked", "missing"})
+	assertAPITokenRawValuesFailClosed(t, fixture, []string{
+		platform.FormatUserAPIToken("ATEXPIRED", "expired"),
+		platform.FormatUserAPIToken("ATREVOKED", "revoked"),
+		"nexuspaas_active_token",
+		"missing",
+	})
 }
 
 func assertAPITokenRawValuesFailClosed(t *testing.T, fixture authRepoAPITokenFixture, raws []string) {
@@ -132,16 +138,30 @@ func assertAPITokenRevocationAndActiveUser(t *testing.T, fixture authRepoAPIToke
 
 func assertAPITokenBulkRevokeIsUserScoped(t *testing.T, fixture authRepoAPITokenFixture) {
 	t.Helper()
-	seedAuthRepoAPIToken(t, fixture.store, "bulk-1", "US1", "nexuspaas_bulk_1", fixture.now.Add(time.Hour), false)
-	seedAuthRepoAPIToken(t, fixture.store, "bulk-2", "US1", "nexuspaas_bulk_2", fixture.now.Add(time.Hour), false)
-	seedAuthRepoAPIToken(t, fixture.store, "bulk-other", "US2", "nexuspaas_bulk_other", fixture.now.Add(time.Hour), false)
+	seedAuthRepoAPIToken(t, fixture.store, "ATBULK1", "US1", platform.FormatUserAPIToken("ATBULK1", "bulk-1"), fixture.now.Add(time.Hour), false)
+	seedAuthRepoAPIToken(t, fixture.store, "ATBULK2", "US1", platform.FormatUserAPIToken("ATBULK2", "bulk-2"), fixture.now.Add(time.Hour), false)
+	seedAuthRepoAPIToken(t, fixture.store, "ATBULKOTHER", "US2", platform.FormatUserAPIToken("ATBULKOTHER", "bulk-other"), fixture.now.Add(time.Hour), false)
 	revokedForUser := fixture.repo.RevokeAPITokensForUser(fixture.ctx, "US1", fixture.now)
 	if len(revokedForUser) != 3 {
 		t.Fatalf("bulk revoked tokens = %#v, want all three unrevoked US1 tokens including expired cleanup candidate", revokedForUser)
 	}
-	other, _ := fixture.store.Get(fixture.ctx, apiTokensResource, "bulk-other")
+	other, _ := fixture.store.Get(fixture.ctx, apiTokensResource, "ATBULKOTHER")
 	if boolValue(other.Data, "revoked") {
 		t.Fatalf("bulk revoke mutated other user token: %#v", other.Data)
+	}
+}
+
+func TestIdentityAuthRepositoryAPITokenLookupDoesNotListTokens(t *testing.T) {
+	fixture := newAuthRepoAPITokenFixture(t)
+	spy := &authRepoListSpyStore{RecordStore: fixture.store}
+	fixture.repo.store = spy
+
+	token, _, ok := fixture.repo.FindActiveAPITokenByRaw(fixture.ctx, fixture.created.RawToken, fixture.now)
+	if !ok || token.ID != fixture.created.ID {
+		t.Fatalf("indexed token lookup failed: token=%#v ok=%v", token, ok)
+	}
+	if spy.listCalls != 0 {
+		t.Fatalf("api token verification called List %d times, want indexed Get only", spy.listCalls)
 	}
 }
 
@@ -269,4 +289,14 @@ func seedAuthRepoRecord(t *testing.T, store platform.RecordStore, resource strin
 	if _, err := store.Create(context.Background(), resource, data); err != nil {
 		t.Fatal(err)
 	}
+}
+
+type authRepoListSpyStore struct {
+	platform.RecordStore
+	listCalls int
+}
+
+func (s *authRepoListSpyStore) List(ctx context.Context, resource string) []contracts.Record[map[string]any] {
+	s.listCalls++
+	return s.RecordStore.List(ctx, resource)
 }

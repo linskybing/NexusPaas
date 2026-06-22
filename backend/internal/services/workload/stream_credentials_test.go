@@ -3,6 +3,7 @@ package workload
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +42,33 @@ func TestStreamCredentialsRequiresOwnedActiveStreamingJob(t *testing.T) {
 	uris := turn["uris"].([]any)
 	if len(uris) != 1 || uris[0] != "turn:turn.example.com:3478?transport=udp" {
 		t.Fatalf("uris = %#v, want configured TURN URI", uris)
+	}
+}
+
+func TestStreamCredentialsTTLsExpireAndDoNotDiscloseSharedSecret(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		wantTTL int
+	}{
+		{name: "caps requested ttl", body: `{"job_id":"J1","ttl_seconds":7200}`, wantTTL: 3600},
+		{name: "honors lower requested ttl", body: `{"job_id":"J1","ttl_seconds":600}`, wantTTL: 600},
+		{name: "defaults missing ttl", body: `{"job_id":"J1"}`, wantTTL: 3600},
+		{name: "defaults zero ttl", body: `{"job_id":"J1","ttl_seconds":0}`, wantTTL: 3600},
+		{name: "defaults negative ttl", body: `{"job_id":"J1","ttl_seconds":-1}`, wantTTL: 3600},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := newStreamCredentialTestApp(true)
+			seedStreamCredentialJob(t, app)
+			before := time.Now().UTC()
+			rec := serveStreamCredentials(t, app, tt.body, "U1", http.StatusOK)
+			after := time.Now().UTC()
+			data := responseEnvelopeData(t, rec)
+			turn := data["turn"].(map[string]any)
+			assertStreamCredentialTTL(t, turn, tt.wantTTL, before, after)
+			assertStreamCredentialSecretSafe(t, rec.Body.String(), turn)
+		})
 	}
 }
 
@@ -153,6 +181,13 @@ func streamCredentialJobFixture(id, status string, streaming bool) map[string]an
 	}
 }
 
+func seedStreamCredentialJob(t *testing.T, app *platform.App) {
+	t.Helper()
+	seedWorkloadProject(t, app, "P1")
+	seedWorkloadProjectMember(t, app, "P1", "U1")
+	createWorkloadRecord(t, app, jobsResource, streamCredentialJobFixture("J1", "running", true))
+}
+
 func serveStreamCredentials(t *testing.T, app http.Handler, body, userID string, want int) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
@@ -164,4 +199,48 @@ func serveStreamCredentials(t *testing.T, app http.Handler, body, userID string,
 		t.Fatalf("POST /api/v1/stream/credentials returned %d, want %d: %s", rec.Code, want, rec.Body.String())
 	}
 	return rec
+}
+
+func assertStreamCredentialTTL(t *testing.T, turn map[string]any, wantTTL int, before, after time.Time) {
+	t.Helper()
+	if turn["ttl_seconds"] != float64(wantTTL) {
+		t.Fatalf("ttl_seconds = %#v, want %d", turn["ttl_seconds"], wantTTL)
+	}
+	expires, err := time.Parse(time.RFC3339, turn["expires_at"].(string))
+	if err != nil {
+		t.Fatalf("expires_at is not RFC3339: %v", err)
+	}
+	minExpires := before.Add(time.Duration(wantTTL) * time.Second).Add(-time.Second)
+	maxExpires := after.Add(time.Duration(wantTTL) * time.Second).Add(time.Second)
+	if expires.Before(minExpires) || expires.After(maxExpires) {
+		t.Fatalf("expires_at = %s, want between %s and %s", expires, minExpires, maxExpires)
+	}
+	username := turn["username"].(string)
+	prefix, _, ok := strings.Cut(username, ":")
+	if !ok {
+		t.Fatalf("username = %q, want expiry prefix", username)
+	}
+	expiryUnix, err := strconv.ParseInt(prefix, 10, 64)
+	if err != nil {
+		t.Fatalf("username expiry prefix = %q, want unix timestamp", prefix)
+	}
+	if expiryUnix != expires.Unix() {
+		t.Fatalf("username expiry = %d, want expires_at unix %d", expiryUnix, expires.Unix())
+	}
+}
+
+func assertStreamCredentialSecretSafe(t *testing.T, responseBody string, turn map[string]any) {
+	t.Helper()
+	const secret = "turn-secret"
+	username := turn["username"].(string)
+	password := turn["password"].(string)
+	if password != streamTURNPassword(secret, username) {
+		t.Fatalf("TURN password did not match REST HMAC")
+	}
+	if password == secret {
+		t.Fatalf("TURN password must not equal shared secret")
+	}
+	if strings.Contains(responseBody, secret) {
+		t.Fatalf("response disclosed TURN shared secret")
+	}
 }

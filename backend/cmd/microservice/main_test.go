@@ -34,6 +34,13 @@ func TestStartupChecksFailProduction(t *testing.T) {
 	}
 }
 
+func TestStartupChecksFailStagingProfile(t *testing.T) {
+	err := errors.New("gap")
+	if startupChecksPass(platform.Config{EnvironmentProfile: "staging"}, startupCheck{err: err, failureMessage: "fail"}) {
+		t.Fatal("expected staging startup check gap to fail")
+	}
+}
+
 func TestStartupChecksFailProductionForRegisteredServiceIsolationGap(t *testing.T) {
 	app := platform.NewApp(platform.Config{ServiceName: "scheduler-quota-service", Production: true})
 	services.RegisterAll(app)

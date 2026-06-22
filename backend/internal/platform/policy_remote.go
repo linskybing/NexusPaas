@@ -56,6 +56,8 @@ func (p RemotePDP) Enforce(ctx context.Context, subject, domain, object, action 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if p.apiKey != "" {
+		req.Header.Set(serviceKeyHeader, p.apiKey)
+		// Keep X-API-Key during rolling upgrades with older policy-service pods.
 		req.Header.Set("X-API-Key", p.apiKey)
 	}
 	resp, err := p.client.Do(req)

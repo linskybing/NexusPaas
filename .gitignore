@@ -1,6 +1,8 @@
 references/
 .scannerwork/
+.tmp/
 backend/coverage.out
+backend/.tmp/
 backend/.e2e-gate/
 
 # Secrets — never commit

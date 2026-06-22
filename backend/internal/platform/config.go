@@ -14,6 +14,8 @@ import (
 
 type Config struct {
 	ServiceName                 string
+	ProductName                 string
+	EnvironmentProfile          string
 	HTTPAddr                    string
 	RequireAuth                 bool
 	DevHeaderAuth               bool
@@ -22,6 +24,7 @@ type Config struct {
 	APIKeyPrincipals            map[string]APIKeyPrincipal
 	AllowedOrigins              map[string]bool
 	TrustedProxyCIDRs           []*net.IPNet
+	WebUIDir                    string
 	JWKSURL                     string
 	JWTIssuer                   string
 	JWTAudiences                map[string]bool
@@ -43,6 +46,7 @@ type Config struct {
 	DatabaseURL                 string
 	RedisURL                    string
 	EventBusURL                 string
+	EventRelayBatchSize         int
 	ObjectStoreURL              string
 	ObjectStoreAccessKey        string
 	ObjectStoreSecretKey        string
@@ -58,6 +62,9 @@ type Config struct {
 	AdapterThreshold            int
 	AdapterOpenInterval         time.Duration
 	AuditRetentionDays          int
+	MaxAPIBodyBytes             int
+	MaxConfigFileBytes          int
+	MaxConfigFileDocuments      int
 	K8sNamespacePrefix          string
 	ImageCheckEnabled           bool
 	DockerCleanupEnabled        bool
@@ -124,8 +131,15 @@ type AdapterAuthConfig struct {
 const (
 	configPositiveValidationSuffix = " must be positive"
 	mediaUploadServiceName         = "media-upload-service"
+	runtimeProfileLocal            = "local"
+	runtimeProfileTest             = "test"
+	runtimeProfileDev              = "dev"
+	runtimeProfileStaging          = "staging"
+	runtimeProfileProduction       = "production"
 
 	envJWTJWKSURL                  = "JWT_JWKS_URL"
+	envProductName                 = "PRODUCT_NAME"
+	envAppEnv                      = "APP_ENV"
 	envJWTIssuer                   = "JWT_ISSUER"
 	envJWTAudience                 = "JWT_AUDIENCE"
 	envJWTAudiences                = "JWT_AUDIENCES"
@@ -137,6 +151,7 @@ const (
 	envDatabaseURL                 = "DATABASE_URL"
 	envRedisURL                    = "REDIS_URL"
 	envEventBusURL                 = "EVENT_BUS_URL"
+	envEventRelayBatchSize         = "EVENT_RELAY_BATCH_SIZE"
 	envObjectStoreURL              = "OBJECT_STORE_URL"
 	envObjectStoreAccessKey        = "OBJECT_STORE_ACCESS_KEY"
 	envObjectStoreSecretKey        = "OBJECT_STORE_SECRET_KEY"
@@ -156,6 +171,10 @@ const (
 	envProduction                  = "PRODUCTION"
 	envRequireAuth                 = "REQUIRE_AUTH"
 	envTrustedProxyCIDRs           = "TRUSTED_PROXY_CIDRS"
+	envWebUIDir                    = "WEB_UI_DIR"
+	envMaxAPIBodyBytes             = "MAX_API_BODY_BYTES"
+	envMaxConfigFileBytes          = "MAX_CONFIGFILE_BYTES"
+	envMaxConfigFileDocuments      = "MAX_CONFIGFILE_DOCUMENTS"
 	envAdapterConfig               = "ADAPTER_CONFIG"
 	envImageCheckEnabled           = "K8S_IMAGE_CHECK_ENABLED"
 	envDockerCleanupEnabled        = "DOCKER_CLEANUP_ENABLED"
@@ -192,6 +211,7 @@ const (
 	envGroupRegistryProfileOptions = "GROUP_REGISTRY_PROFILE_OPTIONS"
 	envRegistryProfileOptions      = "REGISTRY_PROFILE_OPTIONS"
 	configDiagnosticJSONObject     = "JSON object"
+	defaultEventRelayBatchSize     = 100
 )
 
 var deployableUnitServices = map[string][]string{
@@ -218,7 +238,11 @@ type configEnvParser struct {
 	diagnostics []configParseDiagnostic
 }
 
-const defaultCLICACertPEM = "-----BEGIN CERTIFICATE-----\nNEXUSPAAS-LOCAL-CLI-CA\n-----END CERTIFICATE-----\n"
+const (
+	defaultProductName  = "NexusPaaS"
+	defaultCLICACertPEM = "-----BEGIN CERTIFICATE-----\nNEXUSPAAS-LOCAL-CLI-CA\n-----END CERTIFICATE-----\n"
+	defaultWebUIDir     = "/app/web"
+)
 
 func (p *configEnvParser) addDiagnostic(envName, kind string) {
 	p.diagnostics = append(p.diagnostics, configParseDiagnostic{envName: envName, kind: kind})
@@ -226,9 +250,15 @@ func (p *configEnvParser) addDiagnostic(envName, kind string) {
 
 func ConfigFromEnv() Config {
 	parser := &configEnvParser{}
+	productionRaw, productionSet := os.LookupEnv(envProduction)
 	production := parser.envBool(envProduction, false)
+	environmentProfile := normalizeEnvironmentProfile(os.Getenv(envAppEnv))
+	if profileConflictsWithProductionFlag(environmentProfile, production, productionSet, productionRaw) {
+		parser.addDiagnostic(envAppEnv, "profile compatible with PRODUCTION")
+	}
+	effectiveProduction := runtimeProfileIsProduction(environmentProfile, production)
 	allowedOrigins := parseSet(os.Getenv("ALLOWED_ORIGINS"))
-	if len(allowedOrigins) == 0 && !production {
+	if len(allowedOrigins) == 0 && !effectiveProduction {
 		allowedOrigins = defaultDevAllowedOrigins()
 	}
 	trustedProxyCIDRs, trustedProxyErr := parseTrustedProxyCIDRsWithDiagnostics(os.Getenv(envTrustedProxyCIDRs))
@@ -237,6 +267,8 @@ func ConfigFromEnv() Config {
 	}
 	cfg := Config{
 		ServiceName:                 env("SERVICE_NAME", "all"),
+		ProductName:                 env(envProductName, defaultProductName),
+		EnvironmentProfile:          environmentProfile,
 		HTTPAddr:                    env("HTTP_ADDR", ":8080"),
 		RequireAuth:                 parser.envBool(envRequireAuth, true),
 		DevHeaderAuth:               parser.envBool(envDevHeaderAuth, false),
@@ -245,6 +277,7 @@ func ConfigFromEnv() Config {
 		APIKeyPrincipals:            parser.parseAPIKeyPrincipals(os.Getenv(envAPIKeyUsers)),
 		AllowedOrigins:              allowedOrigins,
 		TrustedProxyCIDRs:           trustedProxyCIDRs,
+		WebUIDir:                    strings.TrimSpace(env(envWebUIDir, defaultWebUIDir)),
 		JWKSURL:                     strings.TrimSpace(os.Getenv(envJWTJWKSURL)),
 		JWTIssuer:                   strings.TrimSpace(os.Getenv(envJWTIssuer)),
 		JWTAudiences:                parseJWTAudiences(),
@@ -266,6 +299,7 @@ func ConfigFromEnv() Config {
 		DatabaseURL:                 strings.TrimSpace(os.Getenv(envDatabaseURL)),
 		RedisURL:                    strings.TrimSpace(os.Getenv(envRedisURL)),
 		EventBusURL:                 strings.TrimSpace(os.Getenv(envEventBusURL)),
+		EventRelayBatchSize:         parser.envInt(envEventRelayBatchSize, defaultEventRelayBatchSize),
 		ObjectStoreURL:              strings.TrimRight(strings.TrimSpace(os.Getenv(envObjectStoreURL)), "/"),
 		ObjectStoreAccessKey:        strings.TrimSpace(os.Getenv(envObjectStoreAccessKey)),
 		ObjectStoreSecretKey:        os.Getenv(envObjectStoreSecretKey),
@@ -273,7 +307,7 @@ func ConfigFromEnv() Config {
 		OTLPEndpoint:                firstNonEmpty(os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"), os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")),
 		ServiceVersion:              env("SERVICE_VERSION", "0.1.0"),
 		LogLevel:                    os.Getenv("LOG_LEVEL"),
-		Production:                  production,
+		Production:                  effectiveProduction,
 		ShutdownTimeout:             parser.envDuration("SHUTDOWN_TIMEOUT", 10*time.Second),
 		MaintenanceInterval:         parser.envDuration("MAINTENANCE_INTERVAL", 15*time.Minute),
 		AdapterTimeout:              parser.envDuration("ADAPTER_TIMEOUT", 2*time.Second),
@@ -281,6 +315,9 @@ func ConfigFromEnv() Config {
 		AdapterThreshold:            parser.envInt("ADAPTER_CIRCUIT_THRESHOLD", 3),
 		AdapterOpenInterval:         parser.envDuration("ADAPTER_CIRCUIT_OPEN_INTERVAL", 30*time.Second),
 		AuditRetentionDays:          parser.envInt("AUDIT_RETENTION_DAYS", 30),
+		MaxAPIBodyBytes:             parser.envInt(envMaxAPIBodyBytes, defaultMaxAPIBodyBytes),
+		MaxConfigFileBytes:          parser.envInt(envMaxConfigFileBytes, defaultMaxConfigFileBytes),
+		MaxConfigFileDocuments:      parser.envInt(envMaxConfigFileDocuments, defaultMaxConfigFileDocuments),
 		K8sNamespacePrefix:          env("K8S_PROJECT_NAMESPACE_PREFIX", "proj"),
 		ImageCheckEnabled:           parser.envBool(envImageCheckEnabled, false),
 		DockerCleanupEnabled:        parser.envBool(envDockerCleanupEnabled, false),
@@ -377,8 +414,51 @@ func defaultDevAllowedOrigins() map[string]bool {
 	}
 }
 
+func normalizeEnvironmentProfile(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func validEnvironmentProfile(profile string) bool {
+	switch profile {
+	case runtimeProfileLocal, runtimeProfileTest, runtimeProfileDev, runtimeProfileStaging, runtimeProfileProduction:
+		return true
+	default:
+		return false
+	}
+}
+
+func runtimeProfileIsProduction(profile string, production bool) bool {
+	if profile != "" {
+		return profile == runtimeProfileProduction
+	}
+	return production
+}
+
+func effectiveEnvironmentProfile(profile string, production bool) string {
+	if profile != "" {
+		return profile
+	}
+	if production {
+		return runtimeProfileProduction
+	}
+	return runtimeProfileDev
+}
+
+func profileConflictsWithProductionFlag(profile string, production bool, productionSet bool, productionRaw string) bool {
+	if profile == "" || !productionSet || strings.TrimSpace(productionRaw) == "" {
+		return false
+	}
+	if !validEnvironmentProfile(profile) {
+		return false
+	}
+	return production != (profile == runtimeProfileProduction)
+}
+
 func (c Config) Validate() error {
 	if err := c.validateParseDiagnostics(); err != nil {
+		return err
+	}
+	if err := c.validateEnvironmentProfile(); err != nil {
 		return err
 	}
 	if err := c.validateLDAP(); err != nil {
@@ -396,10 +476,27 @@ func (c Config) Validate() error {
 	if err := c.validateStreamConfig(); err != nil {
 		return err
 	}
-	if c.Production {
+	if err := c.validateInputLimits(); err != nil {
+		return err
+	}
+	if err := c.validateEventRelay(); err != nil {
+		return err
+	}
+	if c.IsProductionProfile() {
 		return c.validateProduction()
 	}
 	return c.validateNonProduction()
+}
+
+func (c Config) validateEnvironmentProfile() error {
+	profile := strings.TrimSpace(c.EnvironmentProfile)
+	if profile != "" && !validEnvironmentProfile(profile) {
+		return fmt.Errorf("%s must be one of local, test, dev, staging, production", envAppEnv)
+	}
+	if c.Production && profile != "" && profile != runtimeProfileProduction {
+		return fmt.Errorf("%s=%s conflicts with %s=true", envAppEnv, profile, envProduction)
+	}
+	return nil
 }
 
 func (c Config) validateProduction() error {
@@ -515,8 +612,40 @@ func (c Config) validateStreamConfig() error {
 	if maxSessions*maxBitrate > budget {
 		return errors.New(envStreamMaxConcurrentSessions + " * " + envStreamMaxBitrateKbps + " must not exceed " + envStreamEgressBudgetKbps)
 	}
-	if c.Production && len(c.StreamTURNURIs) > 0 && strings.TrimSpace(c.StreamTURNSharedSecret) == "" {
+	if c.IsProductionProfile() && len(c.StreamTURNURIs) > 0 && strings.TrimSpace(c.StreamTURNSharedSecret) == "" {
 		return errors.New(envStreamTURNSharedSecret + " is required when " + envStreamTURNURIs + " is set in production")
+	}
+	return nil
+}
+
+func (c Config) validateInputLimits() error {
+	if c.MaxAPIBodyBytes < 0 {
+		return errors.New(envMaxAPIBodyBytes + configPositiveValidationSuffix)
+	}
+	if c.MaxConfigFileBytes < 0 {
+		return errors.New(envMaxConfigFileBytes + configPositiveValidationSuffix)
+	}
+	if c.MaxConfigFileDocuments < 0 {
+		return errors.New(envMaxConfigFileDocuments + configPositiveValidationSuffix)
+	}
+	if c.EffectiveMaxAPIBodyBytes() <= 0 {
+		return errors.New(envMaxAPIBodyBytes + configPositiveValidationSuffix)
+	}
+	if c.EffectiveMaxConfigFileBytes() <= 0 {
+		return errors.New(envMaxConfigFileBytes + configPositiveValidationSuffix)
+	}
+	if c.EffectiveMaxConfigFileDocuments() <= 0 {
+		return errors.New(envMaxConfigFileDocuments + configPositiveValidationSuffix)
+	}
+	return nil
+}
+
+func (c Config) validateEventRelay() error {
+	if c.EventRelayBatchSize < 0 {
+		return errors.New(envEventRelayBatchSize + configPositiveValidationSuffix)
+	}
+	if c.EffectiveEventRelayBatchSize() <= 0 {
+		return errors.New(envEventRelayBatchSize + configPositiveValidationSuffix)
 	}
 	return nil
 }
@@ -559,9 +688,9 @@ func (c Config) validateParseDiagnostics() error {
 	if len(c.parseDiagnostics) == 0 {
 		return nil
 	}
-	fatal := c.Production
+	fatal := c.StrictRuntimeChecks()
 	for _, diagnostic := range c.parseDiagnostics {
-		if diagnostic.envName == envProduction {
+		if diagnostic.envName == envProduction || diagnostic.envName == envAppEnv {
 			fatal = true
 			break
 		}
@@ -686,13 +815,60 @@ func (c Config) TracingEnabled() bool {
 	return c.OTLPEndpoint != ""
 }
 
-// EnvironmentName maps the production flag onto an OpenTelemetry
-// deployment.environment value.
 func (c Config) EnvironmentName() string {
-	if c.Production {
-		return "production"
+	return c.EffectiveEnvironmentProfile()
+}
+
+func (c Config) EffectiveEnvironmentProfile() string {
+	return effectiveEnvironmentProfile(c.EnvironmentProfile, c.Production)
+}
+
+func (c Config) IsProductionProfile() bool {
+	return c.EffectiveEnvironmentProfile() == runtimeProfileProduction
+}
+
+func (c Config) StrictRuntimeChecks() bool {
+	switch c.EffectiveEnvironmentProfile() {
+	case runtimeProfileStaging, runtimeProfileProduction:
+		return true
+	default:
+		return false
 	}
-	return "development"
+}
+
+func (c Config) EffectiveMaxAPIBodyBytes() int {
+	if c.MaxAPIBodyBytes > 0 {
+		return c.MaxAPIBodyBytes
+	}
+	return defaultMaxAPIBodyBytes
+}
+
+func (c Config) EffectiveMaxConfigFileBytes() int {
+	if c.MaxConfigFileBytes > 0 {
+		return c.MaxConfigFileBytes
+	}
+	return defaultMaxConfigFileBytes
+}
+
+func (c Config) EffectiveMaxConfigFileDocuments() int {
+	if c.MaxConfigFileDocuments > 0 {
+		return c.MaxConfigFileDocuments
+	}
+	return defaultMaxConfigFileDocuments
+}
+
+func (c Config) EffectiveEventRelayBatchSize() int {
+	if c.EventRelayBatchSize > 0 {
+		return c.EventRelayBatchSize
+	}
+	return defaultEventRelayBatchSize
+}
+
+func (c Config) EffectiveProductName() string {
+	if name := strings.TrimSpace(c.ProductName); name != "" {
+		return name
+	}
+	return defaultProductName
 }
 
 func env(key, fallback string) string {

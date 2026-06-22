@@ -71,6 +71,14 @@ func (r recordStoreWorkloadJobRepository) CreateSubmittedJob(ctx context.Context
 	return r.store.Create(ctx, jobsResource, shared.CloneMap(job))
 }
 
+func (r recordStoreWorkloadJobRepository) CreateSubmittedJobWithEvent(ctx context.Context, app *platform.App, job map[string]any, build func(contracts.Record[map[string]any]) contracts.Event) (contracts.Record[map[string]any], error) {
+	return app.CreateRecordWithEvent(ctx, jobsResource, shared.CloneMap(job), build)
+}
+
+func (r recordStoreWorkloadJobRepository) CreateJobCommandWithEvent(ctx context.Context, app *platform.App, command map[string]any, build func(contracts.Record[map[string]any]) contracts.Event) (contracts.Record[map[string]any], error) {
+	return app.CreateRecordWithEvent(ctx, jobCommandsResource, shared.CloneMap(command), build)
+}
+
 func (r recordStoreWorkloadJobRepository) FindJob(ctx context.Context, idOrJobID string) (contracts.Record[map[string]any], bool) {
 	if idOrJobID == "" {
 		return contracts.Record[map[string]any]{}, false

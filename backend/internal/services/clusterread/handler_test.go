@@ -54,6 +54,27 @@ func TestClusterReadUsesProjectedIdentityAndProjectAccessWhenIsolated(t *testing
 	}
 }
 
+func TestStaticAdminRoleHeaderRequiresPlatformAuth(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/P1/gpu-usage", nil)
+	req.Header.Set("X-User-ID", "ops-admin")
+	req.Header.Set("X-User-Role", "admin")
+
+	unauthenticated := platform.NewApp(platform.Config{ServiceName: serviceName})
+	if hasAdminPanel(unauthenticated, req, "ops-admin") {
+		t.Fatal("hasAdminPanel trusted admin role header when RequireAuth=false")
+	}
+
+	authenticated := platform.NewApp(platform.Config{ServiceName: serviceName, RequireAuth: true})
+	if !hasAdminPanel(authenticated, req, "ops-admin") {
+		t.Fatal("hasAdminPanel denied platform-authenticated static admin role")
+	}
+
+	req.Header.Set("X-User-Role", "super-admin")
+	if hasAdminPanel(authenticated, req, "ops-admin") {
+		t.Fatal("hasAdminPanel accepted unplanned super-admin role header")
+	}
+}
+
 func TestClusterProjectionUpdatesDeletesProxyRolesAndMergesCoHostedSource(t *testing.T) {
 	app := platform.NewApp(platform.Config{ServiceName: "all"})
 	req := httptest.NewRequest(http.MethodGet, "/", nil)

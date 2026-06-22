@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -180,6 +181,447 @@ func TestServeServiceRouteFallsThroughForUnrelatedBucket(t *testing.T) {
 	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/groups/g1", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want mux 405 fallthrough", rec.Code)
+	}
+}
+
+func TestGatewayCatalogProxyRoutesNonLocalPublicCatalogRoute(t *testing.T) {
+	calls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/projects" || r.URL.RawQuery != "page=1" {
+			t.Fatalf("upstream request = %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+		if r.Header.Get("X-Api-Key") != "adminkey" || r.Header.Get("X-Request-Id") != "req-1" {
+			t.Fatalf("forwarded headers = %#v", r.Header)
+		}
+		for _, key := range []string{"X-Service-Key", "X-User-Id", "X-Username", "X-User-Role", "X-Admin", "X-Api-Token-Id"} {
+			if r.Header.Get(key) != "" {
+				t.Fatalf("%s was forwarded", key)
+			}
+		}
+		w.Header().Set("Content-Type", "application/vnd.nexuspaas+json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"success":true,"data":[{"id":"P1"}]}`))
+	}))
+	defer upstream.Close()
+
+	app := NewApp(Config{
+		ServiceName: "platform-gateway",
+		RequireAuth: false,
+		ServiceURLs: map[string]string{"org-project-service": upstream.URL},
+	})
+	registerGatewayProxyTestCatalog(app)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects?page=1", nil)
+	req.Header.Set("X-API-Key", "adminkey")
+	req.Header.Set("X-Request-ID", "req-1")
+	req.Header.Set("X-Service-Key", "service-secret")
+	req.Header.Set("X-User-ID", "spoofed")
+	req.Header.Set("X-Username", "spoofed")
+	req.Header.Set("X-User-Role", "admin")
+	req.Header.Set("X-Admin", "true")
+	req.Header.Set("X-API-Token-ID", "AT1")
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: %s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Content-Type") != "application/vnd.nexuspaas+json" {
+		t.Fatalf("content-type = %q", rec.Header().Get("Content-Type"))
+	}
+	if strings.TrimSpace(rec.Body.String()) != `{"success":true,"data":[{"id":"P1"}]}` {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("upstream calls = %d, want 1", calls)
+	}
+}
+
+func TestGatewayCatalogProxyPreservesMethodQueryBodyAndPassesThroughResponse(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/projects" || r.URL.RawQuery != "dry_run=1" || string(body) != `{"name":"p"}` {
+			t.Fatalf("upstream request = %s %s?%s body=%s", r.Method, r.URL.Path, r.URL.RawQuery, string(body))
+		}
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"success":false,"error":{"code":"conflict"}}`))
+	}))
+	defer upstream.Close()
+
+	app := NewApp(Config{
+		ServiceName: "platform-gateway",
+		RequireAuth: false,
+		ServiceURLs: map[string]string{"org-project-service": upstream.URL},
+	})
+	registerGatewayProxyTestCatalog(app)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects?dry_run=1", strings.NewReader(`{"name":"p"}`))
+	req.Header.Set("Content-Type", "application/json")
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Content-Type") != "application/problem+json" {
+		t.Fatalf("content-type = %q", rec.Header().Get("Content-Type"))
+	}
+	if strings.TrimSpace(rec.Body.String()) != `{"success":false,"error":{"code":"conflict"}}` {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
+func TestGatewayCatalogProxySkipsLocalExternalAdapterPreflight(t *testing.T) {
+	calls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/images/build" || string(body) != `{"id":"B1","project_id":"P1"}` {
+			t.Fatalf("upstream request = %s %s body=%s", r.Method, r.URL.Path, string(body))
+		}
+		w.Header().Set("Content-Type", "application/vnd.nexuspaas+json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":"B1","project_id":"P1"}}`))
+	}))
+	defer upstream.Close()
+
+	app := NewApp(Config{
+		ServiceName: "platform-gateway",
+		RequireAuth: false,
+		ServiceURLs: map[string]string{"image-registry-service": upstream.URL},
+	})
+	app.RegisterService(ServiceSpec{
+		Name: "platform-gateway",
+		Routes: []RouteSpec{{
+			Method: http.MethodGet, Pattern: "/api/v1/gateway/health", Resource: "health", Action: "list", AuthRequired: false,
+		}},
+	})
+	app.RegisterService(ServiceSpec{
+		Name: "image-registry-service",
+		Routes: []RouteSpec{{
+			Method: http.MethodPost, Pattern: "/api/v1/images/build", Resource: "image_build_jobs", Action: "command", AuthRequired: false, ExternalAdapter: "harbor",
+		}},
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/images/build", strings.NewReader(`{"id":"B1","project_id":"P1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: %s", rec.Code, rec.Body.String())
+	}
+	if strings.TrimSpace(rec.Body.String()) != `{"success":true,"data":{"id":"B1","project_id":"P1"}}` {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+	if calls != 1 {
+		t.Fatalf("upstream calls = %d, want 1", calls)
+	}
+	if app.Metrics.Counter("harbor_degraded") != 0 {
+		t.Fatalf("harbor degraded counter = %d, want 0", app.Metrics.Counter("harbor_degraded"))
+	}
+}
+
+func TestLocalExternalAdapterRouteStillRunsPreflight(t *testing.T) {
+	adapter := &fakeAdapter{}
+	app := NewApp(Config{ServiceName: "image-registry-service", RequireAuth: false})
+	app.Adapters["harbor"] = adapter
+	app.RegisterAction("local_test", func(_ *httpRequest, _ RouteSpec) (int, any) {
+		return http.StatusOK, map[string]any{"ok": true}
+	})
+	app.RegisterService(ServiceSpec{
+		Name: "image-registry-service",
+		Routes: []RouteSpec{{
+			Method: http.MethodGet, Pattern: "/api/v1/local-adapter-check", Resource: "checks", Action: "local_test", AuthRequired: false, ExternalAdapter: "harbor",
+		}},
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/local-adapter-check", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if adapter.calls != 1 {
+		t.Fatalf("adapter calls = %d, want 1", adapter.calls)
+	}
+}
+
+func TestGatewayCatalogProxyKeepsLocalRoutePrecedence(t *testing.T) {
+	calls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls++ }))
+	defer upstream.Close()
+
+	app := NewApp(Config{
+		ServiceName: "platform-gateway",
+		RequireAuth: false,
+		ServiceURLs: map[string]string{"org-project-service": upstream.URL},
+	})
+	app.RegisterService(ServiceSpec{
+		Name: "platform-gateway",
+		Routes: []RouteSpec{{
+			Method: http.MethodGet, Pattern: "/api/v1/projects", Resource: "projects", Action: "list", AuthRequired: false,
+		}},
+	})
+	app.RegisterCustomHandler(http.MethodGet, "/api/v1/projects", routeEchoHandler)
+	app.RegisterService(ServiceSpec{
+		Name: "org-project-service",
+		Routes: []RouteSpec{{
+			Method: http.MethodGet, Pattern: "/api/v1/projects", Resource: "projects", Action: "list", AuthRequired: true,
+		}},
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if data := responseData(t, rec); data["resource"] != "platform-gateway:projects" {
+		t.Fatalf("response data = %#v, want local route", data)
+	}
+	if calls != 0 {
+		t.Fatalf("upstream calls = %d, want 0", calls)
+	}
+}
+
+func TestGatewayCatalogProxyAuthDenialDoesNotCallUpstream(t *testing.T) {
+	calls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls++ }))
+	defer upstream.Close()
+
+	app := NewApp(Config{
+		ServiceName: "platform-gateway",
+		RequireAuth: true,
+		ServiceURLs: map[string]string{"org-project-service": upstream.URL},
+	})
+	registerGatewayProxyTestCatalog(app)
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil))
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401: %s", rec.Code, rec.Body.String())
+	}
+	if calls != 0 {
+		t.Fatalf("upstream calls = %d, want 0", calls)
+	}
+}
+
+func TestGatewayCatalogProxyMissingServiceURLsKeepsFallthrough(t *testing.T) {
+	app := NewApp(Config{ServiceName: "platform-gateway", RequireAuth: false})
+	registerGatewayProxyTestCatalog(app)
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil))
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want mux fallthrough 405", rec.Code)
+	}
+}
+
+func TestGatewayCatalogProxyMissingOwnerURLReturnsGatewayError(t *testing.T) {
+	app := NewApp(Config{
+		ServiceName: "platform-gateway",
+		RequireAuth: false,
+		ServiceURLs: map[string]string{"identity-service": "http://identity-service"},
+	})
+	registerGatewayProxyTestCatalog(app)
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil))
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "downstream service URL is not configured") {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
+func TestGatewayCatalogProxySetsForwardedOriginForOIDCRoutes(t *testing.T) {
+	var gotHost, gotProto string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHost = r.Header.Get("X-Forwarded-Host")
+		gotProto = r.Header.Get("X-Forwarded-Proto")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	app := NewApp(Config{
+		ServiceName: "platform-gateway",
+		RequireAuth: false,
+		ServiceURLs: map[string]string{"identity-service": upstream.URL},
+	})
+	app.RegisterService(ServiceSpec{
+		Name: "identity-service",
+		Routes: []RouteSpec{{
+			Method: http.MethodGet, Pattern: "/api/v1/oidc/start", Resource: "oidc", Action: "start", AuthRequired: false,
+		}},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://localhost:8080/api/v1/oidc/start", nil)
+	req.Host = "localhost:8080"
+	req.Header.Set("X-Forwarded-Host", "evil.test")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204: %s", rec.Code, rec.Body.String())
+	}
+	if gotHost != "localhost:8080" {
+		t.Fatalf("X-Forwarded-Host = %q, want gateway host", gotHost)
+	}
+	if gotProto != "https" {
+		t.Fatalf("X-Forwarded-Proto = %q, want https", gotProto)
+	}
+}
+
+func TestGatewayCatalogProxyPreservesOIDCRedirects(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/oidc/start" {
+			t.Fatalf("upstream path = %s, want /api/v1/oidc/start", r.URL.Path)
+		}
+		w.Header().Set("Location", "/api/v1/oidc/authorize?state=opaque")
+		w.Header().Add("Set-Cookie", "nexuspaas_oidc_state=opaque; Path=/; HttpOnly; SameSite=Lax")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer upstream.Close()
+
+	app := NewApp(Config{
+		ServiceName: "platform-gateway",
+		RequireAuth: false,
+		ServiceURLs: map[string]string{"identity-service": upstream.URL},
+	})
+	app.RegisterService(ServiceSpec{
+		Name: "identity-service",
+		Routes: []RouteSpec{{
+			Method: http.MethodGet, Pattern: "/api/v1/oidc/start", Resource: "oidc", Action: "start", AuthRequired: false,
+		}},
+	})
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://localhost:8080/api/v1/oidc/start", nil))
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302: %s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Location") != "/api/v1/oidc/authorize?state=opaque" {
+		t.Fatalf("Location = %q", rec.Header().Get("Location"))
+	}
+	if got := rec.Header().Values("Set-Cookie"); len(got) != 1 || !strings.Contains(got[0], "nexuspaas_oidc_state=") {
+		t.Fatalf("Set-Cookie = %#v, want OIDC state cookie", got)
+	}
+}
+
+func TestGatewayCatalogProxyPreservesDexRedirects(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/dex/auth/local" {
+			t.Fatalf("upstream path = %s, want /dex/auth/local", r.URL.Path)
+		}
+		if r.Header.Get("X-Forwarded-Host") != "" || r.Header.Get("X-Forwarded-Proto") != "" {
+			t.Fatalf("forwarded origin leaked to Dex route: %#v", r.Header)
+		}
+		w.Header().Set("Location", "/dex/auth/local/login?state=opaque")
+		w.Header().Add("Set-Cookie", "dex-session=opaque; Path=/dex; HttpOnly")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer upstream.Close()
+
+	app := NewApp(Config{
+		ServiceName: "platform-gateway",
+		RequireAuth: false,
+		ServiceURLs: map[string]string{"identity-service": upstream.URL},
+	})
+	app.RegisterService(ServiceSpec{
+		Name: "identity-service",
+		Routes: []RouteSpec{{
+			Method: http.MethodGet, Pattern: "/dex/{path...}", Resource: "dex_browser", Action: "browser_proxy", AuthRequired: false,
+		}},
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "http://localhost:8080/dex/auth/local", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302: %s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Location") != "/dex/auth/local/login?state=opaque" {
+		t.Fatalf("Location = %q", rec.Header().Get("Location"))
+	}
+	if got := rec.Header().Values("Set-Cookie"); len(got) != 1 || !strings.Contains(got[0], "dex-session=") {
+		t.Fatalf("Set-Cookie = %#v, want Dex session cookie", got)
+	}
+}
+
+func TestGatewayCatalogProxyDoesNotSetForwardedOriginForOrdinaryRoutes(t *testing.T) {
+	var gotHost, gotProto string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHost = r.Header.Get("X-Forwarded-Host")
+		gotProto = r.Header.Get("X-Forwarded-Proto")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	app := NewApp(Config{
+		ServiceName: "platform-gateway",
+		RequireAuth: false,
+		ServiceURLs: map[string]string{"org-project-service": upstream.URL},
+	})
+	registerGatewayProxyTestCatalog(app)
+
+	req := httptest.NewRequest(http.MethodGet, "http://localhost:8080/api/v1/projects", nil)
+	req.Host = "localhost:8080"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204: %s", rec.Code, rec.Body.String())
+	}
+	if gotHost != "" || gotProto != "" {
+		t.Fatalf("forwarded origin headers = host %q proto %q, want none", gotHost, gotProto)
+	}
+}
+
+func TestGatewayCatalogProxyDoesNotExposeInternalRoutes(t *testing.T) {
+	calls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls++ }))
+	defer upstream.Close()
+
+	app := NewApp(Config{
+		ServiceName: "platform-gateway",
+		RequireAuth: false,
+		ServiceURLs: map[string]string{"org-project-service": upstream.URL},
+	})
+	app.RegisterService(ServiceSpec{
+		Name: "org-project-service",
+		Routes: []RouteSpec{
+			{Method: http.MethodGet, Pattern: "/internal/org-project/projects", Resource: "projects", Action: "list", AuthRequired: false},
+			{Method: http.MethodGet, Pattern: "/api/v1/internal/org-project/projects", Resource: "projects", Action: "list", AuthRequired: false},
+		},
+	})
+
+	for _, path := range []string{"/internal/org-project/projects", "/api/v1/internal/org-project/projects"} {
+		rec := httptest.NewRecorder()
+		app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code == http.StatusOK {
+			t.Fatalf("%s returned 200, want fallthrough", path)
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("upstream calls = %d, want 0", calls)
 	}
 }
 
@@ -404,6 +846,23 @@ func routeEchoHandler(_ *App, r *http.Request, route RouteSpec) (int, any, *Degr
 		"resource": route.Resource,
 		"id":       r.PathValue("id"),
 	}, nil
+}
+
+func registerGatewayProxyTestCatalog(app *App) {
+	app.RegisterService(ServiceSpec{
+		Name: "platform-gateway",
+		Routes: []RouteSpec{{
+			Method: http.MethodGet, Pattern: "/api/v1/gateway/health", Resource: "health", Action: "list", AuthRequired: false,
+		}},
+	})
+	app.RegisterService(ServiceSpec{
+		Name: "org-project-service",
+		Routes: []RouteSpec{
+			{Method: http.MethodGet, Pattern: "/api/v1/projects", Resource: "projects", Action: "list", AuthRequired: true},
+			{Method: http.MethodPost, Pattern: "/api/v1/projects", Resource: "projects", Action: "create", AuthRequired: true},
+			{Method: http.MethodGet, Pattern: "/internal/org-project/projects", Resource: "projects", Action: "list", ServiceAuthRequired: true},
+		},
+	})
 }
 
 func responseData(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {

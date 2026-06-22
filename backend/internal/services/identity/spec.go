@@ -49,6 +49,7 @@ func Spec() platform.ServiceSpec {
 			route(http.MethodGet, userSettingsPath, "user_settings", "get", id("id")),
 			route(http.MethodPut, userSettingsPath, "user_settings", "update", id("id")),
 			route(http.MethodPatch, userSettingsPath, "user_settings", "update", id("id")),
+			public(route(http.MethodGet, "/api/v1/oidc/start", "oidc_start", "create")),
 			public(route(http.MethodGet, "/api/v1/oidc/login", "oidc_login", "list")),
 			public(route(http.MethodPost, "/api/v1/oidc/login", "oidc_login", "create")),
 			public(route(http.MethodGet, "/api/v1/oidc/.well-known/openid-configuration", "oidc", "discovery")),
@@ -59,6 +60,8 @@ func Spec() platform.ServiceSpec {
 			route(http.MethodPost, "/api/v1/oidc/revoke", "oidc_tokens", "delete"),
 			public(route(http.MethodGet, "/api/v1/oidc/callback", "oidc_callbacks", "create")),
 			public(route(http.MethodPost, "/api/v1/oidc/callback", "oidc_callbacks", "create")),
+			public(route(http.MethodGet, "/dex/{path...}", "dex_browser", "browser_proxy")),
+			public(route(http.MethodPost, "/dex/{path...}", "dex_browser", "browser_proxy")),
 		},
 	}
 }

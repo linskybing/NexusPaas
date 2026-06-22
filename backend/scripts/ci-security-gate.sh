@@ -601,7 +601,7 @@ run_compose_collaboration_smoke() {
   export COLLAB_API_KEY_PRINCIPALS="${principals}"
 
   log "Building backend image ${BACKEND_IMAGE} for collaboration smoke"
-  docker_cli build -t "${BACKEND_IMAGE}" "${BACKEND_DIR}"
+  docker_cli build -t "${BACKEND_IMAGE}" -f "${BACKEND_DIR}/Dockerfile" "${REPO_ROOT}"
 
   log "Starting collaboration backing services via compose project ${COLLAB_COMPOSE_PROJECT}"
   docker_compose -p "${COLLAB_COMPOSE_PROJECT}" -f "${COLLAB_COMPOSE_FILE}" up -d postgres redis minio
@@ -957,7 +957,7 @@ run_security_gate() {
   run_repo "${osv_scanner_bin}" scan source -r .
 
   log "Building backend container image ${BACKEND_IMAGE}"
-  docker_cli build -t "${BACKEND_IMAGE}" "${BACKEND_DIR}"
+  docker_cli build -t "${BACKEND_IMAGE}" -f "${BACKEND_DIR}/Dockerfile" "${REPO_ROOT}"
 
   log "Running Trivy image scan"
   DOCKER_CONFIG="${DOCKER_CONFIG_DIR}" TRIVY_CACHE_DIR="${TRIVY_CACHE_DIR}" \

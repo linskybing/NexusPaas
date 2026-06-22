@@ -91,6 +91,7 @@ func scopeSet(scopes []string) map[string]bool {
 
 func routeScopeCandidates(route RouteSpec) []string {
 	action := routeScopeAction(route)
+	declaredAction := strings.ToLower(strings.TrimSpace(route.Action))
 	service, resource := routeScopeParts(route.Resource)
 	candidates := []string{action, scopeWildcard + ":" + action}
 	if route.OperationID != "" {
@@ -104,6 +105,9 @@ func routeScopeCandidates(route RouteSpec) []string {
 			continue
 		}
 		candidates = append(candidates, part+":"+action, part+":"+scopeWildcard)
+		if declaredAction != "" {
+			candidates = append(candidates, part+":"+declaredAction)
+		}
 		if route.OperationID != "" {
 			candidates = append(candidates, part+":"+strings.ToLower(route.OperationID))
 		}

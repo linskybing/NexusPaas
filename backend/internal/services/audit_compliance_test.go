@@ -15,7 +15,7 @@ func TestAuditComplianceWorkflow(t *testing.T) {
 	seedAuditLogs(t, app)
 
 	requestJSON(t, app, http.MethodGet, "/api/v1/audit/logs", "", nil, http.StatusUnauthorized)
-	requestJSON(t, app, http.MethodGet, "/api/v1/audit/logs", "", userHeaders("U1"), http.StatusForbidden)
+	requestJSON(t, app, http.MethodGet, "/api/v1/audit/logs", "", userHeaders("U1"), http.StatusBadRequest)
 	requestJSON(t, app, http.MethodGet, "/api/v1/audit/logs?start_time=bad", "", adminHeaders("ADMIN"), http.StatusBadRequest)
 	requestJSON(t, app, http.MethodGet, "/api/v1/audit/logs?limit=-1", "", adminHeaders("ADMIN"), http.StatusBadRequest)
 

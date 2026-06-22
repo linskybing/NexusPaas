@@ -272,3 +272,5 @@ func (f *fakeEventStream) Checkpoint(string) {}
 func (f *fakeEventStream) Lag(string) int { return 0 }
 
 func (f *fakeEventStream) ResetConsumer(string) {}
+
+func (f *fakeEventStream) ResetConsumerEvents(string, []string) {}

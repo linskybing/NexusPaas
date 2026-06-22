@@ -71,29 +71,31 @@ func (a *App) authorizeAPIToken(r *http.Request, token string) bool {
 	if a.remoteIdentityAuthEnabled() {
 		return a.authorizeRemoteAPIToken(r, token)
 	}
-	for _, record := range a.Store.List(r.Context(), "identity-service:api_tokens") {
-		if authBool(record.Data["revoked"]) || tokenExpired(record.Data) {
-			continue
-		}
-		if !VerifySecret(asString(record.Data["token_hash"]), token) {
-			continue
-		}
-		if a.tokenRevoked(r.Context(), "api_token", record.ID) {
-			return false
-		}
-		user, ok := a.Store.Get(r.Context(), "identity-service:users", asString(record.Data["user_id"]))
-		if !ok || !authActiveUser(user.Data) {
-			return false
-		}
-		applyAuthHeaders(r, user.Data)
-		setAPITokenID(r, record.ID)
-		r.Header.Set(headerAPITokenID, record.ID)
-		if _, ok := a.Store.Update(r.Context(), "identity-service:api_tokens", record.ID, map[string]any{"last_used_at": time.Now().UTC().Format(time.RFC3339)}); !ok {
-			slog.Warn("api token last_used_at update skipped", "token_id", record.ID)
-		}
-		return true
+	tokenID, ok := ParseUserAPITokenID(token)
+	if !ok {
+		return false
 	}
-	return false
+	record, ok := a.Store.Get(r.Context(), "identity-service:api_tokens", tokenID)
+	if !ok || authBool(record.Data["revoked"]) || tokenExpired(record.Data) {
+		return false
+	}
+	if !VerifySecret(asString(record.Data["token_hash"]), token) {
+		return false
+	}
+	if a.tokenRevoked(r.Context(), "api_token", record.ID) {
+		return false
+	}
+	user, ok := a.Store.Get(r.Context(), "identity-service:users", asString(record.Data["user_id"]))
+	if !ok || !authActiveUser(user.Data) {
+		return false
+	}
+	applyAuthHeaders(r, user.Data)
+	setAPITokenID(r, record.ID)
+	r.Header.Set(headerAPITokenID, record.ID)
+	if _, ok := a.Store.Update(r.Context(), "identity-service:api_tokens", record.ID, map[string]any{"last_used_at": time.Now().UTC().Format(time.RFC3339)}); !ok {
+		slog.Warn("api token last_used_at update skipped", "token_id", record.ID)
+	}
+	return true
 }
 
 // tokenRevoked reports whether a credential has been explicitly revoked via the

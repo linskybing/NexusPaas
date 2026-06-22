@@ -185,6 +185,136 @@ func (r recordStoreAuthorizationPolicyRepository) UpdateProxyPolicy(ctx context.
 	return r.composePolicy(ctx, shared.CloneMap(updated.Data)), true, nil
 }
 
+// CreateProxyPolicyTx writes the policy and all its rule rows inside the caller's
+// transaction, so the policy, its rules, and the emitted event commit together.
+// Rollback replaces the hand-written delete-on-failure compensation. The composed
+// result is built from the in-hand rules (they are not yet committed to read back).
+func (r recordStoreAuthorizationPolicyRepository) CreateProxyPolicyTx(ctx context.Context, tx platform.StoreTx, policy map[string]any, rules []map[string]any) (map[string]any, error) {
+	if r.store == nil {
+		return nil, errAuthorizationPolicyRepositoryUnavailable
+	}
+	record, err := tx.Create(ctx, policiesResource, shared.CloneMap(policy))
+	if err != nil {
+		return nil, err
+	}
+	created := make([]map[string]any, 0, len(rules))
+	for _, rule := range rules {
+		ruleRecord := map[string]any{
+			"id":         shared.FirstNonEmpty(shared.TextValue(rule, "id"), r.nextID(rulesResource, "PR", 2600001)),
+			"policy_id":  record.ID,
+			"service_id": shared.TextValue(rule, "service_id", "serviceId"),
+			"actions":    shared.StringSlice(rule["actions"]),
+		}
+		if _, err := tx.Create(ctx, rulesResource, shared.CloneMap(ruleRecord)); err != nil {
+			return nil, err
+		}
+		created = append(created, ruleRecord)
+	}
+	sort.Slice(created, func(i, j int) bool {
+		return shared.TextValue(created[i], "service_id", "serviceId") < shared.TextValue(created[j], "service_id", "serviceId")
+	})
+	composed := shared.CloneMap(record.Data)
+	composed["rules"] = created
+	return composed, nil
+}
+
+// UpdateProxyPolicyTx updates the policy and, when requested, replaces its rule
+// rows in the caller's transaction so the replacement and event commit together.
+func (r recordStoreAuthorizationPolicyRepository) UpdateProxyPolicyTx(ctx context.Context, tx platform.StoreTx, id string, update map[string]any, replacement *proxyPolicyRuleReplacement) (map[string]any, bool, error) {
+	if r.store == nil {
+		return nil, false, errAuthorizationPolicyRepositoryUnavailable
+	}
+	updated, ok, err := tx.Update(ctx, policiesResource, id, shared.CloneMap(update))
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	if replacement == nil {
+		return r.composePolicy(ctx, shared.CloneMap(updated.Data)), true, nil
+	}
+	for _, rule := range r.store.List(ctx, rulesResource) {
+		if shared.TextValue(rule.Data, "policy_id", "policyId") == id {
+			if _, err := tx.Delete(ctx, rulesResource, rule.ID); err != nil {
+				return nil, true, err
+			}
+		}
+	}
+	created := make([]map[string]any, 0, len(replacement.Rules))
+	for _, rule := range replacement.Rules {
+		ruleRecord := map[string]any{
+			"id":         shared.FirstNonEmpty(shared.TextValue(rule, "id"), r.nextID(rulesResource, "PR", 2600001)),
+			"policy_id":  id,
+			"service_id": shared.TextValue(rule, "service_id", "serviceId"),
+			"actions":    shared.StringSlice(rule["actions"]),
+		}
+		if _, err := tx.Create(ctx, rulesResource, shared.CloneMap(ruleRecord)); err != nil {
+			return nil, true, err
+		}
+		created = append(created, ruleRecord)
+	}
+	sort.Slice(created, func(i, j int) bool {
+		return shared.TextValue(created[i], "service_id", "serviceId") < shared.TextValue(created[j], "service_id", "serviceId")
+	})
+	composed := shared.CloneMap(updated.Data)
+	composed["rules"] = created
+	return composed, true, nil
+}
+
+// DeleteProxyPolicyCascadeTx deletes the policy plus its rules and assignments in
+// one transaction. Existing rows are read from the committed store; the deletes go
+// through tx so they roll back together with the emitted event on any failure.
+func (r recordStoreAuthorizationPolicyRepository) DeleteProxyPolicyCascadeTx(ctx context.Context, tx platform.StoreTx, id string) (map[string]any, bool, error) {
+	current, found := r.GetProxyPolicy(ctx, id)
+	if !found || r.store == nil {
+		return nil, false, nil
+	}
+	for _, rule := range r.store.List(ctx, rulesResource) {
+		if shared.TextValue(rule.Data, "policy_id", "policyId") == id {
+			if _, err := tx.Delete(ctx, rulesResource, rule.ID); err != nil {
+				return nil, false, err
+			}
+		}
+	}
+	for _, assignment := range r.store.List(ctx, assignmentsResource) {
+		if shared.TextValue(assignment.Data, "policy_id", "policyId") == id {
+			if _, err := tx.Delete(ctx, assignmentsResource, assignment.ID); err != nil {
+				return nil, false, err
+			}
+		}
+	}
+	if _, err := tx.Delete(ctx, policiesResource, id); err != nil {
+		return nil, false, err
+	}
+	return current, true, nil
+}
+
+// DeleteProxyRoleCascadeTx deletes the role plus its role-user memberships and
+// role-targeted assignments in one transaction.
+func (r recordStoreAuthorizationPolicyRepository) DeleteProxyRoleCascadeTx(ctx context.Context, tx platform.StoreTx, id string) (map[string]any, bool, error) {
+	if r.store == nil {
+		return nil, false, nil
+	}
+	current, _ := r.GetProxyRole(ctx, id)
+	for _, member := range r.store.List(ctx, roleUsersResource) {
+		if shared.TextValue(member.Data, "role_id", "roleId") == id {
+			if _, err := tx.Delete(ctx, roleUsersResource, member.ID); err != nil {
+				return nil, false, err
+			}
+		}
+	}
+	for _, assignment := range r.store.List(ctx, assignmentsResource) {
+		if shared.TextValue(assignment.Data, "target_type", "targetType") == "role" &&
+			shared.TextValue(assignment.Data, "target_id", "targetId") == id {
+			if _, err := tx.Delete(ctx, assignmentsResource, assignment.ID); err != nil {
+				return nil, false, err
+			}
+		}
+	}
+	if _, err := tx.Delete(ctx, platformRolesResource, id); err != nil {
+		return nil, false, err
+	}
+	return current, true, nil
+}
+
 func (r recordStoreAuthorizationPolicyRepository) DeleteProxyPolicyCascade(ctx context.Context, id string) (map[string]any, bool) {
 	current, found := r.GetProxyPolicy(ctx, id)
 	if !found || r.store == nil {
@@ -281,6 +411,32 @@ func (r recordStoreAuthorizationPolicyRepository) CreatePolicyAssignment(ctx con
 	return nil, false, platform.CreateConflictError{Resource: assignmentsResource, ID: "assignment"}
 }
 
+func (r recordStoreAuthorizationPolicyRepository) CreatePolicyAssignmentTx(ctx context.Context, tx platform.StoreTx, policyID, targetType, targetID, assignedBy string) (map[string]any, bool, error) {
+	if r.store == nil {
+		return nil, false, errAuthorizationPolicyRepositoryUnavailable
+	}
+	if existing, found := r.findAssignment(ctx, policyID, targetType, targetID); found {
+		return r.composeAssignment(ctx, existing.Data), false, nil
+	}
+	record, err := tx.Create(ctx, assignmentsResource, map[string]any{
+		"id":          r.nextID(assignmentsResource, "PA", 2600001),
+		"policy_id":   policyID,
+		"target_type": targetType,
+		"target_id":   targetID,
+		"assigned_by": assignedBy,
+		"created_at":  time.Now().UTC(),
+	})
+	if err != nil {
+		if platform.IsCreateConflict(err) {
+			if existing, found := r.findAssignment(ctx, policyID, targetType, targetID); found {
+				return r.composeAssignment(ctx, existing.Data), false, nil
+			}
+		}
+		return nil, false, err
+	}
+	return r.composeAssignment(ctx, record.Data), true, nil
+}
+
 func (r recordStoreAuthorizationPolicyRepository) UnassignPolicy(ctx context.Context, policyID, targetType, targetID string) (map[string]any, bool) {
 	if r.store == nil {
 		return nil, false
@@ -291,6 +447,20 @@ func (r recordStoreAuthorizationPolicyRepository) UnassignPolicy(ctx context.Con
 		return row, true
 	}
 	return nil, false
+}
+
+func (r recordStoreAuthorizationPolicyRepository) UnassignPolicyTx(ctx context.Context, tx platform.StoreTx, policyID, targetType, targetID string) (map[string]any, bool, error) {
+	if r.store == nil {
+		return nil, false, nil
+	}
+	if assignment, found := r.findAssignment(ctx, policyID, targetType, targetID); found {
+		row := shared.CloneMap(assignment.Data)
+		if _, err := tx.Delete(ctx, assignmentsResource, assignment.ID); err != nil {
+			return nil, false, err
+		}
+		return row, true, nil
+	}
+	return nil, false, nil
 }
 
 func (r recordStoreAuthorizationPolicyRepository) ListTargetAssignments(ctx context.Context, targetType, targetID string) []map[string]any {
@@ -384,6 +554,17 @@ func (r recordStoreAuthorizationPolicyRepository) CreateProxyRole(ctx context.Co
 	return shared.CloneMap(record.Data), nil
 }
 
+func (r recordStoreAuthorizationPolicyRepository) CreateProxyRoleTx(ctx context.Context, tx platform.StoreTx, role map[string]any) (map[string]any, error) {
+	if r.store == nil {
+		return nil, errAuthorizationPolicyRepositoryUnavailable
+	}
+	record, err := tx.Create(ctx, platformRolesResource, shared.CloneMap(role))
+	if err != nil {
+		return nil, err
+	}
+	return shared.CloneMap(record.Data), nil
+}
+
 func (r recordStoreAuthorizationPolicyRepository) UpdateProxyRole(ctx context.Context, id string, update map[string]any) (map[string]any, bool) {
 	if r.store == nil {
 		return nil, false
@@ -393,6 +574,17 @@ func (r recordStoreAuthorizationPolicyRepository) UpdateProxyRole(ctx context.Co
 		return nil, false
 	}
 	return shared.CloneMap(updated.Data), true
+}
+
+func (r recordStoreAuthorizationPolicyRepository) UpdateProxyRoleTx(ctx context.Context, tx platform.StoreTx, id string, update map[string]any) (map[string]any, bool, error) {
+	if r.store == nil {
+		return nil, false, nil
+	}
+	updated, ok, err := tx.Update(ctx, platformRolesResource, id, shared.CloneMap(update))
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	return shared.CloneMap(updated.Data), true, nil
 }
 
 func (r recordStoreAuthorizationPolicyRepository) DeleteProxyRoleCascade(ctx context.Context, id string) (map[string]any, bool) {
@@ -457,6 +649,31 @@ func (r recordStoreAuthorizationPolicyRepository) CreateRoleUser(ctx context.Con
 	return nil, false, err
 }
 
+func (r recordStoreAuthorizationPolicyRepository) CreateRoleUserTx(ctx context.Context, tx platform.StoreTx, roleID, userID, assignedBy string) (map[string]any, bool, error) {
+	if r.store == nil {
+		return nil, false, errAuthorizationPolicyRepositoryUnavailable
+	}
+	if existing, found := r.findRoleUser(ctx, roleID, userID); found {
+		return r.composeRoleUser(ctx, existing.Data), false, nil
+	}
+	record, err := tx.Create(ctx, roleUsersResource, map[string]any{
+		"id":          roleID + ":" + userID,
+		"user_id":     userID,
+		"role_id":     roleID,
+		"assigned_by": assignedBy,
+		"created_at":  time.Now().UTC(),
+	})
+	if err != nil {
+		if platform.IsCreateConflict(err) {
+			if existing, found := r.findRoleUser(ctx, roleID, userID); found {
+				return r.composeRoleUser(ctx, existing.Data), false, nil
+			}
+		}
+		return nil, false, err
+	}
+	return r.composeRoleUser(ctx, record.Data), true, nil
+}
+
 func (r recordStoreAuthorizationPolicyRepository) UnassignRoleUser(ctx context.Context, roleID, userID string) (map[string]any, bool) {
 	if r.store == nil {
 		return nil, false
@@ -467,6 +684,20 @@ func (r recordStoreAuthorizationPolicyRepository) UnassignRoleUser(ctx context.C
 		return row, true
 	}
 	return nil, false
+}
+
+func (r recordStoreAuthorizationPolicyRepository) UnassignRoleUserTx(ctx context.Context, tx platform.StoreTx, roleID, userID string) (map[string]any, bool, error) {
+	if r.store == nil {
+		return nil, false, nil
+	}
+	if member, found := r.findRoleUser(ctx, roleID, userID); found {
+		row := shared.CloneMap(member.Data)
+		if _, err := tx.Delete(ctx, roleUsersResource, member.ID); err != nil {
+			return nil, false, err
+		}
+		return row, true, nil
+	}
+	return nil, false, nil
 }
 
 func (r recordStoreAuthorizationPolicyRepository) replacePolicyRules(ctx context.Context, policyID string, rules []map[string]any) error {

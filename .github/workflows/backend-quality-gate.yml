@@ -51,8 +51,8 @@ jobs:
       integration: ${{ steps.filter.outputs.backend_go == 'true' || steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_migrations == 'true' || steps.filter.outputs.backend_docker == 'true' || steps.filter.outputs.backend_deploy == 'true' || steps.filter.outputs.backend_compose == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
       govulncheck: ${{ steps.filter.outputs.backend_go == 'true' || steps.filter.outputs.backend_deps == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
       osv: ${{ steps.filter.outputs.backend_deps == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
-      trivy_fs: ${{ steps.filter.outputs.workflow == 'true' || steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_docker == 'true' || steps.filter.outputs.backend_deploy == 'true' || steps.filter.outputs.backend_scripts == 'true' || steps.filter.outputs.sonar_config == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
-      image_scan: ${{ steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_migrations == 'true' || steps.filter.outputs.backend_docker == 'true' || steps.filter.outputs.backend_deploy == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
+      trivy_fs: ${{ steps.filter.outputs.workflow == 'true' || steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_docker == 'true' || steps.filter.outputs.backend_deploy == 'true' || steps.filter.outputs.backend_scripts == 'true' || steps.filter.outputs.frontend == 'true' || steps.filter.outputs.sonar_config == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
+      image_scan: ${{ steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_migrations == 'true' || steps.filter.outputs.backend_docker == 'true' || steps.filter.outputs.backend_deploy == 'true' || steps.filter.outputs.frontend == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
       sonar: ${{ steps.filter.outputs.backend_go == 'true' || steps.filter.outputs.backend_deps == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
 
     steps:
@@ -78,7 +78,10 @@ jobs:
             backend_docker:
               - 'backend/Dockerfile'
               - 'backend/.dockerignore'
+              - '.dockerignore'
               - 'backend/*/Dockerfile'
+            frontend:
+              - 'frontend/**'
             backend_deploy:
               - 'backend/deploy/**'
               - 'backend/*/k8s/**'
@@ -330,7 +333,8 @@ jobs:
       - name: Build backend image
         uses: docker/build-push-action@v6
         with:
-          context: backend
+          context: .
+          file: backend/Dockerfile
           load: true
           tags: ${{ env.BACKEND_IMAGE }}
           cache-from: type=gha

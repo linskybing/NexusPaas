@@ -26,14 +26,23 @@ func addRawPermissionPolicy(app *platform.App, r *http.Request, _ platform.Route
 	if status, data, ok := requireAdmin(app, r); !ok {
 		return status, data, nil
 	}
-	created, err := rawPermissionRepo(app).CreateRawPermissionPolicy(r.Context(), policy)
+	repo := rawPermissionRepo(app)
+	var created bool
+	err = app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		var e error
+		created, e = repo.CreateRawPermissionPolicyTx(r.Context(), tx, policy)
+		if e != nil || !created {
+			return e
+		}
+		tx.Emit(policyChangedEvent(r, "policy_added", map[string]any{"policy": policy}))
+		return nil
+	})
 	if err != nil {
 		return http.StatusInternalServerError, shared.ErrorData("policy could not be created"), nil
 	}
 	if !created {
 		return http.StatusConflict, shared.ErrorData(msgPolicyAlreadyExists), nil
 	}
-	publishPolicyChanged(app, r, "policy_added", map[string]any{"policy": policy})
 	return http.StatusOK, nil, nil
 }
 
@@ -45,7 +54,17 @@ func updateRawPermissionPolicy(app *platform.App, r *http.Request, _ platform.Ro
 	if status, data, ok := requireAdmin(app, r); !ok {
 		return status, data, nil
 	}
-	result, err := rawPermissionRepo(app).UpdateRawPermissionPolicy(r.Context(), oldPolicy, newPolicy)
+	repo := rawPermissionRepo(app)
+	var result rawPermissionPolicyUpdateResult
+	err = app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		var e error
+		result, e = repo.UpdateRawPermissionPolicyTx(r.Context(), tx, oldPolicy, newPolicy)
+		if e != nil || !result.Updated {
+			return e
+		}
+		tx.Emit(policyChangedEvent(r, "policy_updated", map[string]any{"old": oldPolicy, "new": newPolicy}))
+		return nil
+	})
 	if err != nil {
 		return http.StatusInternalServerError, shared.ErrorData("policy could not be updated"), nil
 	}
@@ -55,7 +74,6 @@ func updateRawPermissionPolicy(app *platform.App, r *http.Request, _ platform.Ro
 	if result.Conflict {
 		return http.StatusConflict, shared.ErrorData(msgPolicyAlreadyExists), nil
 	}
-	publishPolicyChanged(app, r, "policy_updated", map[string]any{"old": oldPolicy, "new": newPolicy})
 	return http.StatusOK, nil, nil
 }
 
@@ -67,10 +85,21 @@ func removeRawPermissionPolicy(app *platform.App, r *http.Request, _ platform.Ro
 	if status, data, ok := requireAdmin(app, r); !ok {
 		return status, data, nil
 	}
-	if !rawPermissionRepo(app).DeleteRawPermissionPolicy(r.Context(), policy) {
+	var deleted bool
+	if err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		var e error
+		deleted, e = rawPermissionRepo(app).DeleteRawPermissionPolicyTx(r.Context(), tx, policy)
+		if e != nil || !deleted {
+			return e
+		}
+		tx.Emit(policyChangedEvent(r, "policy_removed", map[string]any{"policy": policy}))
+		return nil
+	}); err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("policy could not be deleted"), nil
+	}
+	if !deleted {
 		return http.StatusNotFound, shared.ErrorData(msgPolicyNotFound), nil
 	}
-	publishPolicyChanged(app, r, "policy_removed", map[string]any{"policy": policy})
 	return http.StatusOK, nil, nil
 }
 
@@ -84,16 +113,22 @@ func batchProcessPermissions(app *platform.App, r *http.Request, _ platform.Rout
 	}
 	repo := rawPermissionRepo(app)
 	for _, op := range operations {
-		if err := repo.ApplyPermissionOperation(r.Context(), op); err != nil {
+		if err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+			if err := repo.ApplyPermissionOperationTx(r.Context(), tx, op); err != nil {
+				return err
+			}
+			tx.Emit(policyChangedEvent(r, "batch_permissions_processed", map[string]any{"operation": op, "operations": []map[string]string{op}}))
+			return nil
+		}); err != nil {
 			return http.StatusInternalServerError, shared.ErrorData(err.Error()), nil
 		}
 	}
-	publishPolicyChanged(app, r, "batch_permissions_processed", map[string]any{"operations": operations})
 	return http.StatusOK, nil, nil
 }
 
 func enforcePermission(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
-	if !isServiceOrAdminPrincipal(r) {
+	serviceAuthorized := app != nil && app.ServiceRequestAuthorized(r)
+	if !serviceAuthorized && !isServiceOrAdminPrincipal(r) {
 		return http.StatusForbidden, shared.ErrorData("service principal is required"), nil
 	}
 	payload, _, err := decodePayload(r)

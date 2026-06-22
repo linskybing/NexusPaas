@@ -68,10 +68,10 @@ func rateLimitKey(r *http.Request, route RouteSpec, trustedProxies []*net.IPNet)
 }
 
 func clientKey(r *http.Request, trustedProxies []*net.IPNet) string {
-	return clientIPFromRequest(r, trustedProxies)
+	return ClientIPFromRequest(r, trustedProxies)
 }
 
-func clientIPFromRequest(r *http.Request, trustedProxies []*net.IPNet) string {
+func ClientIPFromRequest(r *http.Request, trustedProxies []*net.IPNet) string {
 	remoteIP, remoteKey := remoteIPAndKey(r.RemoteAddr)
 	if len(trustedProxies) == 0 || remoteIP == nil || !isTrustedProxy(remoteIP, trustedProxies) {
 		return remoteKey

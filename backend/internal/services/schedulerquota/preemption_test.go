@@ -56,6 +56,44 @@ func TestPreemptionRouteDoesNotCreateGenericCommandRecord(t *testing.T) {
 	}
 }
 
+func TestPreemptionSuccessUsesTransactionalEvent(t *testing.T) {
+	ctx := context.Background()
+	store := &schedulerTxStore{Store: platform.NewStore()}
+	app := platform.NewApp(platform.Config{ServiceName: "all", HTTPAddr: ":0", ServiceAPIKey: "svc-key"}, platform.WithStore(store), platform.WithCluster(cluster.New(fake.NewSimpleClientset(preemptionPod("proj-p1", "victim-pod", "victim")), "proj")))
+	registerPreemptionSchedulerRoute(app)
+	app.RegisterService(platform.ServiceSpec{Name: workloadServiceName, Routes: []platform.RouteSpec{
+		{Method: http.MethodGet, Pattern: workloadPreemptionContextPath, Resource: "preemption_context", Action: "internal_read", AuthRequired: false},
+		{Method: http.MethodPost, Pattern: workloadPreemptJobPathTemplate, Resource: "jobs", Action: "preempt", AuthRequired: false},
+	}})
+	Register(app)
+	workload.Register(app)
+	seedPreemptionQueue(t, app, "q-low", "batch-low", true, 1000)
+	seedPreemptionJob(t, app, map[string]any{
+		"id": "requester", "job_id": "requester", "status": "submitted", "namespace": "proj-p1",
+		"queue_name": "interactive", "priority_value": 10000, "required_gpu": 1.0, "required_cpu": 1.0,
+	})
+	seedPreemptionJob(t, app, map[string]any{
+		"id": "victim", "job_id": "victim", "status": "running", "namespace": "proj-p1",
+		"queue_name": "batch-low", "priority_value": 1000, "preemptible": true, "required_gpu": 1.0,
+	})
+	store.resetTx()
+
+	postPreemption(t, app, "tx-preempt", `{"requester_job_id":"requester"}`, http.StatusOK)
+
+	for _, event := range app.Events.Outbox() {
+		if event.Name == "JobPreempted" {
+			t.Fatalf("JobPreempted was directly published to app.Events; outbox=%#v", app.Events.Outbox())
+		}
+	}
+	if len(store.txEvents) != 1 || store.txEvents[0].Name != "JobPreempted" {
+		t.Fatalf("tx events = %#v, want one JobPreempted", store.txEvents)
+	}
+	victim, _ := app.Store.Get(ctx, workloadJobsResource, "victim")
+	if victim.Data["status"] != "preempted" {
+		t.Fatalf("victim after preemption = %#v, want preempted", victim.Data)
+	}
+}
+
 func TestPreemptionIdempotencyReplaysExistingDecision(t *testing.T) {
 	app := newPreemptionTestApp(t, cluster.New(fake.NewSimpleClientset(
 		preemptionPod("proj-p1", "victim-pod", "victim"),

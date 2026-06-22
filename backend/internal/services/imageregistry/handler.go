@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
 	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
@@ -70,6 +71,7 @@ func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodDelete, "/api/v1/projects/{id}/builds/{jobName}", cancelProjectBuild)
 	app.RegisterCustomHandler(http.MethodDelete, "/api/v1/projects/{id}/image-builds/{buildId}", cancelProjectBuild)
 	registerHarborHealthChecks(app)
+	registerHarborCatalogSync(app)
 }
 
 func getHarborStatus(app *platform.App, r *http.Request, route platform.RouteSpec) (int, any, *platform.Degraded) {
@@ -123,9 +125,13 @@ func syncCatalog(app *platform.App, r *http.Request, _ platform.RouteSpec) (int,
 		"requested_by": userID,
 		"updated_at":   time.Now().UTC(),
 	}
-	upsertRecord(app, r, imageSyncResource, tagID, record)
-	publishEvent(app, r, "ImageCatalogSyncRequested", record)
-	return http.StatusAccepted, record, nil
+	updated, err := app.UpsertRecordWithEvent(r.Context(), imageSyncResource, tagID, record, func(rec contracts.Record[map[string]any]) contracts.Event {
+		return registryEvent(r, "ImageCatalogSyncRequested", rec.Data)
+	})
+	if err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("catalog sync request failed"), nil
+	}
+	return http.StatusAccepted, syncHarborCatalogTarget(r.Context(), app, tagID, updated.Data, payload, time.Now().UTC()), nil
 }
 
 func listCatalogSyncStatus(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
@@ -166,16 +172,13 @@ func publishCatalog(app *platform.App, r *http.Request, _ platform.RouteSpec) (i
 	rules := make([]map[string]any, 0, len(projectIDs))
 	for _, projectID := range projectIDs {
 		rule := allowRuleFromCatalog(app, r, tagID, projectID, userID)
-		record, err := app.Store.Create(r.Context(), projectImagesResource, rule)
-		if platform.IsCreateConflict(err) {
-			record, _ = app.Store.Update(r.Context(), projectImagesResource, ruleID(projectID, tagID), rule)
-			err = nil
-		}
+		record, err := app.UpsertRecordWithEvent(r.Context(), projectImagesResource, ruleID(projectID, tagID), rule, func(rec contracts.Record[map[string]any]) contracts.Event {
+			return registryEvent(r, "ImagePublished", rec.Data)
+		})
 		if err != nil {
 			return http.StatusInternalServerError, shared.ErrorData("catalog publish failed"), nil
 		}
 		rules = append(rules, record.Data)
-		publishEvent(app, r, "ImagePublished", record.Data)
 	}
 	return http.StatusOK, map[string]any{"rules": rules}, nil
 }
@@ -189,18 +192,52 @@ func unpublishCatalog(app *platform.App, r *http.Request, _ platform.RouteSpec) 
 		return http.StatusForbidden, shared.ErrorData(msgAdminAccessRequired), nil
 	}
 	tagID := shared.FirstNonBlank(r.PathValue("id"), r.PathValue("tagId"))
-	deleted := 0
-	for _, rule := range imageRows(app, r, projectImagesResource) {
-		if shared.TextValue(rule, "tag_id", "tagId") == tagID || shared.TextValue(rule, "id") == tagID {
-			app.Store.Delete(r.Context(), projectImagesResource, shared.TextValue(rule, "id"))
-			deleted++
-		}
+	deleted, err := unpublishCatalogRules(app, r, tagID)
+	if err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("catalog unpublish failed"), nil
 	}
 	if deleted == 0 {
 		return http.StatusNotFound, shared.ErrorData("publish rule not found"), nil
 	}
-	publishEvent(app, r, "ImageUnpublished", map[string]any{"tag_id": tagID, "deleted": deleted})
 	return http.StatusOK, map[string]any{"deleted": deleted}, nil
+}
+
+func unpublishCatalogRules(app *platform.App, r *http.Request, tagID string) (int, error) {
+	deleted := 0
+	for _, rule := range imageRows(app, r, projectImagesResource) {
+		if !catalogRuleMatchesTag(rule, tagID) {
+			continue
+		}
+		removed, err := deletePublishedCatalogRule(app, r, shared.TextValue(rule, "id"), tagID)
+		if err != nil {
+			return 0, err
+		}
+		if removed {
+			deleted++
+		}
+	}
+	return deleted, nil
+}
+
+func catalogRuleMatchesTag(rule map[string]any, tagID string) bool {
+	return shared.TextValue(rule, "tag_id", "tagId") == tagID ||
+		shared.TextValue(rule, "id") == tagID
+}
+
+func deletePublishedCatalogRule(app *platform.App, r *http.Request, ruleID, tagID string) (bool, error) {
+	removed := false
+	err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		ok, err := tx.Delete(r.Context(), projectImagesResource, ruleID)
+		if err != nil {
+			return err
+		}
+		removed = ok
+		if ok {
+			tx.Emit(registryEvent(r, "ImageUnpublished", map[string]any{"id": ruleID, "tag_id": tagID}))
+		}
+		return nil
+	})
+	return removed, err
 }
 
 func deletePublishedRule(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
@@ -212,10 +249,15 @@ func deletePublishedRule(app *platform.App, r *http.Request, _ platform.RouteSpe
 		return http.StatusForbidden, shared.ErrorData(msgAdminAccessRequired), nil
 	}
 	ruleID := shared.FirstNonBlank(r.PathValue("ruleId"), r.PathValue("id"))
-	if !app.Store.Delete(r.Context(), projectImagesResource, ruleID) {
+	deletedRule, err := app.DeleteRecordWithEvent(r.Context(), projectImagesResource, ruleID, func(bool) contracts.Event {
+		return registryEvent(r, "ImageUnpublished", map[string]any{"id": ruleID})
+	})
+	if err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("publish rule could not be deleted"), nil
+	}
+	if !deletedRule {
 		return http.StatusNotFound, shared.ErrorData("publish rule not found"), nil
 	}
-	publishEvent(app, r, "ImageUnpublished", map[string]any{"id": ruleID})
 	return http.StatusOK, nil, nil
 }
 
@@ -228,19 +270,46 @@ func deleteCatalogArtifact(app *platform.App, r *http.Request, _ platform.RouteS
 		return http.StatusForbidden, shared.ErrorData(msgAdminAccessRequired), nil
 	}
 	tagID := shared.FirstNonBlank(r.PathValue("tagId"), r.PathValue("id"))
-	if !app.Store.Delete(r.Context(), imageCatalogResource, tagID) {
+	deleted, err := deleteCatalogArtifactCascade(app, r, tagID)
+	if err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("catalog artifact delete failed"), nil
+	}
+	if !deleted {
 		return http.StatusNotFound, shared.ErrorData("catalog artifact not found"), nil
 	}
-	for _, rule := range imageRows(app, r, projectImagesResource) {
-		if shared.TextValue(rule, "tag_id", "tagId") == tagID {
-			app.Store.Delete(r.Context(), projectImagesResource, shared.TextValue(rule, "id"))
-		}
-	}
-	publishEvent(app, r, "ImageCatalogDeleted", map[string]any{"id": tagID})
 	return http.StatusOK, nil, nil
 }
 
-func listProjectImages(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
+func deleteCatalogArtifactCascade(app *platform.App, r *http.Request, tagID string) (bool, error) {
+	deleted := false
+	err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		var err error
+		deleted, err = tx.Delete(r.Context(), imageCatalogResource, tagID)
+		if err != nil || !deleted {
+			return err
+		}
+		if err := deleteProjectImageRulesForTagTx(app, r, tx, tagID); err != nil {
+			return err
+		}
+		tx.Emit(registryEvent(r, "ImageCatalogDeleted", map[string]any{"id": tagID}))
+		return nil
+	})
+	return deleted, err
+}
+
+func deleteProjectImageRulesForTagTx(app *platform.App, r *http.Request, tx platform.StoreTx, tagID string) error {
+	for _, rule := range imageRowsWithoutSync(app, r, projectImagesResource) {
+		if shared.TextValue(rule, "tag_id", "tagId") != tagID {
+			continue
+		}
+		if _, err := tx.Delete(r.Context(), projectImagesResource, shared.TextValue(rule, "id")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func listProjectImages(app *platform.App, r *http.Request, route platform.RouteSpec) (int, any, *platform.Degraded) {
 	userID, status, data, ok := requireUser(r)
 	if !ok {
 		return status, data, nil
@@ -259,7 +328,7 @@ func listProjectImages(app *platform.App, r *http.Request, _ platform.RouteSpec)
 		}
 	}
 	sortRows(rows, "repository", "tag", "id")
-	return http.StatusOK, rows, nil
+	return http.StatusOK, rows, harborDegraded(app, r, route, "listProjectImages")
 }
 
 func requestProjectImage(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
@@ -279,11 +348,12 @@ func requestProjectImage(app *platform.App, r *http.Request, _ platform.RouteSpe
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(err.Error()), nil
 	}
-	record, err := app.Store.Create(r.Context(), imageRequestsResource, request)
+	record, err := app.CreateRecordWithEvent(r.Context(), imageRequestsResource, request, func(rec contracts.Record[map[string]any]) contracts.Event {
+		return registryEvent(r, "ImageRequested", rec.Data)
+	})
 	if err != nil {
 		return http.StatusInternalServerError, shared.ErrorData("image request could not be created"), nil
 	}
-	publishEvent(app, r, "ImageRequested", record.Data)
 	return http.StatusCreated, record.Data, nil
 }
 
@@ -301,8 +371,11 @@ func removeProjectImage(app *platform.App, r *http.Request, _ platform.RouteSpec
 	if !found {
 		return http.StatusNotFound, shared.ErrorData("project image not found"), nil
 	}
-	app.Store.Delete(r.Context(), projectImagesResource, record.ID)
-	publishEvent(app, r, "ProjectImageRemoved", record.Data)
+	if _, err := app.DeleteRecordWithEvent(r.Context(), projectImagesResource, record.ID, func(bool) contracts.Event {
+		return registryEvent(r, "ProjectImageRemoved", record.Data)
+	}); err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("project image could not be removed"), nil
+	}
 	return http.StatusOK, nil, nil
 }
 
@@ -424,7 +497,7 @@ func startDockerfileImageBuild(app *platform.App, r *http.Request, route platfor
 	return createBuild(app, r, route, "dockerfile")
 }
 
-func listProjectBuilds(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
+func listProjectBuilds(app *platform.App, r *http.Request, route platform.RouteSpec) (int, any, *platform.Degraded) {
 	userID, status, data, ok := requireUser(r)
 	if !ok {
 		return status, data, nil
@@ -435,7 +508,7 @@ func listProjectBuilds(app *platform.App, r *http.Request, _ platform.RouteSpec)
 	}
 	rows := filterRows(imageRows(app, r, imageBuildsResource), "project_id", projectID)
 	sortRows(rows, "created_at", "id")
-	return http.StatusOK, rows, nil
+	return http.StatusOK, rows, harborDegraded(app, r, route, "listProjectBuilds")
 }
 
 func getBuildLogs(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
@@ -470,15 +543,16 @@ func cancelProjectBuild(app *platform.App, r *http.Request, _ platform.RouteSpec
 	if !found || shared.TextValue(build.Data, "project_id", "projectId") != projectID {
 		return http.StatusNotFound, shared.ErrorData("build not found"), nil
 	}
-	updated, ok := app.Store.Update(r.Context(), imageBuildsResource, build.ID, map[string]any{"status": "cancelled", "updated_at": time.Now().UTC()})
-	if !ok {
+	updated, ok, err := app.UpdateRecordWithEvent(r.Context(), imageBuildsResource, build.ID, map[string]any{"status": "cancelled", "updated_at": time.Now().UTC()}, func(rec contracts.Record[map[string]any]) contracts.Event {
+		return registryEvent(r, "ImageBuildCancelled", rec.Data)
+	})
+	if err != nil || !ok {
 		return http.StatusInternalServerError, shared.ErrorData("build update failed"), nil
 	}
-	publishEvent(app, r, "ImageBuildCancelled", updated.Data)
 	return http.StatusOK, updated.Data, nil
 }
 
-func createBuild(app *platform.App, r *http.Request, _ platform.RouteSpec, buildType string) (int, any, *platform.Degraded) {
+func createBuild(app *platform.App, r *http.Request, route platform.RouteSpec, buildType string) (int, any, *platform.Degraded) {
 	userID, status, data, ok := requireUser(r)
 	if !ok {
 		return status, data, nil
@@ -513,10 +587,11 @@ func createBuild(app *platform.App, r *http.Request, _ platform.RouteSpec, build
 		"updated_at":      now,
 		"logs":            "build queued\n",
 	}
-	record, err := app.Store.Create(r.Context(), imageBuildsResource, build)
+	record, err := app.CreateRecordWithEvent(r.Context(), imageBuildsResource, build, func(rec contracts.Record[map[string]any]) contracts.Event {
+		return registryEvent(r, "ImageBuildStarted", rec.Data)
+	})
 	if err != nil {
 		return http.StatusInternalServerError, shared.ErrorData("image build could not be created"), nil
 	}
-	publishEvent(app, r, "ImageBuildStarted", record.Data)
-	return http.StatusAccepted, record.Data, nil
+	return http.StatusAccepted, record.Data, harborDegraded(app, r, route, "createBuild")
 }

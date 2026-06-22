@@ -20,8 +20,9 @@ const (
 // unset the corresponding in-memory default is left in place, so tests and local
 // no-dependency runs are unaffected.
 type BackingResources struct {
-	Options []Option
-	closers []func()
+	Options          []Option
+	closers          []func()
+	postgresEventBus *PostgresEventBus
 }
 
 // NewBackingResources connects to the configured backing services and returns
@@ -55,7 +56,11 @@ func (b *BackingResources) addDatabaseBacking(ctx context.Context, cfg Config, c
 		if err != nil {
 			return fmt.Errorf("connect database: %w", err)
 		}
-		b.Options = append(b.Options, WithStore(NewPostgresStore(pool)))
+		b.postgresEventBus = NewPostgresEventBus(pool)
+		b.Options = append(b.Options,
+			WithStore(NewPostgresStore(pool)),
+			WithEventBus(b.postgresEventBus),
+		)
 		b.closers = append(b.closers, pool.Close)
 		checks[envDatabaseURL] = func(ctx context.Context) error { return pool.Ping(ctx) }
 	}
@@ -85,7 +90,13 @@ func (b *BackingResources) addEventBusBacking(_ context.Context, cfg Config, che
 		if err != nil {
 			return fmt.Errorf("connect event bus: %w", err)
 		}
-		b.Options = append(b.Options, WithEventBus(NewRedisEventBus(rdb)))
+		redisBus := NewRedisEventBus(rdb)
+		if b.postgresEventBus != nil {
+			b.postgresEventBus.WithRelaySink(redisBus)
+			b.Options = append(b.Options, WithEventRelay(b.postgresEventBus, cfg.EffectiveEventRelayBatchSize()))
+		} else {
+			b.Options = append(b.Options, WithEventBus(redisBus))
+		}
 		b.closers = append(b.closers, func() { _ = rdb.Close() })
 		checks[envEventBusURL] = func(ctx context.Context) error { return rdb.Ping(ctx).Err() }
 	}

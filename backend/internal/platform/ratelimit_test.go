@@ -3,6 +3,7 @@ package platform
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -107,6 +108,97 @@ func TestRateLimiterPrefersVerifiedPrincipalForAuthenticatedRoutes(t *testing.T)
 	requestLimitedRoute(t, app, "session-a", http.StatusOK)
 	requestLimitedRoute(t, app, "session-b", http.StatusOK)
 	requestLimitedRoute(t, app, "session-a", http.StatusTooManyRequests)
+}
+
+func TestRateLimitedRouteReturnsRetryGuidance(t *testing.T) {
+	app := NewApp(Config{
+		ServiceName:  "all",
+		HTTPAddr:     ":0",
+		RequireAuth:  true,
+		ExternalURLs: map[string]string{},
+	})
+	app.Rate = NewRateLimiter(0, time.Minute)
+	route := RouteSpec{Method: http.MethodGet, Pattern: "/limited", Resource: "test:limited", OperationID: "limited"}
+	app.Routes = []RouteSpec{route}
+	app.RegisterCustomHandler(http.MethodGet, "/limited", func(_ *App, _ *http.Request, _ RouteSpec) (int, any, *Degraded) {
+		return http.StatusOK, map[string]any{"ok": true}, nil
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/limited", nil)
+	req.RemoteAddr = "198.51.100.10:1234"
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Retry-After"); got != "60" {
+		t.Fatalf("Retry-After = %q, want 60", got)
+	}
+	if !strings.Contains(rec.Body.String(), "retry after 60 seconds") {
+		t.Fatalf("body = %s, want retry guidance", rec.Body.String())
+	}
+}
+
+func TestServiceAuthRequiredRouteBypassesUserRateLimiter(t *testing.T) {
+	app := NewApp(Config{
+		ServiceName:    "all",
+		HTTPAddr:       ":0",
+		RequireAuth:    true,
+		ServiceAPIKey:  "svc-key",
+		ExternalURLs:   map[string]string{},
+		AllowedOrigins: map[string]bool{},
+	})
+	app.Rate = NewRateLimiter(0, time.Minute)
+	route := RouteSpec{
+		Method:              http.MethodPost,
+		Pattern:             "/internal/enforce",
+		Resource:            "test:internal_enforce",
+		OperationID:         "internal_enforce",
+		ServiceAuthRequired: true,
+		PolicyBypass:        true,
+	}
+	app.Routes = []RouteSpec{route}
+	app.RegisterCustomHandler(http.MethodPost, "/internal/enforce", func(_ *App, _ *http.Request, _ RouteSpec) (int, any, *Degraded) {
+		return http.StatusOK, map[string]any{"ok": true}, nil
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/internal/enforce", nil)
+	req.Header.Set(serviceKeyHeader, "svc-key")
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 service-auth bypass: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestStateChangingRouteRejectsOversizedContentLength(t *testing.T) {
+	app := NewApp(Config{
+		ServiceName:     "all",
+		HTTPAddr:        ":0",
+		RequireAuth:     true,
+		ExternalURLs:    map[string]string{},
+		MaxAPIBodyBytes: 8,
+	})
+	called := false
+	route := RouteSpec{Method: http.MethodPost, Pattern: "/limited-body", Resource: "test:limited_body", OperationID: "limited_body", StateChanging: true}
+	app.Routes = []RouteSpec{route}
+	app.RegisterCustomHandler(http.MethodPost, "/limited-body", func(_ *App, _ *http.Request, _ RouteSpec) (int, any, *Degraded) {
+		called = true
+		return http.StatusOK, map[string]any{"ok": true}, nil
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/limited-body", strings.NewReader(`{"too":"large"}`))
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413: %s", rec.Code, rec.Body.String())
+	}
+	if called {
+		t.Fatal("handler was called for oversized request")
+	}
 }
 
 func requestLimitedRoute(t *testing.T, app *App, token string, want int) {

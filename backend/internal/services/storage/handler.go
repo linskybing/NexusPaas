@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
 	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
@@ -146,11 +147,12 @@ func createGroupStorage(app *platform.App, r *http.Request, _ platform.RouteSpec
 		"created_at":    now,
 		"updated_at":    now,
 	}
-	created, err := storageRepo(app).CreateGroupStorage(r.Context(), record)
+	created, err := storageRepo(app).CreateGroupStorageWithEvent(r.Context(), app, record, func(data map[string]any) contracts.Event {
+		return storageEvent(r, "GroupStorageCreated", data)
+	})
 	if err != nil {
 		return http.StatusConflict, shared.ErrorData("group storage already exists"), nil
 	}
-	publishEvent(app, r, "GroupStorageCreated", created)
 	return http.StatusCreated, created, nil
 }
 
@@ -163,10 +165,24 @@ func deleteGroupStorage(app *platform.App, r *http.Request, _ platform.RouteSpec
 		return http.StatusForbidden, shared.ErrorData(msgAdminRequired), nil
 	}
 	groupID, pvcID := groupPathID(r), pvcPathID(r)
-	if !storageRepo(app).DeleteGroupStorageCascade(r.Context(), groupID, pvcID) {
+	var removed bool
+	if err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		ok, e := storageRepo(app).DeleteGroupStorageCascadeTx(r.Context(), tx, groupID, pvcID)
+		if e != nil {
+			return e
+		}
+		removed = ok
+		if !ok {
+			return nil
+		}
+		tx.Emit(storageEvent(r, "GroupStorageDeleted", map[string]any{"group_id": groupID, "pvc_id": pvcID}))
+		return nil
+	}); err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("group storage could not be deleted"), nil
+	}
+	if !removed {
 		return http.StatusNotFound, shared.ErrorData("group storage not found"), nil
 	}
-	publishEvent(app, r, "GroupStorageDeleted", map[string]any{"group_id": groupID, "pvc_id": pvcID})
 	return http.StatusOK, nil, nil
 }
 
@@ -195,11 +211,12 @@ func createStoragePermission(app *platform.App, r *http.Request, _ platform.Rout
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(err.Error()), nil
 	}
-	created, err := storageRepo(app).UpsertStoragePermission(r.Context(), record)
+	created, err := storageRepo(app).UpsertStoragePermissionWithEvent(r.Context(), app, record, func(data map[string]any) contracts.Event {
+		return storageEvent(r, "StoragePermissionChanged", data)
+	})
 	if err != nil {
 		return http.StatusConflict, shared.ErrorData("storage permission could not be saved"), nil
 	}
-	publishEvent(app, r, "StoragePermissionChanged", created)
 	return http.StatusOK, created, nil
 }
 
@@ -251,8 +268,11 @@ func deleteStoragePermission(app *platform.App, r *http.Request, _ platform.Rout
 	if !canManageGroup(app, r, groupID, userID) {
 		return http.StatusForbidden, shared.ErrorData(msgGroupAdminRequired), nil
 	}
-	storageRepo(app).DeleteStoragePermission(r.Context(), groupID, pvcID, targetUserID)
-	publishEvent(app, r, "StoragePermissionChanged", map[string]any{"group_id": groupID, "pvc_id": pvcID, "user_id": targetUserID, "action": "delete"})
+	if _, err := storageRepo(app).DeleteStoragePermissionWithEvent(r.Context(), app, groupID, pvcID, targetUserID, func(bool) contracts.Event {
+		return storageEvent(r, "StoragePermissionChanged", map[string]any{"group_id": groupID, "pvc_id": pvcID, "user_id": targetUserID, "action": "delete"})
+	}); err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("storage permission could not be deleted"), nil
+	}
 	return http.StatusOK, nil, nil
 }
 
@@ -277,11 +297,12 @@ func createStoragePolicy(app *platform.App, r *http.Request, _ platform.RouteSpe
 		"default_permission": normalizePermission(shared.FirstNonBlank(shared.TextValue(payload, "default_permission", "defaultPermission"), "none")),
 		"updated_at":         time.Now().UTC(),
 	}
-	record, err := storageRepo(app).UpsertStoragePolicy(r.Context(), policy)
+	record, err := storageRepo(app).UpsertStoragePolicyWithEvent(r.Context(), app, policy, func(data map[string]any) contracts.Event {
+		return storageEvent(r, "StoragePolicyChanged", data)
+	})
 	if err != nil {
 		return http.StatusConflict, shared.ErrorData("storage policy could not be saved"), nil
 	}
-	publishEvent(app, r, "StoragePolicyChanged", record)
 	return http.StatusOK, record, nil
 }
 
@@ -316,11 +337,12 @@ func createProjectBinding(app *platform.App, r *http.Request, _ platform.RouteSp
 		return http.StatusBadRequest, shared.ErrorData("group_id and pvc_id are required"), nil
 	}
 	record := map[string]any{"id": projectBindingID(projectID, pvcID), "project_id": projectID, "group_id": groupID, "pvc_id": pvcID, "created_by": userID, "created_at": time.Now().UTC()}
-	created, err := storageRepo(app).CreateProjectBinding(r.Context(), record)
+	created, err := storageRepo(app).CreateProjectBindingWithEvent(r.Context(), app, record, func(data map[string]any) contracts.Event {
+		return storageEvent(r, "ProjectStorageBindingChanged", data)
+	})
 	if err != nil {
 		return http.StatusConflict, shared.ErrorData("storage binding already exists"), nil
 	}
-	publishEvent(app, r, "ProjectStorageBindingChanged", created)
 	return http.StatusCreated, created, nil
 }
 
@@ -334,10 +356,24 @@ func deleteProjectBinding(app *platform.App, r *http.Request, _ platform.RouteSp
 		return status, data, nil
 	}
 	pvcID := shared.FirstNonBlank(r.PathValue("requestId"), r.PathValue("pvcId"))
-	if !storageRepo(app).DeleteProjectBindingCascade(r.Context(), projectID, pvcID) {
+	var removed bool
+	if err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		ok, e := storageRepo(app).DeleteProjectBindingCascadeTx(r.Context(), tx, projectID, pvcID)
+		if e != nil {
+			return e
+		}
+		removed = ok
+		if !ok {
+			return nil
+		}
+		tx.Emit(storageEvent(r, "ProjectStorageBindingChanged", map[string]any{"project_id": projectID, "pvc_id": pvcID, "action": "delete"}))
+		return nil
+	}); err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("storage binding could not be deleted"), nil
+	}
+	if !removed {
 		return http.StatusNotFound, shared.ErrorData("storage binding not found"), nil
 	}
-	publishEvent(app, r, "ProjectStorageBindingChanged", map[string]any{"project_id": projectID, "pvc_id": pvcID, "action": "delete"})
 	return http.StatusOK, nil, nil
 }
 
@@ -369,11 +405,12 @@ func setProjectBindingPermission(app *platform.App, r *http.Request, _ platform.
 	targetUserID := shared.TextValue(payload, "user_id", "userId")
 	permission := normalizePermission(shared.TextValue(payload, "permission"))
 	record := projectPermissionRecord(projectID, pvcID, targetUserID, permission)
-	created, err := storageRepo(app).UpsertProjectPermission(r.Context(), record)
+	created, err := storageRepo(app).UpsertProjectPermissionWithEvent(r.Context(), app, record, func(data map[string]any) contracts.Event {
+		return storageEvent(r, "ProjectStoragePermissionChanged", data)
+	})
 	if err != nil {
 		return http.StatusConflict, shared.ErrorData("project storage permission could not be saved"), nil
 	}
-	publishEvent(app, r, "ProjectStoragePermissionChanged", created)
 	return http.StatusOK, created, nil
 }
 
@@ -386,8 +423,11 @@ func deleteProjectBindingPermission(app *platform.App, r *http.Request, _ platfo
 	if _, status, data, ok := requireProjectManager(app, r, projectID, userID); !ok {
 		return status, data, nil
 	}
-	storageRepo(app).DeleteProjectPermission(r.Context(), projectID, pvcID, targetUserID)
-	publishEvent(app, r, "ProjectStoragePermissionChanged", map[string]any{"project_id": projectID, "pvc_id": pvcID, "user_id": targetUserID, "action": "delete"})
+	if _, err := storageRepo(app).DeleteProjectPermissionWithEvent(r.Context(), app, projectID, pvcID, targetUserID, func(bool) contracts.Event {
+		return storageEvent(r, "ProjectStoragePermissionChanged", map[string]any{"project_id": projectID, "pvc_id": pvcID, "user_id": targetUserID, "action": "delete"})
+	}); err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("project storage permission could not be deleted"), nil
+	}
 	return http.StatusOK, nil, nil
 }
 
@@ -415,11 +455,12 @@ func startFastTransfer(app *platform.App, r *http.Request, _ platform.RouteSpec)
 	name := shared.FirstNonBlank(shared.TextValue(payload, "name"), storageRepo(app).NextFastTransferName())
 	namespace := shared.FirstNonBlank(shared.TextValue(payload, "target_namespace", "targetNamespace"), "project-"+projectID)
 	transfer := map[string]any{"id": fastTransferID(projectID, namespace, name), "project_id": projectID, "target_namespace": namespace, "name": name, "status": "staged", "created_by": userID, "created_at": time.Now().UTC()}
-	record, err := storageRepo(app).CreateFastTransfer(r.Context(), transfer)
+	record, err := storageRepo(app).CreateFastTransferWithEvent(r.Context(), app, transfer, func(data map[string]any) contracts.Event {
+		return storageEvent(r, "FastTransferChanged", data)
+	})
 	if err != nil {
 		return http.StatusConflict, shared.ErrorData("fast transfer already exists"), nil
 	}
-	publishEvent(app, r, "FastTransferChanged", record)
 	return http.StatusAccepted, record, nil
 }
 
@@ -448,11 +489,15 @@ func cancelFastTransfer(app *platform.App, r *http.Request, _ platform.RouteSpec
 	if _, status, data, ok := requireProjectManager(app, r, projectID, userID); !ok {
 		return status, data, nil
 	}
-	updated, ok := storageRepo(app).CancelFastTransfer(r.Context(), projectID, r.PathValue("targetNamespace"), r.PathValue("name"), time.Now().UTC())
+	updated, ok, err := storageRepo(app).CancelFastTransferWithEvent(r.Context(), app, projectID, r.PathValue("targetNamespace"), r.PathValue("name"), time.Now().UTC(), func(data map[string]any) contracts.Event {
+		return storageEvent(r, "FastTransferChanged", data)
+	})
+	if err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("fast transfer could not be cancelled"), nil
+	}
 	if !ok {
 		return http.StatusNotFound, shared.ErrorData("fast transfer not found"), nil
 	}
-	publishEvent(app, r, "FastTransferChanged", updated)
 	return http.StatusOK, updated, nil
 }
 

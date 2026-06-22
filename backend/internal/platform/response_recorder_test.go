@@ -23,6 +23,16 @@ func TestDecodeMapFallbacksAndErrors(t *testing.T) {
 	if err != nil || len(payload) != 0 {
 		t.Fatalf("DecodeMapWithError null = %#v err=%v, want empty nil error", payload, err)
 	}
+
+	limitedReq := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"too-large"}`))
+	limitedReq.Body = http.MaxBytesReader(httptest.NewRecorder(), limitedReq.Body, 4)
+	_, err = DecodeMapWithError(limitedReq)
+	if InputLimitStatus(err, 0) != http.StatusRequestEntityTooLarge {
+		t.Fatalf("DecodeMapWithError limited status = %d, want 413: %v", InputLimitStatus(err, 0), err)
+	}
+	if !strings.Contains(InputLimitMessage(err, ""), "4 bytes") {
+		t.Fatalf("DecodeMapWithError limited message = %q, want byte limit", InputLimitMessage(err, ""))
+	}
 }
 
 func TestRawResponseRecorderCapturesRawPayload(t *testing.T) {

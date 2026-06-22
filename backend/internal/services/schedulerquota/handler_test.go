@@ -11,6 +11,49 @@ import (
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
 )
 
+type schedulerTxStore struct {
+	*platform.Store
+	runInTx  int
+	txEvents []contracts.Event
+}
+
+func (s *schedulerTxStore) RunInTx(ctx context.Context, fn func(platform.StoreTx) error) error {
+	s.runInTx++
+	tx := &schedulerRecordingTx{store: s.Store}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	s.txEvents = append(s.txEvents, tx.events...)
+	return nil
+}
+
+func (s *schedulerTxStore) resetTx() {
+	s.runInTx = 0
+	s.txEvents = nil
+}
+
+type schedulerRecordingTx struct {
+	store  *platform.Store
+	events []contracts.Event
+}
+
+func (tx *schedulerRecordingTx) Create(ctx context.Context, resource string, data map[string]any) (contracts.Record[map[string]any], error) {
+	return tx.store.Create(ctx, resource, data)
+}
+
+func (tx *schedulerRecordingTx) Update(ctx context.Context, resource, id string, data map[string]any) (contracts.Record[map[string]any], bool, error) {
+	record, ok := tx.store.Update(ctx, resource, id, data)
+	return record, ok, nil
+}
+
+func (tx *schedulerRecordingTx) Delete(ctx context.Context, resource, id string) (bool, error) {
+	return tx.store.Delete(ctx, resource, id), nil
+}
+
+func (tx *schedulerRecordingTx) Emit(event contracts.Event) {
+	tx.events = append(tx.events, event)
+}
+
 func TestSchedulerQuotaQueueAndPlanWorkflow(t *testing.T) {
 	app := newSchedulerQuotaTestApp()
 
@@ -113,6 +156,35 @@ func TestSchedulerQuotaProjectBindingAndLiveQuota(t *testing.T) {
 	}
 }
 
+func TestSchedulerQuotaPlanAdminEventsIncludeActorAndBeforeAfter(t *testing.T) {
+	app := newSchedulerQuotaTestApp()
+	createSchedulerRecord(t, app, queuesResource, map[string]any{"id": "q1", "name": "gpu", "priority": 10})
+	createSchedulerRecord(t, app, queuesResource, map[string]any{"id": "q2", "name": "batch"})
+	createSchedulerRecord(t, app, plansResource, map[string]any{"id": "p1", "name": "starter", "queue_ids": []string{"q1"}})
+
+	queueReq := schedulerRequest(http.MethodPatch, "/api/v1/queues/q1", `{"priority":20}`)
+	queueReq.Header.Set("X-User-ID", "ADMIN")
+	queueReq.SetPathValue("id", "q1")
+	code, data, _ := updateQueue(app, queueReq, platform.RouteSpec{})
+	assertSchedulerStatus(t, code, data, http.StatusOK)
+
+	queueEvent := requireSchedulerEvent(t, app, "QueueChanged", "updated")
+	assertSchedulerEventValue(t, queueEvent.Data, "actor_user_id", "ADMIN")
+	assertSchedulerEventValue(t, schedulerEventMap(t, queueEvent.Data["old"]), "priority", 10)
+	assertSchedulerEventValue(t, schedulerEventMap(t, queueEvent.Data["new"]), "priority", float64(20))
+
+	planReq := schedulerRequest(http.MethodPut, "/api/v1/plans/p1/queues", `{"queue_ids":["q1","q2"]}`)
+	planReq.Header.Set("X-User-ID", "ADMIN")
+	planReq.SetPathValue("id", "p1")
+	code, data, _ = bindPlanQueues(app, planReq, platform.RouteSpec{})
+	assertSchedulerStatus(t, code, data, http.StatusOK)
+
+	planEvent := requireSchedulerEvent(t, app, "PlanChanged", "bound_queues")
+	assertSchedulerEventValue(t, planEvent.Data, "actor_user_id", "ADMIN")
+	assertSchedulerStrings(t, schedulerEventMap(t, planEvent.Data["old"])["queue_ids"], []string{"q1"})
+	assertSchedulerStrings(t, schedulerEventMap(t, planEvent.Data["new"])["queue_ids"], []string{"q1", "q2"})
+}
+
 // TestBindPlanToProjectGoesThroughOwnerContract proves scheduler-quota does not
 // write the org-project project record directly: with org-project NOT co-hosted
 // and no remote URL configured, the bind must fail closed (no local write),
@@ -208,10 +280,58 @@ func TestSchedulerQuotaValidationAndMalformedJSON(t *testing.T) {
 	assertSchedulerStatus(t, code, data, http.StatusNotFound)
 }
 
+func TestSchedulerQuotaMutationsUseTransactionalEvents(t *testing.T) {
+	store := &schedulerTxStore{Store: platform.NewStore()}
+	app := platform.NewApp(platform.Config{ServiceName: "all", HTTPAddr: ":0"}, platform.WithStore(store))
+	Register(app)
+	createSchedulerRecord(t, app, queuesResource, map[string]any{"id": "q1", "name": "gpu"})
+	createSchedulerRecord(t, app, queuesResource, map[string]any{"id": "q2", "name": "batch"})
+	createSchedulerRecord(t, app, plansResource, map[string]any{"id": "p1", "name": "starter", "queue_ids": []string{"q1"}})
+	createSchedulerRecord(t, app, plansResource, map[string]any{"id": "p2", "name": "delete", "queue_ids": []string{"q2"}})
+	store.resetTx()
+
+	bindReq := schedulerRequest(http.MethodPut, "/api/v1/plans/p1/queues", `{"queue_ids":["q1","q2"]}`)
+	bindReq.SetPathValue("id", "p1")
+	code, data, _ := bindPlanQueues(app, bindReq, platform.RouteSpec{})
+	assertSchedulerStatus(t, code, data, http.StatusOK)
+	assertSchedulerTxEvents(t, app, store, "PlanChanged", "bound_queues", 1)
+
+	store.resetTx()
+	code, data, _ = batchDeleteQueues(app, schedulerRequest(http.MethodDelete, "/api/v1/queues/batch", `{"ids":["q1","missing"]}`), platform.RouteSpec{})
+	assertSchedulerStatus(t, code, data, http.StatusOK)
+	if result := data.(map[string]any); result["succeeded"] != 1 || result["failed"] != 1 {
+		t.Fatalf("queue batch = %#v, want one success one failure", result)
+	}
+	assertSchedulerTxEvents(t, app, store, "QueueChanged", "deleted", 1)
+
+	store.resetTx()
+	code, data, _ = batchDeletePlans(app, schedulerRequest(http.MethodDelete, "/api/v1/plans/batch", `{"ids":["p2","missing"]}`), platform.RouteSpec{})
+	assertSchedulerStatus(t, code, data, http.StatusOK)
+	if result := data.(map[string]any); result["succeeded"] != 1 || result["failed"] != 1 {
+		t.Fatalf("plan batch = %#v, want one success one failure", result)
+	}
+	assertSchedulerTxEvents(t, app, store, "PlanChanged", "deleted", 1)
+}
+
 func newSchedulerQuotaTestApp() *platform.App {
 	app := platform.NewApp(platform.Config{ServiceName: "all", HTTPAddr: ":0"})
 	Register(app)
 	return app
+}
+
+func assertSchedulerTxEvents(t *testing.T, app *platform.App, store *schedulerTxStore, name, action string, want int) {
+	t.Helper()
+	if got := len(app.Events.Outbox()); got != 0 {
+		t.Fatalf("direct events = %#v, want none", app.Events.Outbox())
+	}
+	if len(store.txEvents) != want {
+		t.Fatalf("tx events = %#v, want %d", store.txEvents, want)
+	}
+	for _, event := range store.txEvents {
+		if event.Name != name || event.Data["action"] != action {
+			t.Fatalf("tx event = %s/%v, want %s/%s", event.Name, event.Data["action"], name, action)
+		}
+	}
 }
 
 func schedulerRequest(method, target, body string) *http.Request {
@@ -234,6 +354,64 @@ func assertSchedulerStatus(t *testing.T, code int, data any, want int) {
 	t.Helper()
 	if code != want {
 		t.Fatalf("status=%d data=%#v, want %d", code, data, want)
+	}
+}
+
+func requireSchedulerEvent(t *testing.T, app *platform.App, name, action string) contracts.Event {
+	t.Helper()
+	for i := len(app.Events.Outbox()) - 1; i >= 0; i-- {
+		event := app.Events.Outbox()[i]
+		if event.Name == name && event.Data["action"] == action {
+			return event
+		}
+	}
+	t.Fatalf("missing event %s/%s in %#v", name, action, app.Events.Outbox())
+	return contracts.Event{}
+}
+
+func schedulerEventMap(t *testing.T, value any) map[string]any {
+	t.Helper()
+	data, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("event map value = %#v, want map", value)
+	}
+	return data
+}
+
+func assertSchedulerEventValue(t *testing.T, data map[string]any, key string, want any) {
+	t.Helper()
+	if data[key] != want {
+		t.Fatalf("event[%s] = %#v, want %#v in %#v", key, data[key], want, data)
+	}
+}
+
+func assertSchedulerStrings(t *testing.T, value any, want []string) {
+	t.Helper()
+	got := schedulerStrings(value)
+	if len(got) != len(want) {
+		t.Fatalf("strings = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("strings = %#v, want %#v", got, want)
+		}
+	}
+}
+
+func schedulerStrings(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		return typed
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text, ok := item.(string); ok {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
 	}
 }
 

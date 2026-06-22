@@ -25,6 +25,46 @@ type RecordStore interface {
 	NextID(resource, prefix string, base, width int) string
 }
 
+type RecordEventBuilder func(contracts.Record[map[string]any]) contracts.Event
+type DeleteEventBuilder func(deleted bool) contracts.Event
+
+type recordEventBuilder = RecordEventBuilder
+type deleteEventBuilder = DeleteEventBuilder
+
+// transactionalRecordStore is an optional extension for stores that can commit a
+// durable owner write and its outbox event in one transaction. It is deliberately
+// not part of RecordStore so in-memory and HTTP-decorated stores stay small.
+type transactionalRecordStore interface {
+	CreateWithEvent(ctx context.Context, resource string, data map[string]any, buildEvent recordEventBuilder) (contracts.Record[map[string]any], error)
+	UpdateWithEvent(ctx context.Context, resource, id string, data map[string]any, buildEvent recordEventBuilder) (contracts.Record[map[string]any], bool, error)
+	DeleteWithEvent(ctx context.Context, resource, id string, buildEvent deleteEventBuilder) (bool, error)
+}
+
+// transactionalUpsertRecordStore is a separate optional extension so stores that
+// support create/update/delete transactional event coupling are not forced to add
+// upsert unless they can implement it atomically.
+type transactionalUpsertRecordStore interface {
+	UpsertWithEvent(ctx context.Context, resource, id string, data map[string]any, buildEvent recordEventBuilder) (contracts.Record[map[string]any], error)
+}
+
+// StoreTx is a transaction scope handed to an App.WithTx callback. Record writes
+// and Emit-ed events all commit together (Postgres) so a multi-record operation
+// (a cascade, or a parent + children) cannot leave the outbox out of sync with the
+// owner write. Emitted events are inserted into the outbox just before commit.
+type StoreTx interface {
+	Create(ctx context.Context, resource string, data map[string]any) (contracts.Record[map[string]any], error)
+	Update(ctx context.Context, resource, id string, data map[string]any) (contracts.Record[map[string]any], bool, error)
+	Delete(ctx context.Context, resource, id string) (bool, error)
+	Emit(event contracts.Event)
+}
+
+// transactionalScopedStore is the optional capability behind App.WithTx. Kept
+// separate from transactionalRecordStore (Interface Segregation) so the
+// single-record fast path and in-memory/decorated stores are unaffected.
+type transactionalScopedStore interface {
+	RunInTx(ctx context.Context, fn func(tx StoreTx) error) error
+}
+
 // EventStream is the eventing port. It extends the shared contracts.EventBus with
 // the checkpoint/lag operations the rollback gate relies on, so callers depend on
 // an abstraction rather than the concrete in-memory bus.
@@ -32,9 +72,24 @@ type EventStream interface {
 	contracts.EventBus
 	Checkpoint(consumer string)
 	Lag(consumer string) int
-	// ResetConsumer clears a consumer's idempotency/checkpoint state so its events
-	// are re-delivered on the next consume pass (projection replay).
+	// ResetConsumer clears a consumer's idempotency/checkpoint state for full
+	// read-model rebuild workflows.
 	ResetConsumer(consumer string)
+	// ResetConsumerEvents clears idempotency state for specific event IDs without
+	// clearing checkpoints. It is used for dead-letter retry so successful events
+	// are not replayed.
+	ResetConsumerEvents(consumer string, eventIDs []string)
+}
+
+type eventRelayResult struct {
+	Selected   int
+	Published  int
+	Retried    int
+	DeadLetter int
+}
+
+type eventRelay interface {
+	RelayPending(ctx context.Context, limit int) (eventRelayResult, error)
 }
 
 // Compile-time assertions that the in-memory defaults satisfy the ports.
@@ -77,6 +132,18 @@ func WithEventBus(events EventStream) Option {
 		if events != nil {
 			a.Events = events
 		}
+	}
+}
+
+func WithEventRelay(relay eventRelay, batchSize int) Option {
+	return func(a *App) {
+		if relay == nil {
+			return
+		}
+		a.RegisterMaintenanceTask("event-outbox-relay", func(ctx context.Context) error {
+			_, err := relay.RelayPending(ctx, batchSize)
+			return err
+		})
 	}
 }
 

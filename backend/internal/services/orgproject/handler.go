@@ -41,6 +41,7 @@ const (
 	msgInvalidRequestBody  = "invalid request body"
 	msgGroupAdminRequired  = "group admin access required"
 	msgGroupMembership     = "group membership required"
+	msgGroupRecordNotFound = "group not found"
 	msgGroupNotFound       = "Group not found"
 	msgProjectNotFound     = "Project not found"
 )
@@ -193,14 +194,15 @@ func createGroup(app *platform.App, r *http.Request, _ platform.RouteSpec) (int,
 		"allowed_host_paths": normalizedHostPaths(payload),
 		"created_at":         now,
 	}
-	record, err := groupGPURepository(app).CreateGroup(r.Context(), group)
+	record, err := groupGPURepository(app).CreateGroupWithEvent(r.Context(), app, group, func(rec contracts.Record[map[string]any]) contracts.Event {
+		return eventFor(r, "GroupCreated", rec.Data)
+	})
 	if err != nil {
 		if platform.IsCreateConflict(err) {
 			return http.StatusConflict, shared.ErrorData("group already exists"), nil
 		}
 		return http.StatusInternalServerError, shared.ErrorData("group could not be created"), nil
 	}
-	publishEvent(app, r, eventFor(r, "GroupCreated", record.Data))
 	return http.StatusCreated, record.Data, nil
 }
 
@@ -214,7 +216,7 @@ func updateGroup(app *platform.App, r *http.Request, _ platform.RouteSpec) (int,
 	}
 	id := strings.TrimSpace(r.PathValue("id"))
 	if _, found := groupGPURepository(app).FindGroup(r.Context(), id); !found {
-		return http.StatusNotFound, shared.ErrorData("group not found"), nil
+		return http.StatusNotFound, shared.ErrorData(msgGroupRecordNotFound), nil
 	}
 	payload, err := platform.DecodeMapWithError(r)
 	if err != nil {
@@ -240,11 +242,12 @@ func updateGroup(app *platform.App, r *http.Request, _ platform.RouteSpec) (int,
 		update["registry_profile"] = normalizeOptional(value)
 	}
 	update["updated_at"] = time.Now().UTC()
-	old, updated, ok := groupGPURepository(app).UpdateGroup(r.Context(), id, update)
-	if !ok {
+	_, updated, ok, err := groupGPURepository(app).UpdateGroupWithEvent(r.Context(), app, id, update, func(old, updated orgProjectGroupRecord) contracts.Event {
+		return eventFor(r, "GroupUpdated", map[string]any{"old": old.Data, "new": updated.Data})
+	})
+	if err != nil || !ok {
 		return http.StatusInternalServerError, shared.ErrorData("group update failed"), nil
 	}
-	publishEvent(app, r, eventFor(r, "GroupUpdated", map[string]any{"old": old.Data, "new": updated.Data}))
 	return http.StatusOK, updated.Data, nil
 }
 
@@ -257,10 +260,21 @@ func deleteGroup(app *platform.App, r *http.Request, _ platform.RouteSpec) (int,
 		return http.StatusForbidden, shared.ErrorData(msgAdminAccessRequired), nil
 	}
 	id := strings.TrimSpace(r.PathValue("id"))
-	if _, _, found := groupGPURepository(app).DeleteGroupCascade(r.Context(), id); !found {
-		return http.StatusNotFound, shared.ErrorData("group not found"), nil
+	repo := groupGPURepository(app)
+	if _, found := repo.FindGroup(r.Context(), id); !found {
+		return http.StatusNotFound, shared.ErrorData(msgGroupRecordNotFound), nil
 	}
-	publishEvent(app, r, eventFor(r, "GroupDeleted", map[string]any{"id": id}))
+	if err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		if _, _, ok, err := repo.DeleteGroupCascadeTx(r.Context(), tx, id); err != nil {
+			return err
+		} else if !ok {
+			return fmt.Errorf(msgGroupRecordNotFound)
+		}
+		tx.Emit(eventFor(r, "GroupDeleted", map[string]any{"id": id}))
+		return nil
+	}); err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("group delete failed"), nil
+	}
 	return http.StatusOK, nil, nil
 }
 
@@ -351,8 +365,17 @@ func removeUserFromGroup(app *platform.App, r *http.Request, _ platform.RouteSpe
 	if !found {
 		return http.StatusNotFound, shared.ErrorData("Not found"), nil
 	}
-	groupGPURepository(app).DeleteMembership(r.Context(), uid, gid)
-	publishEvent(app, r, eventFor(r, "GroupMembershipChanged", map[string]any{"user_id": uid, "group_id": gid, "action": "delete"}))
+	if err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		if _, ok, err := groupGPURepository(app).DeleteMembershipTx(r.Context(), tx, uid, gid); err != nil {
+			return err
+		} else if !ok {
+			return fmt.Errorf("membership not found")
+		}
+		tx.Emit(eventFor(r, "GroupMembershipChanged", map[string]any{"user_id": uid, "group_id": gid, "action": "delete"}))
+		return nil
+	}); err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("user group delete failed"), nil
+	}
 	return http.StatusOK, nil, nil
 }
 
@@ -511,34 +534,71 @@ func createMembership(app *platform.App, r *http.Request, uid, gid, role string,
 	if status, data, ok := validateMembershipRequest(app, r, actor, uid, gid, role); !ok {
 		return status, data, nil
 	}
-	id := membershipID(uid, gid)
 	if existing, found := groupGPURepository(app).FindMembership(r.Context(), uid, gid); found {
 		if !upsert {
 			return http.StatusBadRequest, shared.ErrorData("user group already exists"), nil
 		}
-		_, updated, ok := groupGPURepository(app).UpdateMembershipRole(r.Context(), uid, gid, role, time.Now().UTC())
-		if !ok {
+		updated, err := updateExistingMembership(app, r, existing, uid, gid, role)
+		if err != nil {
 			return http.StatusInternalServerError, shared.ErrorData("user group update failed"), nil
 		}
-		publishEvent(app, r, eventFor(r, "GroupMembershipChanged", map[string]any{"old": existing.Data, "new": updated.Data}))
 		return http.StatusOK, decorateMembership(app, r, updated.Data), nil
 	}
-	record, err := groupGPURepository(app).CreateMembership(r.Context(), map[string]any{
-		"id":         id,
-		"user_id":    uid,
-		"group_id":   gid,
-		"role":       role,
-		"created_at": time.Now().UTC(),
-		"updated_at": time.Now().UTC(),
-	})
+	record, err := createNewMembership(app, r, uid, gid, role)
 	if err != nil {
 		if platform.IsCreateConflict(err) {
 			return http.StatusConflict, shared.ErrorData("user group already exists"), nil
 		}
 		return http.StatusInternalServerError, shared.ErrorData("user group could not be created"), nil
 	}
-	publishEvent(app, r, eventFor(r, "GroupMembershipChanged", map[string]any{"user_id": uid, "group_id": gid, "role": role, "action": "create"}))
 	return http.StatusOK, decorateMembership(app, r, record.Data), nil
+}
+
+func updateExistingMembership(
+	app *platform.App,
+	r *http.Request,
+	existing orgProjectMembershipRecord,
+	uid string,
+	gid string,
+	role string,
+) (orgProjectMembershipRecord, error) {
+	var updated orgProjectMembershipRecord
+	err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		var ok bool
+		var err error
+		_, updated, ok, err = groupGPURepository(app).UpdateMembershipRoleTx(r.Context(), tx, uid, gid, role, time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("user group not found")
+		}
+		tx.Emit(eventFor(r, "GroupMembershipChanged", map[string]any{"old": existing.Data, "new": updated.Data}))
+		return nil
+	})
+	return updated, err
+}
+
+func createNewMembership(app *platform.App, r *http.Request, uid, gid, role string) (orgProjectMembershipRecord, error) {
+	membership := map[string]any{
+		"id":         membershipID(uid, gid),
+		"user_id":    uid,
+		"group_id":   gid,
+		"role":       role,
+		"created_at": time.Now().UTC(),
+		"updated_at": time.Now().UTC(),
+	}
+	var record orgProjectMembershipRecord
+	err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		var e error
+		record, e = groupGPURepository(app).CreateMembershipTx(r.Context(), tx, membership)
+		if e != nil {
+			return e
+		}
+		tx.Emit(eventFor(r, "GroupMembershipChanged", map[string]any{"user_id": uid, "group_id": gid, "role": role, "action": "create"}))
+		return nil
+	})
+	return record, err
 }
 
 func validateMembershipRequest(app *platform.App, r *http.Request, actor, uid, gid, role string) (int, any, bool) {

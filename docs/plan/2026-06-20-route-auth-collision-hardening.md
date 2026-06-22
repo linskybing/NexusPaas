@@ -97,6 +97,34 @@ go -C backend build ./...
 bash backend/scripts/ci-security-gate.sh quick
 ```
 
+Executed on 2026-06-20:
+
+```sh
+go -C backend test ./internal/platform -run 'Route|Internal|ServiceAuth|Admin|Policy' -count=1
+go -C backend test ./internal/services -run 'Catalog|Internal|Command|Contract' -count=1
+go -C backend test ./... -count=1
+go -C backend vet ./...
+go -C backend build ./...
+bash backend/scripts/ci-security-gate.sh quick
+bash backend/scripts/ci-security-gate.sh sonar
+```
+
+Result: all commands passed. SonarScanner reported `QUALITY GATE STATUS:
+PASSED`.
+
+Live RKE2 evidence on 2026-06-20:
+
+- The current live backend image
+  `localhost:5000/nexuspaas-backend:ci-ga-ip-20260620134150` includes this
+  route hardening code and successfully started all 15 backend deployments in
+  namespace `nexuspaas`, so production startup checks accepted the current
+  catalog for route collisions and internal route auth metadata.
+- `GET /internal/workload/preemption-context` on `workload-service` through
+  port-forward returned HTTP 401 without `X-Service-Key`.
+- The same request returned HTTP 401 with a wrong `X-Service-Key`.
+- The same request returned HTTP 200 with the live service key and standard
+  response envelope `{"success":true,"data":{"candidates":[]},...}`.
+
 ## 17. Rollback Plan
 
 Revert this branch. No schema, deployment manifest, or persistent data changes are involved.
@@ -114,4 +142,9 @@ Static service keys remain a beta compromise. This slice reduces the chance of f
 
 ## 20. Status
 
-Status: Approved
+Status: Implemented and reviewer-verified.
+
+Reviewer Agent: Approved and verified. The implementation matches the approved
+plan, passes focused/full Go tests, vet, build, quick gate, Sonar Quality Gate,
+and live RKE2 internal-route service-auth evidence. Residual static shared
+service key risk is documented and accepted for this beta hardening slice.

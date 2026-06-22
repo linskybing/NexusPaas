@@ -124,6 +124,27 @@ func TestRedisEventBusConsumeIsIdempotentPerConsumer(t *testing.T) {
 	}
 }
 
+func TestRedisEventBusResetConsumerEventsDoesNotClearCheckpoint(t *testing.T) {
+	_, client := newTestRedisClient(t)
+	bus := NewRedisEventBus(client)
+	ctx := context.Background()
+	event := sampleEvent("e1")
+	if err := bus.Publish(ctx, event); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if processed, err := bus.Consume(ctx, "dashboard", event); err != nil || !processed {
+		t.Fatalf("first consume = %v err=%v, want true", processed, err)
+	}
+	bus.Checkpoint("dashboard")
+	bus.ResetConsumerEvents("dashboard", []string{event.EventID})
+	if lag := bus.Lag("dashboard"); lag != 0 {
+		t.Fatalf("lag after targeted reset = %d, want checkpoint preserved", lag)
+	}
+	if processed, err := bus.Consume(ctx, "dashboard", event); err != nil || !processed {
+		t.Fatalf("consume after targeted reset = %v err=%v, want true", processed, err)
+	}
+}
+
 func TestRedisEventBusCheckpointAndLag(t *testing.T) {
 	_, client := newTestRedisClient(t)
 	bus := NewRedisEventBus(client)

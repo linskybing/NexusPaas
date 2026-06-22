@@ -79,32 +79,50 @@ func TestRunProjectionKeepsLagVisibleWhenConsumeFails(t *testing.T) {
 	}
 }
 
-func TestReplayProjectionReappliesEvents(t *testing.T) {
+func TestReplayProjectionRetriesOnlyUnresolvedDeadLetters(t *testing.T) {
 	app := NewApp(Config{})
-	publishTestEvent(t, app, "e1", "Thing")
+	publishTestEvent(t, app, "ok", "Thing")
+	publishTestEvent(t, app, "retry", "Thing")
 	ctx := context.Background()
 
-	applied := 0
-	apply := func(contracts.Event) error { applied++; return nil }
+	applied := map[string]int{}
+	apply := func(event contracts.Event) error {
+		applied[event.EventID]++
+		if event.EventID == "retry" && applied[event.EventID] == 1 {
+			return errors.New("transient")
+		}
+		return nil
+	}
 	app.RunProjection(ctx, "c1", apply)
-	app.RunProjection(ctx, "c1", apply) // idempotent, still 1
-	if applied != 1 {
-		t.Fatalf("applied before replay = %d, want 1", applied)
+	if applied["ok"] != 1 || applied["retry"] != 1 {
+		t.Fatalf("applied before replay = %#v, want ok=1 retry=1", applied)
+	}
+	if _, ok := app.Store.Get(ctx, deadLetterResource, "c1:retry"); !ok {
+		t.Fatal("missing dead-letter record before retry replay")
 	}
 
 	app.ReplayProjection("c1")
 	statuses := app.ProjectionStatuses()
-	if len(statuses) != 1 || statuses[0].ReplayCount != 1 || !statuses[0].ReplayPending || statuses[0].Lag != 1 || statuses[0].LastReplayAt.IsZero() {
-		t.Fatalf("status after replay request = %#v, want replay_count=1 pending lag=1", statuses)
+	if len(statuses) != 1 || statuses[0].ReplayCount != 1 || !statuses[0].ReplayPending || statuses[0].Lag != 0 || statuses[0].LastReplayAt.IsZero() {
+		t.Fatalf("status after replay request = %#v, want replay_count=1 pending lag=0", statuses)
 	}
 
 	app.RunProjection(ctx, "c1", apply)
-	if applied != 2 {
-		t.Fatalf("applied after replay = %d, want 2", applied)
+	if applied["ok"] != 1 || applied["retry"] != 2 {
+		t.Fatalf("applied after retry replay = %#v, want ok=1 retry=2", applied)
+	}
+	if _, ok := app.Store.Get(ctx, deadLetterResource, "c1:retry"); ok {
+		t.Fatal("dead-letter record remained after successful retry")
 	}
 	statuses = app.ProjectionStatuses()
 	if len(statuses) != 1 || statuses[0].ReplayPending || statuses[0].ReplayCount != 1 || statuses[0].Lag != 0 || statuses[0].Applied != 2 {
-		t.Fatalf("status after replay completion = %#v, want replay_count=1 pending=false lag=0 applied=2", statuses)
+		t.Fatalf("status after retry completion = %#v, want replay_count=1 pending=false lag=0 applied=2", statuses)
+	}
+
+	app.ReplayProjection("c1")
+	app.RunProjection(ctx, "c1", apply)
+	if applied["ok"] != 1 || applied["retry"] != 2 {
+		t.Fatalf("applied after second replay = %#v, want no duplicate apply", applied)
 	}
 }
 
@@ -132,8 +150,8 @@ func TestRunProjectionTracksDeadLetterRetries(t *testing.T) {
 
 	app.ReplayProjection("c1")
 	statuses = app.ProjectionStatuses()
-	if len(statuses) != 1 || statuses[0].ReplayCount != 1 || !statuses[0].ReplayPending || statuses[0].Lag != 1 {
-		t.Fatalf("status after retry replay request = %#v, want replay_count=1 pending lag=1", statuses)
+	if len(statuses) != 1 || statuses[0].ReplayCount != 1 || !statuses[0].ReplayPending || statuses[0].Lag != 0 {
+		t.Fatalf("status after retry replay request = %#v, want replay_count=1 pending lag=0", statuses)
 	}
 
 	app.RunProjection(ctx, "c1", fail)
@@ -203,3 +221,5 @@ func (s *consumeErrorEventStream) Lag(string) int {
 }
 
 func (s *consumeErrorEventStream) ResetConsumer(string) {}
+
+func (s *consumeErrorEventStream) ResetConsumerEvents(string, []string) {}

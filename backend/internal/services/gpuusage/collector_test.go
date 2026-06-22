@@ -151,6 +151,38 @@ func TestGPUUsageCollectorSkipsUntimestampedRowsWithoutDuplicating(t *testing.T)
 	}
 }
 
+func TestGPUUsageCollectorSkipsProjectPodCountRowsWithoutDeviceIdentity(t *testing.T) {
+	app := newGPUCollectorTestApp()
+	now := time.Date(2026, time.April, 5, 12, 0, 0, 0, time.UTC)
+	seedGPUCollectorReadModels(t, app, "running")
+	createGPUCollectorRecord(t, app, clusterReadModelsResource, map[string]any{
+		"id": "cluster",
+		"summary": map[string]any{
+			"podGpuUsages": []any{
+				map[string]any{
+					"job_id":        "JGPU",
+					"project_id":    "P1",
+					"user_id":       "U1",
+					"namespace":     "proj-p1-alice",
+					"pod_name":      "pod-count-row",
+					"requested_gpu": 1.0,
+					"timestamp":     now,
+					"phase":         "Running",
+					"active":        true,
+				},
+			},
+		},
+	})
+
+	stats := collectGPUUsageTelemetry(context.Background(), app, now)
+	if stats.podRowsScanned != 1 || stats.snapshotsWritten != 0 || stats.snapshotsSkipped != 1 || stats.summariesComputed != 0 {
+		t.Fatalf("collector stats = %#v, want pod-count row scanned and skipped without snapshots", stats)
+	}
+	if got := app.Store.List(context.Background(), snapshotsResource); len(got) != 0 {
+		t.Fatalf("snapshots = %#v, want none for project pod-count rows", got)
+	}
+}
+
 func TestGPUUsageCollectorRegisteredMaintenanceTask(t *testing.T) {
 	app := newGPUCollectorTestApp()
 	Register(app)

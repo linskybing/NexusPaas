@@ -1,9 +1,11 @@
 package orgproject
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
+	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
 	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
@@ -65,14 +67,15 @@ func createProject(app *platform.App, r *http.Request, _ platform.RouteSpec) (in
 		"created_by":   userID,
 	}
 	applyProjectMutableFields(project, payload, true)
-	record, err := projectRepository(app).CreateProject(r.Context(), project)
+	record, err := projectRepository(app).CreateProjectWithEvent(r.Context(), app, project, func(rec contracts.Record[map[string]any]) contracts.Event {
+		return eventFor(r, "ProjectCreated", rec.Data)
+	})
 	if err != nil {
 		if platform.IsCreateConflict(err) {
 			return http.StatusConflict, shared.ErrorData("project already exists"), nil
 		}
 		return http.StatusInternalServerError, shared.ErrorData("project could not be created"), nil
 	}
-	publishEvent(app, r, eventFor(r, "ProjectCreated", record.Data))
 	return http.StatusCreated, record.Data, nil
 }
 
@@ -115,11 +118,12 @@ func updateProject(app *platform.App, r *http.Request, _ platform.RouteSpec) (in
 	if len(update) == 1 {
 		return http.StatusOK, existing.Data, nil
 	}
-	old, updated, ok := projectRepository(app).UpdateProject(r.Context(), projectID, update)
-	if !ok {
+	_, updated, ok, err := projectRepository(app).UpdateProjectWithEvent(r.Context(), app, projectID, update, func(old, updated orgProjectRecord) contracts.Event {
+		return eventFor(r, "ProjectUpdated", map[string]any{"old": old.Data, "new": updated.Data})
+	})
+	if err != nil || !ok {
 		return http.StatusInternalServerError, shared.ErrorData("project update failed"), nil
 	}
-	publishEvent(app, r, eventFor(r, "ProjectUpdated", map[string]any{"old": old.Data, "new": updated.Data}))
 	return http.StatusOK, updated.Data, nil
 }
 
@@ -136,8 +140,18 @@ func deleteProject(app *platform.App, r *http.Request, _ platform.RouteSpec) (in
 	if !found {
 		return http.StatusNotFound, shared.ErrorData(msgProjectNotFound), nil
 	}
-	deleteProjectByID(app, r, projectID)
-	publishEvent(app, r, eventFor(r, "ProjectDeleted", project))
+	repo := projectRepository(app)
+	if err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		if _, _, ok, err := repo.DeleteProjectCascadeTx(r.Context(), tx, projectID); err != nil {
+			return err
+		} else if !ok {
+			return fmt.Errorf("project not found")
+		}
+		tx.Emit(eventFor(r, "ProjectDeleted", project))
+		return nil
+	}); err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("project delete failed"), nil
+	}
 	return http.StatusOK, nil, nil
 }
 
@@ -372,8 +386,15 @@ func deleteProjectMemberQuota(app *platform.App, r *http.Request, _ platform.Rou
 	if _, status, data, ok := requireProjectAdmin(app, r, projectID, actor); !ok {
 		return status, data, nil
 	}
-	projectRepository(app).DeleteProjectUserQuota(r.Context(), projectID, targetUserID)
-	publishEvent(app, r, eventFor(r, "UserQuotaDeleted", map[string]any{"project_id": projectID, "user_id": targetUserID}))
+	if err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		if _, err := projectRepository(app).DeleteProjectUserQuotaTx(r.Context(), tx, projectID, targetUserID); err != nil {
+			return err
+		}
+		tx.Emit(eventFor(r, "UserQuotaDeleted", map[string]any{"project_id": projectID, "user_id": targetUserID}))
+		return nil
+	}); err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("quota delete failed"), nil
+	}
 	return http.StatusOK, nil, nil
 }
 
@@ -441,11 +462,19 @@ func updateProjectWorkspaceSettings(app *platform.App, r *http.Request, _ platfo
 	if seconds < 0 {
 		return http.StatusBadRequest, shared.ErrorData("quota values must be non-negative"), nil
 	}
-	existing, updated, ok := projectRepository(app).UpdateWorkspaceSettings(r.Context(), projectID, seconds, time.Now().UTC())
-	if !ok {
+	var existing, updated orgProjectRecord
+	if err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		var ok bool
+		var e error
+		existing, updated, ok, e = projectRepository(app).UpdateWorkspaceSettingsTx(r.Context(), tx, projectID, seconds, time.Now().UTC())
+		if e != nil || !ok {
+			return e
+		}
+		tx.Emit(eventFor(r, "ProjectUpdated", map[string]any{"old": existing.Data, "new": updated.Data}))
+		return nil
+	}); err != nil {
 		return http.StatusInternalServerError, shared.ErrorData("workspace settings update failed"), nil
 	}
-	publishEvent(app, r, eventFor(r, "ProjectUpdated", map[string]any{"old": existing.Data, "new": updated.Data}))
 	return http.StatusOK, updated.Data, nil
 }
 
@@ -486,14 +515,22 @@ func createGPUClaim(app *platform.App, r *http.Request, _ platform.RouteSpec) (i
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(err.Error()), nil
 	}
-	record, err := groupGPURepository(app).CreateGPUClaim(r.Context(), claim)
+	var record orgProjectGPUClaimRecord
+	err = app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		var e error
+		record, e = groupGPURepository(app).CreateGPUClaimTx(r.Context(), tx, claim)
+		if e != nil {
+			return e
+		}
+		tx.Emit(eventFor(r, "GPUClaimCreated", record.Data))
+		return nil
+	})
 	if err != nil {
 		if platform.IsCreateConflict(err) {
 			return http.StatusConflict, shared.ErrorData("gpu claim already exists"), nil
 		}
 		return http.StatusInternalServerError, shared.ErrorData("gpu claim could not be created"), nil
 	}
-	publishEvent(app, r, eventFor(r, "GPUClaimCreated", record.Data))
 	return http.StatusCreated, record.Data, nil
 }
 
@@ -515,7 +552,15 @@ func deleteGPUClaim(app *platform.App, r *http.Request, _ platform.RouteSpec) (i
 	if shared.TextValue(record.Data, "user_id", "userId") != userID && !canManageProject(projectRoleForUser(app, r, project, userID)) {
 		return http.StatusForbidden, shared.ErrorData("project manager access required"), nil
 	}
-	deleted, _ := groupGPURepository(app).DeleteGPUClaim(r.Context(), record.ID)
-	publishEvent(app, r, eventFor(r, "GPUClaimDeleted", deleted.Data))
+	if err := app.WithTx(r.Context(), func(tx platform.StoreTx) error {
+		deleted, ok, e := groupGPURepository(app).DeleteGPUClaimTx(r.Context(), tx, record.ID)
+		if e != nil || !ok {
+			return e
+		}
+		tx.Emit(eventFor(r, "GPUClaimDeleted", deleted.Data))
+		return nil
+	}); err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("gpu claim delete failed"), nil
+	}
 	return http.StatusOK, nil, nil
 }

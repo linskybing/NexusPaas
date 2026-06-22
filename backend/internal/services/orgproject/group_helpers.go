@@ -94,6 +94,9 @@ func isGroupAdmin(app *platform.App, r *http.Request, uid, gid string) bool {
 }
 
 func hasAdminPanel(app *platform.App, r *http.Request, userID string) bool {
+	if requestRoleGrantsAdminPanel(app, r) {
+		return true
+	}
 	roles := orgIdentityRows(app, r, orgIdentityRoles, rolesResource)
 	for _, user := range orgIdentityRows(app, r, orgIdentityUsers, usersResource) {
 		if orgIdentityID(orgIdentityUsers, user) != userID && shared.TextValue(user, "user_id", "userId", "UserID") != userID {
@@ -111,6 +114,10 @@ func hasAdminPanel(app *platform.App, r *http.Request, userID string) bool {
 		return false
 	}
 	return false
+}
+
+func requestRoleGrantsAdminPanel(app *platform.App, r *http.Request) bool {
+	return app != nil && app.Config.RequireAuth && strings.EqualFold(r.Header.Get("X-User-Role"), "admin")
 }
 
 func recordGrantsAdminPanel(data map[string]any) bool {
