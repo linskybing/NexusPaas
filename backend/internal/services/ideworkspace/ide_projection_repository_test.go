@@ -92,6 +92,106 @@ func TestIDEProjectionRepositorySourceFallbackGating(t *testing.T) {
 	}
 }
 
+func TestIDEProjectionRepositoryProjectionDriftDetectsMissingOrphanStaleAndSorts(t *testing.T) {
+	ctx := context.Background()
+	store := platform.NewStore()
+	repo := ideProjectionRepoFromStore(store, platform.Config{ServiceName: "all"})
+
+	createIDEProjectionRecord(t, store, orgProjectsResource, map[string]any{"id": "P5", "project_id": "P5", "allow_run_as_root": true})
+	createIDEProjectionRecord(t, store, orgProjectsResource, map[string]any{"id": "P1", "project_id": "P1", "allow_run_as_root": false})
+	createIDEProjectionRecord(t, store, orgProjectsResource, map[string]any{"id": "P3", "project_id": "P3", "allow_run_as_root": true})
+	createIDEProjectionRecord(t, store, ideProjectsResource, map[string]any{"id": "P2", "project_id": "P2", "allow_run_as_root": false})
+	createIDEProjectionRecord(t, store, ideProjectsResource, map[string]any{"id": "P5", "project_id": "P5", "allow_run_as_root": false})
+	createIDEProjectionRecord(t, store, ideProjectsResource, map[string]any{"id": "P1", "project_id": "P1", "allow_run_as_root": false})
+	createIDEProjectionRecord(t, store, identityUsersResource, map[string]any{"id": "U5", "role_id": "source"})
+	createIDEProjectionRecord(t, store, identityUsersResource, map[string]any{"id": "U1", "role_id": "R1"})
+	createIDEProjectionRecord(t, store, identityUsersResource, map[string]any{"id": "U9", "role_id": "R9"})
+	createIDEProjectionRecord(t, store, ideIdentityUsersResource, map[string]any{"id": "U2", "role_id": "orphan"})
+	createIDEProjectionRecord(t, store, ideIdentityUsersResource, map[string]any{"id": "U5", "role_id": "local"})
+	createIDEProjectionRecord(t, store, ideIdentityUsersResource, map[string]any{"id": "U1", "role_id": "R1"})
+
+	report, err := repo.projectionDrift(ctx)
+	if err != nil {
+		t.Fatalf("projectionDrift: %v", err)
+	}
+	assertIDEProjectionDriftFindings(t, "missing", report.Missing,
+		ideProjectionDriftFinding{SourceResource: identityUsersResource, LocalResource: ideIdentityUsersResource, ID: "U9"},
+		ideProjectionDriftFinding{SourceResource: orgProjectsResource, LocalResource: ideProjectsResource, ID: "P3"},
+	)
+	assertIDEProjectionDriftFindings(t, "orphan", report.Orphan,
+		ideProjectionDriftFinding{SourceResource: identityUsersResource, LocalResource: ideIdentityUsersResource, ID: "U2"},
+		ideProjectionDriftFinding{SourceResource: orgProjectsResource, LocalResource: ideProjectsResource, ID: "P2"},
+	)
+	assertIDEProjectionDriftFindings(t, "stale", report.Stale,
+		ideProjectionDriftFinding{SourceResource: identityUsersResource, LocalResource: ideIdentityUsersResource, ID: "U5"},
+		ideProjectionDriftFinding{SourceResource: orgProjectsResource, LocalResource: ideProjectsResource, ID: "P5"},
+	)
+}
+
+func TestIDEProjectionRepositoryProjectionDriftNormalizesCanonicalID(t *testing.T) {
+	ctx := context.Background()
+	store := platform.NewStore()
+	repo := ideProjectionRepoFromStore(store, platform.Config{ServiceName: "all"})
+
+	createIDEProjectionRecord(t, store, identityUsersResource, map[string]any{"id": " U-normalized ", "role_id": "R1"})
+	createIDEProjectionRecord(t, store, ideIdentityUsersResource, map[string]any{"id": "U-normalized", "role_id": "R1"})
+
+	report, err := repo.projectionDrift(ctx)
+	if err != nil {
+		t.Fatalf("projectionDrift: %v", err)
+	}
+	assertIDEProjectionDriftFindings(t, "missing", report.Missing)
+	assertIDEProjectionDriftFindings(t, "orphan", report.Orphan)
+	assertIDEProjectionDriftFindings(t, "stale", report.Stale)
+}
+
+func TestIDEProjectionRepositoryProjectionDriftNilStoreFailsClosed(t *testing.T) {
+	repo := ideProjectionRepoFromStore(nil, platform.Config{ServiceName: serviceName})
+	if _, err := repo.projectionDrift(context.Background()); !errors.Is(err, errIDEProjectionRepositoryUnavailable) {
+		t.Fatalf("projectionDrift nil store error = %v, want %v", err, errIDEProjectionRepositoryUnavailable)
+	}
+}
+
+func TestIDEProjectionRepositoryProjectionDriftPairsCoverExpectedResources(t *testing.T) {
+	want := map[string]struct {
+		sourceResource string
+		id             string
+	}{
+		ideIdentityUsersResource:  {sourceResource: identityUsersResource, id: "U-map"},
+		ideIdentityRolesResource:  {sourceResource: identityRolesResource, id: "R-map"},
+		idePolicyRolesResource:    {sourceResource: authorizationRolesResource, id: "PR-map"},
+		ideProjectsResource:       {sourceResource: orgProjectsResource, id: "P-map"},
+		ideProjectMembersResource: {sourceResource: orgProjectMembersResource, id: "P-map:U-map"},
+		ideUserGroupsResource:     {sourceResource: orgUserGroupsResource, id: "U-map:G-map"},
+	}
+	if len(ideProjectionDriftPairs) != len(want) {
+		t.Fatalf("projection drift pair count = %d, want %d", len(ideProjectionDriftPairs), len(want))
+	}
+	got := map[string]string{}
+	for _, pair := range ideProjectionDriftPairs {
+		if pair.idFn == nil {
+			t.Fatalf("projection drift pair %s -> %s has nil id function", pair.sourceResource, pair.localResource)
+		}
+		expected, ok := want[pair.localResource]
+		if !ok {
+			t.Fatalf("unexpected projection drift local resource %s", pair.localResource)
+		}
+		got[pair.localResource] = pair.sourceResource
+		row := sampleIDEProjectionDriftRow(pair.localResource)
+		if id := pair.idFn(row); id != expected.id {
+			t.Fatalf("projection drift id for %s = %q, want %q", pair.localResource, id, expected.id)
+		}
+		if id := ideReadModelID(pair.localResource, row); id != expected.id {
+			t.Fatalf("ideReadModelID for %s = %q, want %q", pair.localResource, id, expected.id)
+		}
+	}
+	for localResource, expected := range want {
+		if got[localResource] != expected.sourceResource {
+			t.Fatalf("projection drift pair for %s = %q, want %q", localResource, got[localResource], expected.sourceResource)
+		}
+	}
+}
+
 func TestIDEProjectionRepositoryCloneIsolation(t *testing.T) {
 	ctx := context.Background()
 	store := platform.NewStore()
@@ -161,6 +261,37 @@ func requireNoIDEProjectionError(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func assertIDEProjectionDriftFindings(t *testing.T, label string, findings []ideProjectionDriftFinding, want ...ideProjectionDriftFinding) {
+	t.Helper()
+	if len(findings) != len(want) {
+		t.Fatalf("%s findings = %#v, want %#v", label, findings, want)
+	}
+	for i := range want {
+		if findings[i] != want[i] {
+			t.Fatalf("%s finding[%d] = %#v, want %#v", label, i, findings[i], want[i])
+		}
+	}
+}
+
+func sampleIDEProjectionDriftRow(resource string) map[string]any {
+	switch resource {
+	case ideIdentityUsersResource:
+		return map[string]any{"user_id": "U-map"}
+	case ideIdentityRolesResource:
+		return map[string]any{"role_id": "R-map"}
+	case idePolicyRolesResource:
+		return map[string]any{"role_id": "PR-map"}
+	case ideProjectsResource:
+		return map[string]any{"project_id": "P-map"}
+	case ideProjectMembersResource:
+		return map[string]any{"project_id": "P-map", "user_id": "U-map"}
+	case ideUserGroupsResource:
+		return map[string]any{"user_id": "U-map", "group_id": "G-map"}
+	default:
+		return map[string]any{}
 	}
 }
 

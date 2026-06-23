@@ -26,16 +26,22 @@ const (
 type RemotePDP struct {
 	endpoint string
 	apiKey   string
+	cfg      Config
 	client   *http.Client
 }
 
-func NewRemotePDP(baseURL, apiKey string, timeout time.Duration) RemotePDP {
+func NewRemotePDP(baseURL, apiKey string, timeout time.Duration, configs ...Config) RemotePDP {
 	if timeout <= 0 {
 		timeout = 2 * time.Second
+	}
+	cfg := Config{ServiceAPIKey: strings.TrimSpace(apiKey)}
+	if len(configs) > 0 {
+		cfg = configs[0]
 	}
 	return RemotePDP{
 		endpoint: remotePDPEndpoint(baseURL),
 		apiKey:   strings.TrimSpace(apiKey),
+		cfg:      cfg,
 		client:   &http.Client{Timeout: timeout, Transport: otelhttp.NewTransport(http.DefaultTransport)},
 	}
 }
@@ -55,8 +61,8 @@ func (p RemotePDP) Enforce(ctx context.Context, subject, domain, object, action 
 		return denyDecision("remote policy request could not be created"), err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	p.cfg.applyServiceIdentityHeaders(req.Header)
 	if p.apiKey != "" {
-		req.Header.Set(serviceKeyHeader, p.apiKey)
 		// Keep X-API-Key during rolling upgrades with older policy-service pods.
 		req.Header.Set("X-API-Key", p.apiKey)
 	}

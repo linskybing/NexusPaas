@@ -14,10 +14,11 @@ admission should be preserved and productized.
 ## WebRTC Deployment Flow
 
 ```text
-User submits ConfigFile with streaming_session=true
-  -> Project capability check: allow_webrtc
+User submits ConfigFile (their own app image) with streaming_session=true
+  -> Project capability check: allow_webrtc                      [target]
   -> Plan/Queue streaming limit check
   -> GPU/DRA/MPS admission if GPU requested
+  -> Dispatch auto-injects the Selkies sidecar + shared display/GPU claim
   -> Workload deployed
   -> User opens NexusPaaS stream URL
   -> workload-service issues short-lived TURN credentials
@@ -25,17 +26,17 @@ User submits ConfigFile with streaming_session=true
   -> Usage agent attributes CPU/RAM/GPU/process/stream usage
 ```
 
-## Required Submit Fields
+## Submit Fields
+
+Implemented (enforced today):
 
 ```json
-{
-  "streaming_session": true,
-  "stream_max_bitrate_kbps": 12000,
-  "stream_resolution": "1920x1080",
-  "stream_fps": 60,
-  "stream_idle_timeout_seconds": 1800
-}
+{ "streaming_session": true, "stream_max_bitrate_kbps": 12000 }
 ```
+
+Target (not yet implemented — tracked as gaps, do not assume enforced):
+`stream_resolution`, `stream_fps`, `stream_idle_timeout_seconds`, and the
+`allow_webrtc` Project capability. The sidecar currently defaults to 1080p60.
 
 ## Streaming Security Rules
 
@@ -102,6 +103,13 @@ visibility through the first-party GUI and Project GPU route on
 `e2e-p-mqooctn3-fammye` reported `gpu_status=200`, `gpu_used=1`, and
 `gpu_nonzero=true` for a Kubernetes fixture pod requesting
 `nvidia.com/gpu: "1"`.
+
+Selkies now attaches as an **auto-injected sidecar**, not a baked image: a
+`streaming_session` job keeps the user's own app image, and dispatch injects the
+`selkies` container, shared `/tmp/.X11-unix` + `/dev/shm` volumes, `DISPLAY=:0`,
+and a shared MPS claim. This injection is unit-evidenced in
+`backend/internal/services/workload/dispatcher_streaming_test.go` (sidecar
+present, app image unchanged, idempotent, sidecar image required).
 
 This does not prove browser media E2E, real GPU-node streaming, egress budget
 enforcement, per-device GPU utilization telemetry, or stream metrics.

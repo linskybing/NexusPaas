@@ -18,5 +18,9 @@ data:
   STREAM_MAX_BITRATE_KBPS: "12000"
   STREAM_MAX_CONCURRENT_SESSIONS: "64"
   STREAM_EGRESS_BUDGET_KBPS: "800000"
+  # Pre-built Selkies sidecar image auto-injected into streaming_session pods.
+  STREAM_SIDECAR_IMAGE: ""
+  # SERVICE_IDENTITY_NAME defaults to each unit SERVICE_NAME. Service identity
+  # keys and trusted caller maps belong in each <unit>-runtime-secret.
   SERVICE_URLS: >-
     {"audit-compliance-service":"http://collaboration-unit","authorization-policy-service":"http://iam-unit","ide-service":"http://compute-api","identity-service":"http://iam-unit","image-registry-service":"http://platform-io-unit","integration-proxy-service":"http://platform-io-unit","k8s-control-service":"http://compute-control-plane","media-upload-service":"http://collaboration-unit","org-project-service":"http://tenant-unit","platform-gateway":"http://platform-gateway","request-notification-service":"http://collaboration-unit","scheduler-quota-service":"http://compute-control-plane","storage-service":"http://platform-io-unit","usage-observability-service":"http://usage-observability","workload-service":"http://compute-api"}

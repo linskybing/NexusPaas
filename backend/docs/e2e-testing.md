@@ -400,11 +400,12 @@ TEST_LIVE_K8S_CONFIGFILE_DRA=1 \
 rg '^--- PASS: TestLiveK8sConfigFileDRADispatchE2E' /tmp/live-configfile-dra-e2e.log
 ```
 
-Use that same live DRA test for browser GPU streaming dispatch acceptance: the
-Selkies ConfigFile template still declares `nvidia.com/gpu: "1"`, so it must hit
-the existing ResourceClaimTemplate + MPS injection path. Browser WebRTC, NVENC,
-and forced-TURN relay validation are operator-run checks on a GPU cluster; see
-`docs/browser-gpu-streaming.md`.
+Use that same live DRA test for browser GPU streaming dispatch acceptance: a
+`streaming_session` job keeps `nvidia.com/gpu: "1"`, so dispatch auto-injects the
+`selkies` sidecar + shared X11/shm volumes and hits the existing
+ResourceClaimTemplate + MPS injection path, with app and sidecar sharing one
+claim. Browser WebRTC, NVENC, and forced-TURN relay validation are operator-run
+checks on a GPU cluster; see `docs/browser-gpu-streaming.md`.
 
 Run the optional live Harbor adapter boundary E2E only when `HARBOR_URL` points
 at a local or staging Harbor endpoint. This test verifies the existing Harbor

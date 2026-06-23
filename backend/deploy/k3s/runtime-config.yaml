@@ -13,3 +13,5 @@ data:
   STREAM_MAX_BITRATE_KBPS: "12000"
   STREAM_MAX_CONCURRENT_SESSIONS: "64"
   STREAM_EGRESS_BUDGET_KBPS: "800000"
+  # Pre-built Selkies sidecar image auto-injected into streaming_session pods.
+  STREAM_SIDECAR_IMAGE: ""

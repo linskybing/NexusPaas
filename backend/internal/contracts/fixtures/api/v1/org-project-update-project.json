@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "contract_name": "org-project.update_project",
+  "owner_service": "org-project-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "org-project-service:projects",
+  "action": "update",
+  "method": "PUT",
+  "path": "/api/v1/projects/{id}",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [
+    "id"
+  ],
+  "required_request_fields": [
+    "project_name"
+  ],
+  "optional_request_fields": [
+    "g_id",
+    "group_id",
+    "owner_id",
+    "description",
+    "plan_id",
+    "personal_user_id",
+    "max_concurrent_jobs_per_user",
+    "max_queued_jobs_per_user",
+    "max_job_runtime_seconds",
+    "max_ide_runtime_seconds",
+    "max_project_users",
+    "allow_image_build",
+    "allow_node_port",
+    "allow_run_as_root",
+    "external_network_enabled"
+  ],
+  "request_example": {
+    "project_name": "ga-training-updated",
+    "description": "Updated synthetic first-release project",
+    "g_id": "group-ga-001",
+    "plan_id": "plan-ga-002",
+    "personal_user_id": "user-ga-owner",
+    "max_concurrent_jobs_per_user": 3,
+    "max_queued_jobs_per_user": 10,
+    "max_job_runtime_seconds": 28800,
+    "max_ide_runtime_seconds": 18000,
+    "max_project_users": 30,
+    "allow_image_build": true,
+    "allow_node_port": false,
+    "allow_run_as_root": false,
+    "external_network_enabled": true
+  },
+  "success_statuses": [
+    200
+  ],
+  "error_statuses": [
+    400,
+    401,
+    403,
+    404,
+    500
+  ],
+  "emits_events": [
+    "ProjectUpdated"
+  ],
+  "response_example": {
+    "id": "project-ga-001",
+    "p_id": "project-ga-001",
+    "project_id": "project-ga-001",
+    "project_name": "ga-training-updated",
+    "name": "ga-training-updated",
+    "description": "Updated synthetic first-release project",
+    "owner_id": "group-ga-001",
+    "g_id": "group-ga-001",
+    "path": "ga-training",
+    "plan_id": "plan-ga-002",
+    "personal_user_id": "user-ga-owner",
+    "max_concurrent_jobs_per_user": 3,
+    "max_queued_jobs_per_user": 10,
+    "max_job_runtime_seconds": 28800,
+    "max_ide_runtime_seconds": 18000,
+    "max_project_users": 30,
+    "allow_image_build": true,
+    "allow_node_port": false,
+    "allow_run_as_root": false,
+    "external_network_enabled": true,
+    "created_at": "2026-06-22T00:00:00Z",
+    "updated_at": "2026-06-23T00:00:00Z"
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

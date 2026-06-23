@@ -50,10 +50,10 @@ var requestGuards = []routeGuard{
 		if !route.ServiceAuthRequired {
 			return false, 0, "", ""
 		}
-		if a.Config.ServiceAPIKey == "" {
+		if !a.Config.acceptsServiceIdentity() {
 			return true, http.StatusNotFound, "not_found", "not found"
 		}
-		if !a.ServiceRequestAuthorized(r) {
+		if !a.serviceRequestAuthorizedForAudience(r, routeService(route)) {
 			return true, http.StatusUnauthorized, "unauthorized", "service authentication is required"
 		}
 		return false, 0, "", ""

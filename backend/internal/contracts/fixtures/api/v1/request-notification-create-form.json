@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "contract_name": "request-notification.create_form",
+  "owner_service": "request-notification-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "request-notification-service:forms",
+  "action": "create",
+  "method": "POST",
+  "path": "/api/v1/forms",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [],
+  "required_request_fields": [
+    "title",
+    "description"
+  ],
+  "optional_request_fields": [
+    "project_id",
+    "tag"
+  ],
+  "request_example": {
+    "title": "Need GPU quota",
+    "description": "Training job needs additional capacity",
+    "project_id": "project-ga-001",
+    "tag": "resource"
+  },
+  "success_statuses": [
+    201
+  ],
+  "error_statuses": [
+    400,
+    401,
+    403,
+    500
+  ],
+  "emits_events": [
+    "FormCreated"
+  ],
+  "response_example": {
+    "id": "form-ga-001",
+    "created_at": "2026-06-22T00:00:00Z",
+    "updated_at": "2026-06-22T00:00:00Z",
+    "user_id": "user-ga-requester",
+    "project_id": "project-ga-001",
+    "title": "Need GPU quota",
+    "description": "Training job needs additional capacity",
+    "tag": "resource",
+    "status": "Pending"
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

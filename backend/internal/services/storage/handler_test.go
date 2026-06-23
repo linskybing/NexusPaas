@@ -107,6 +107,47 @@ func TestStorageGroupPermissionsAndUserStorageWorkflow(t *testing.T) {
 	}
 }
 
+func TestStoragePermissionManagementFollowsGroupRBAC(t *testing.T) {
+	t.Run("plain member cannot create permission", func(t *testing.T) {
+		app := newStorageTestApp(t)
+
+		req := storageRequest(http.MethodPost, "/api/v1/storage/permissions", `{"group_id":"G1","pvc_id":"pvc1","user_id":"U3","permission":"read_write"}`, "U2")
+		code, data, _ := createStoragePermission(app, req, platform.RouteSpec{})
+
+		assertStorageStatus(t, code, data, http.StatusForbidden)
+		assertStorageRecordMissing(t, app, storagePermissionsResource, "G1:pvc1:U3")
+	})
+
+	t.Run("plain member cannot batch set permissions", func(t *testing.T) {
+		app := newStorageTestApp(t)
+
+		req := storageRequest(http.MethodPost, "/api/v1/storage/permissions/batch", `{"group_id":"G1","items":[{"pvc_id":"pvc1","user_id":"U3","permission":"read_write"}]}`, "U2")
+		code, data, _ := batchSetStoragePermissions(app, req, platform.RouteSpec{})
+
+		assertStorageStatus(t, code, data, http.StatusForbidden)
+		assertStorageRecordMissing(t, app, storagePermissionsResource, "G1:pvc1:U3")
+	})
+
+	t.Run("plain member cannot batch delete permissions", func(t *testing.T) {
+		app := newStorageTestApp(t)
+		createStorageRecords(t, app, storagePermissionsResource, []map[string]any{
+			{"id": "G1:pvc1:U3", "group_id": "G1", "pvc_id": "pvc1", "user_id": "U3", "permission": "read_only"},
+		})
+
+		req := storageRequest(http.MethodDelete, "/api/v1/storage/permissions/batch", `{"group_id":"G1","items":[{"pvc_id":"pvc1","user_id":"U3"}]}`, "U2")
+		code, data, _ := batchDeleteStoragePermissions(app, req, platform.RouteSpec{})
+
+		assertStorageStatus(t, code, data, http.StatusForbidden)
+		row, ok := app.Store.Get(context.Background(), storagePermissionsResource, "G1:pvc1:U3")
+		if !ok {
+			t.Fatal("seeded group storage permission was deleted")
+		}
+		if row.Data["permission"] != "read_only" {
+			t.Fatalf("seeded group storage permission = %#v, want read_only", row)
+		}
+	})
+}
+
 func TestStorageProjectBindingsTransfersAndValidation(t *testing.T) {
 	app := newStorageTestApp(t)
 
@@ -177,6 +218,50 @@ func TestStorageProjectBindingsTransfersAndValidation(t *testing.T) {
 	if got := app.Store.List(context.Background(), projectPermissionsResource); len(got) != 0 {
 		t.Fatalf("project permissions after binding delete = %#v, want cleanup", got)
 	}
+}
+
+func TestProjectStoragePermissionManagementFollowsProjectRBAC(t *testing.T) {
+	t.Run("project reader cannot set permission", func(t *testing.T) {
+		app := newStorageTestApp(t)
+		createProjectStorageFixtures(t, app)
+
+		req := storageProjectRequest(http.MethodPut, "/api/v1/projects/P1/storage/bindings/pvc1/permissions", `{"user_id":"U1","permission":"read_write"}`, "U2", "P1")
+		req.SetPathValue("pvcId", "pvc1")
+		code, data, _ := setProjectBindingPermission(app, req, platform.RouteSpec{})
+
+		assertStorageStatus(t, code, data, http.StatusForbidden)
+		assertStorageRecordMissing(t, app, projectPermissionsResource, "P1:pvc1:U1")
+	})
+
+	t.Run("project reader cannot batch set permissions", func(t *testing.T) {
+		app := newStorageTestApp(t)
+		createProjectStorageFixtures(t, app)
+
+		req := storageProjectRequest(http.MethodPut, "/api/v1/projects/P1/storage/bindings/pvc1/permissions/batch", `{"items":[{"user_id":"U1","permission":"read_write"}]}`, "U2", "P1")
+		req.SetPathValue("pvcId", "pvc1")
+		code, data, _ := batchSetProjectBindingPermissions(app, req, platform.RouteSpec{})
+
+		assertStorageStatus(t, code, data, http.StatusForbidden)
+		assertStorageRecordMissing(t, app, projectPermissionsResource, "P1:pvc1:U1")
+	})
+
+	t.Run("project reader cannot batch delete permissions", func(t *testing.T) {
+		app := newStorageTestApp(t)
+		createProjectStorageFixtures(t, app)
+
+		req := storageProjectRequest(http.MethodDelete, "/api/v1/projects/P1/storage/bindings/pvc1/permissions/batch", `{"items":[{"user_id":"U4"}]}`, "U2", "P1")
+		req.SetPathValue("pvcId", "pvc1")
+		code, data, _ := batchDeleteProjectBindingPermissions(app, req, platform.RouteSpec{})
+
+		assertStorageStatus(t, code, data, http.StatusForbidden)
+		row, ok := app.Store.Get(context.Background(), projectPermissionsResource, "P1:pvc1:U4")
+		if !ok {
+			t.Fatal("seeded project storage permission was deleted")
+		}
+		if row.Data["permission"] != "read_write" {
+			t.Fatalf("seeded project storage permission = %#v, want read_write", row)
+		}
+	})
 }
 
 func TestStorageDeletionBatchAndUserLifecycle(t *testing.T) {

@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "contract_name": "org-project.batch_delete_projects",
+  "owner_service": "org-project-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "org-project-service:projects",
+  "action": "batch_delete",
+  "method": "DELETE",
+  "path": "/api/v1/projects/batch",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [],
+  "required_request_fields": [
+    "ids"
+  ],
+  "optional_request_fields": [],
+  "request_example": {
+    "ids": [
+      "project-ga-001",
+      "project-ga-002"
+    ]
+  },
+  "success_statuses": [
+    200
+  ],
+  "error_statuses": [
+    400,
+    401,
+    403,
+    500
+  ],
+  "emits_events": [
+    "ProjectDeleted"
+  ],
+  "response_example": {
+    "succeeded": 2,
+    "failed": 0,
+    "errors": []
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

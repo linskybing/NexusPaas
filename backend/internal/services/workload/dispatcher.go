@@ -165,6 +165,10 @@ func prepareDispatchManifests(job map[string]any, resources []dispatchResource, 
 	if err != nil {
 		return nil, err
 	}
+	resources, err = prepareStreamingDispatchResources(job, resources)
+	if err != nil {
+		return nil, err
+	}
 	prefix, resources, err := prepareDRADispatchManifests(job, resources, namespace)
 	if err != nil {
 		return nil, err

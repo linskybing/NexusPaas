@@ -12,6 +12,114 @@ import (
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
 )
 
+func TestResolveStorageMountPlanAllowsBoundReadyReadWriteProjectPermission(t *testing.T) {
+	app := newStorageMountPlanResolverApp(t)
+	seedMountPlanBinding(t, app, "project-1", "group-1", "pvc-data", "project-data-claim")
+	seedMountPlanGroupSource(t, app, "group-1", "pvc-data", "running")
+	seedMountPlanProjectPermission(t, app, "project-1", "pvc-data", "user-1", "read_write")
+
+	plan, status, err := resolveStorageMountPlan(app, storageMountPlanResolverRequest(), storageMountPlanRequest{
+		ProjectID: "project-1",
+		UserID:    "user-1",
+		Namespace: "project-one",
+		Mounts: []storageMountPlanRequestMount{{
+			PVCID:     "pvc-data",
+			Name:      "datasets",
+			MountPath: "/mnt/data",
+			ReadOnly:  false,
+			SubPath:   "training",
+		}},
+	})
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("status=%d err=%v plan=%#v, want resolved mount plan", status, err, plan)
+	}
+	if len(plan.ManifestMounts) != 1 {
+		t.Fatalf("manifest mounts = %#v, want exactly one", plan.ManifestMounts)
+	}
+	mount := plan.ManifestMounts[0]
+	if mount.ClaimName != "project-data-claim" || mount.MountPath != "/mnt/data" || mount.ReadOnly || mount.SubPath != "training" {
+		t.Fatalf("manifest mount = %#v, want target claim and writable mount details from request/binding", mount)
+	}
+	if len(plan.PVCShareOperations) != 1 {
+		t.Fatalf("pvc share operations = %#v, want exactly one", plan.PVCShareOperations)
+	}
+	share := plan.PVCShareOperations[0]
+	if share.SourceNamespace != "group-1-source-ns" || share.SourcePVC != "group-1-source-pvc-data" || share.TargetPVC != "project-data-claim" {
+		t.Fatalf("share operation = %#v, want storage-owned source namespace/source PVC and binding target PVC", share)
+	}
+}
+
+func TestResolveStorageMountPlanRejectsOtherProjectBinding(t *testing.T) {
+	app := newStorageMountPlanResolverApp(t)
+	seedMountPlanBinding(t, app, "project-2", "group-1", "pvc-data", "project-data-claim")
+	seedMountPlanGroupSource(t, app, "group-1", "pvc-data", "running")
+	seedMountPlanProjectPermission(t, app, "project-2", "pvc-data", "user-1", "read_write")
+
+	_, status, err := resolveStorageMountPlan(app, storageMountPlanResolverRequest(), storageMountPlanWriteRequest())
+	assertMountPlanResolverError(t, status, err, http.StatusNotFound, "storage binding not found")
+}
+
+func TestResolveStorageMountPlanRejectsOtherUserPermission(t *testing.T) {
+	app := newStorageMountPlanResolverApp(t)
+	seedMountPlanBinding(t, app, "project-1", "group-1", "pvc-data", "project-data-claim")
+	seedMountPlanGroupSource(t, app, "group-1", "pvc-data", "running")
+	seedMountPlanProjectPermission(t, app, "project-1", "pvc-data", "user-2", "read_write")
+
+	_, status, err := resolveStorageMountPlan(app, storageMountPlanResolverRequest(), storageMountPlanWriteRequest())
+	assertMountPlanResolverError(t, status, err, http.StatusForbidden, "storage permission denied")
+}
+
+func TestResolveStorageMountPlanDeniesUnboundPVC(t *testing.T) {
+	app := newStorageMountPlanResolverApp(t)
+	seedMountPlanGroupSource(t, app, "group-1", "pvc-data", "running")
+	seedMountPlanProjectPermission(t, app, "project-1", "pvc-data", "user-1", "read_write")
+
+	_, status, err := resolveStorageMountPlan(app, storageMountPlanResolverRequest(), storageMountPlanWriteRequest())
+	assertMountPlanResolverError(t, status, err, http.StatusNotFound, "storage binding not found")
+}
+
+func TestResolveStorageMountPlanDeniesStoppedOrDeletedSource(t *testing.T) {
+	for _, sourceStatus := range []string{"stopped", "deleted"} {
+		t.Run(sourceStatus, func(t *testing.T) {
+			app := newStorageMountPlanResolverApp(t)
+			seedMountPlanBinding(t, app, "project-1", "group-1", "pvc-data", "project-data-claim")
+			seedMountPlanGroupSource(t, app, "group-1", "pvc-data", sourceStatus)
+			seedMountPlanProjectPermission(t, app, "project-1", "pvc-data", "user-1", "read_write")
+
+			_, status, err := resolveStorageMountPlan(app, storageMountPlanResolverRequest(), storageMountPlanWriteRequest())
+			assertMountPlanResolverError(t, status, err, http.StatusConflict, "group storage source is not dispatch-ready")
+		})
+	}
+}
+
+func TestResolveStorageMountPlanDeniesWritableMountWithReadOnlyPermission(t *testing.T) {
+	app := newStorageMountPlanResolverApp(t)
+	seedMountPlanBinding(t, app, "project-1", "group-1", "pvc-data", "project-data-claim")
+	seedMountPlanGroupSource(t, app, "group-1", "pvc-data", "running")
+	seedMountPlanProjectPermission(t, app, "project-1", "pvc-data", "user-1", "read_only")
+
+	_, status, err := resolveStorageMountPlan(app, storageMountPlanResolverRequest(), storageMountPlanWriteRequest())
+	assertMountPlanResolverError(t, status, err, http.StatusForbidden, "storage permission denied")
+
+	readOnlyReq := storageMountPlanWriteRequest()
+	readOnlyReq.Mounts[0].ReadOnly = true
+	plan, status, err := resolveStorageMountPlan(app, storageMountPlanResolverRequest(), readOnlyReq)
+	if err != nil || status != http.StatusOK || len(plan.ManifestMounts) != 1 || len(plan.PVCShareOperations) != 1 {
+		t.Fatalf("status=%d err=%v plan=%#v, want read-only mount allowed by read_only permission", status, err, plan)
+	}
+}
+
+func TestResolveStorageMountPlanProjectPermissionOverridesGroupReadWriteToDenyWritableMount(t *testing.T) {
+	app := newStorageMountPlanResolverApp(t)
+	seedMountPlanBinding(t, app, "project-1", "group-1", "pvc-data", "project-data-claim")
+	seedMountPlanGroupSource(t, app, "group-1", "pvc-data", "running")
+	seedMountPlanGroupPermission(t, app, "group-1", "pvc-data", "user-1", "read_write")
+	seedMountPlanProjectPermission(t, app, "project-1", "pvc-data", "user-1", "read_only")
+
+	_, status, err := resolveStorageMountPlan(app, storageMountPlanResolverRequest(), storageMountPlanWriteRequest())
+	assertMountPlanResolverError(t, status, err, http.StatusForbidden, "storage permission denied")
+}
+
 func TestStorageMountPlanContractResolvesProjectBindingAndPermission(t *testing.T) {
 	app := newStorageMountPlanTestApp(t)
 	createProjectStorageFixtures(t, app)
@@ -233,6 +341,86 @@ func postStorageMountPlan(t *testing.T, app *platform.App, key, body string) (in
 		}
 	}
 	return rec.Code, data, errBody
+}
+
+func newStorageMountPlanResolverApp(t *testing.T) *platform.App {
+	t.Helper()
+	return platform.NewApp(platform.Config{ServiceName: serviceName, HTTPAddr: ":0"})
+}
+
+func storageMountPlanResolverRequest() *http.Request {
+	return httptest.NewRequest(http.MethodPost, "/internal/storage/projects/project-1/mount-plan", nil)
+}
+
+func storageMountPlanWriteRequest() storageMountPlanRequest {
+	return storageMountPlanRequest{
+		ProjectID: "project-1",
+		UserID:    "user-1",
+		Namespace: "project-one",
+		Mounts: []storageMountPlanRequestMount{{
+			PVCID:     "pvc-data",
+			MountPath: "/mnt/data",
+		}},
+	}
+}
+
+func seedMountPlanGroupSource(t *testing.T, app *platform.App, groupID, pvcID, status string) {
+	t.Helper()
+	createMountPlanResolverRecord(t, app, groupStorageResource, map[string]any{
+		"id":               groupStorageID(groupID, pvcID),
+		"group_id":         groupID,
+		"pvc_id":           pvcID,
+		"source_namespace": groupID + "-source-ns",
+		"source_pvc":       groupID + "-source-" + pvcID,
+		"status":           status,
+	})
+}
+
+func seedMountPlanBinding(t *testing.T, app *platform.App, projectID, groupID, pvcID, targetPVC string) {
+	t.Helper()
+	createMountPlanResolverRecord(t, app, projectBindingsResource, map[string]any{
+		"id":         projectBindingID(projectID, pvcID),
+		"project_id": projectID,
+		"group_id":   groupID,
+		"pvc_id":     pvcID,
+		"target_pvc": targetPVC,
+	})
+}
+
+func seedMountPlanProjectPermission(t *testing.T, app *platform.App, projectID, pvcID, userID, permission string) {
+	t.Helper()
+	createMountPlanResolverRecord(t, app, projectPermissionsResource, map[string]any{
+		"id":         projectPermissionID(projectID, pvcID, userID),
+		"project_id": projectID,
+		"pvc_id":     pvcID,
+		"user_id":    userID,
+		"permission": permission,
+	})
+}
+
+func seedMountPlanGroupPermission(t *testing.T, app *platform.App, groupID, pvcID, userID, permission string) {
+	t.Helper()
+	createMountPlanResolverRecord(t, app, storagePermissionsResource, map[string]any{
+		"id":         storagePermissionID(groupID, pvcID, userID),
+		"group_id":   groupID,
+		"pvc_id":     pvcID,
+		"user_id":    userID,
+		"permission": permission,
+	})
+}
+
+func createMountPlanResolverRecord(t *testing.T, app *platform.App, resource string, row map[string]any) {
+	t.Helper()
+	if _, err := app.Store.Create(context.Background(), resource, row); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertMountPlanResolverError(t *testing.T, status int, err error, wantStatus int, wantMessage string) {
+	t.Helper()
+	if status != wantStatus || err == nil || err.Error() != wantMessage {
+		t.Fatalf("status=%d err=%v, want %d %q", status, err, wantStatus, wantMessage)
+	}
 }
 
 func assertStorageMountPlanDecisionEvent(t *testing.T, event contracts.Event) {

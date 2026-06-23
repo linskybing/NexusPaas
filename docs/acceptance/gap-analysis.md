@@ -13,7 +13,7 @@ version**, not a perfect platform. Each gap is tagged **[Blocks-v1]** (a launche
 product would be incomplete or unsafe without it) or **[Defer]** (real, but can
 follow the first launch).
 
-## Blocks-v1 — referenced by existing flows but has no acceptance coverage
+## Blocks-v1 — proposed coverage for flows the original spec did not fully cover
 
 ### WEB-* — Web UI parity
 The GA goal and final definition both say "CLI **or Web UI**", and several ACs
@@ -46,13 +46,102 @@ submitted ConfigFile `CFG2600007`, submitted Job `e2e-job-mqneymza-1tqckn`,
 requested logs with `job_logs_status=200` / `job_logs_count=0`, and requested
 cancel with command `94925e294549528a2190b3dbafd09592`; the later bounded
 pod-log proof below closes the non-empty log evidence gap. `WEB-005` and
-`WEB-007` have partial
-read-only surfaces: the Images panel calls existing Project image and
-image-build routes, and live seeded E2E proves a created image build appears in
-the active Project's build list. The Usage panel calls existing current-user
+`WEB-007` have partial surfaces: the Images panel calls existing Project image
+and image-build routes, and live seeded E2E proves a created image build appears
+in the active Project's build list. WEB-005 / IMG-024 now also has focused local
+frontend evidence for active-Project Dockerfile build submission through
+`POST /api/v1/images/build/dockerfile`, including trimmed `image_reference`,
+success refresh of Project images/builds, no `/admin` fallback, no browser
+storage persistence, and generic secret-safe submit failure text. The Usage
+panel calls existing current-user
 usage, request-usage, and active-Project GPU usage routes. Unit tests cover
 image/build rows, active-Project usage filtering, forbidden Project GPU usage
 rendering, no admin-usage fallback, and no browser credential persistence.
+Image-registry Dockerfile build submission now also has local/static typed
+external REST fixture coverage for `POST /api/v1/images/build/dockerfile`: the
+fixture uses `202 Accepted`, requires `project_id` and `image_reference`, emits
+only `ImageBuildStarted`, and is checked against `imageregistry.Spec()` for
+auth, route, path params, state-changing, and `harbor` adapter metadata. This is
+static contract evidence only; it does not prove live Harbor build execution,
+SBOM/signing, allow-list enforcement, image scan lifecycle, or full image
+workflow GA.
+Workload job submission now also has local/static typed external REST fixture
+coverage for `POST /api/v1/jobs`: the fixture uses `201 Created`, requires
+`project_id` and `user_id`, keeps queue/resource/config/streaming fields as
+optional UI/admission/defaultable payload fields, emits only `JobSubmitted`,
+and is checked against `workload.Spec()` for auth, route, path params,
+state-changing, success status, and event metadata. This is static contract
+evidence only; it does not prove live scheduler admission, queue policy
+completeness, Kubernetes job execution, logs/tailing, GPU telemetry,
+WEB-003/WEB-004 completion, or full workload GA.
+Workload ConfigFile creation now also has local/static typed external REST
+fixture coverage for `POST /api/v1/configfiles`: the fixture uses `201 Created`,
+requires `project_id` and `name`, keeps accepted aliases/payload fields
+optional, emits `ConfigFileChanged` as handler-emitted create evidence, and is
+checked against `workload.Spec()` for auth, route, no service key/path params,
+non-admin state-changing behavior, success status, and source-backed error
+statuses. This is static contract evidence only; it does not prove live
+scheduler admission, Kubernetes job execution, logs/tailing, GPU telemetry,
+WEB-003/WEB-004 completion, DATA GA, Full GA, or first-version readiness.
+Workload ConfigFile deletion now also has local/static typed external REST
+fixture coverage for `DELETE /api/v1/configfiles/{id}`: the fixture uses empty
+`{}` body, `id` path parameter, `200 OK`, emits `ConfigFileChanged`, models the
+direct delete response `{"id":"config-ga-001","deleted":true}`, and is checked
+against `workload.Spec()` for auth, route, ID param, no service key, non-admin
+state-changing behavior, success/error statuses, empty-body semantics, response
+shape, and event metadata. This is static contract evidence only; it does not
+prove live ConfigFile deletion, project isolation, event delivery, scheduler
+admission, Kubernetes job execution, ConfigFile runtime rollout, WEB-003/WEB-004
+completion, DATA GA, Full GA, or first-version readiness.
+Workload ConfigFile update now also has local/static typed external REST
+fixture coverage for `PUT /api/v1/configfiles/{id}`: the fixture uses `200 OK`,
+requires `content`, carries `id` as the only path parameter, keeps
+`name`/`filename`/`path`/`manifest`/`yaml`/`config` and same-Project
+`projectId`/`project_id` aliases optional, emits `ConfigFileChanged`, models
+the updated ConfigFile record response, and is checked against `workload.Spec()`
+for auth, route, ID param, no service key, non-admin state-changing behavior,
+success/error statuses, response shape, and event metadata. `ConfigFileChanged`
+is also listed in `workload.Spec().Events` to match existing handler emission.
+The optional project aliases do not imply cross-Project moves are supported;
+the handler rejects those with `400`. This is static contract evidence only; it
+does not prove live ConfigFile update, project isolation, event delivery,
+ConfigFile runtime rollout, WEB-003/WEB-004 completion, DATA GA, Full GA, or
+first-version readiness.
+Workload ConfigFile PATCH update now also has local/static typed external REST
+fixture coverage for `PATCH /api/v1/configfiles/{id}`: the fixture uses
+`200 OK`, requires `content`, carries `id` as the only path parameter, keeps the
+same optional update fields as the PUT fixture, emits `ConfigFileChanged`,
+models the updated ConfigFile record response, and is checked against
+`workload.Spec()` for auth, route, ID param, no service key, non-admin
+state-changing behavior, success/error statuses, response shape, and event
+metadata. Its request example omits `project_id` and `projectId`, so it does
+not imply cross-Project ConfigFile moves. This is static contract evidence
+only; it does not prove live ConfigFile PATCH update, project isolation, event
+delivery, ConfigFile runtime rollout, WEB-003/WEB-004 completion, DATA GA, Full
+GA, or first-version readiness.
+Workload job cancellation now also has local/static typed external REST fixture
+coverage for `POST /api/v1/jobs/{id}/cancel`: the fixture uses empty `{}` body,
+`id` path parameter, `202 Accepted`, emits `JobCancelRequested`, models the
+returned command record, and is checked against `workload.Spec()` for auth,
+route, ID param, no service key, non-admin state-changing behavior,
+success/error statuses, empty-body command semantics, response shape, and event
+metadata. `JobCancelRequested` is also listed in `workload.Spec().Events` to
+match the existing handler emission. This is static contract evidence only; it
+does not prove live scheduler cancellation, Kubernetes job termination,
+cancellation propagation, logs/tailing, GPU telemetry, WEB-004 completion, DATA
+GA, Full GA, or first-version readiness.
+Workload ConfigFile version commit now also has local/static typed external
+REST fixture coverage for `POST /api/v1/configfiles/{id}/versions`: the
+fixture uses `201 Created`, requires `content`, carries `id` as the only path
+parameter, preserves optional `message`/`manifest`/`yaml`/`config` fields, emits
+`ConfigCommitted`, models the returned immutable version record with
+`config_id`, `content`, `message`, `sha256`, and `committed_at`, and is checked
+against `workload.Spec()` for auth, route, ID param, no service key, non-admin
+state-changing behavior, success/error statuses, response shape, and event
+metadata. This is static contract evidence only; it does not prove live
+scheduler admission, Kubernetes job execution, ConfigFile runtime rollout,
+logs/tailing, GPU telemetry, WEB-003/WEB-004 completion, DATA GA, Full GA, or
+first-version readiness.
 Harbor-side push/scan/delete evidence now exists outside the GUI: official
 Harbor Trivy scanned a real `busybox:1.36` image copied by `crane`, reached scan
 status `Success`, and the synthetic Harbor project/repository were deleted.
@@ -140,13 +229,33 @@ recorded `job_logs_status=200`, `job_logs_count=1`,
 `job_logs_nonempty=true`, and `job_logs_visible=true`; the proof namespace and
 temporary build/tune pods were cleaned. This proves bounded non-empty pod-log
 retrieval, not continuous tailing or a full workload status workflow.
+WEB-004 continuous log/status polling is now strengthened in the first-party
+frontend with bounded REST polling of selected Job logs and active-Project
+workload status. Focused Vitest evidence passed with `npm --prefix frontend run
+test -- src/App.test.tsx`, covering immediate fetch, timer polling, status
+refresh, retry after failed poll, stale Job/Project cleanup, unmount cleanup,
+and token-safe inline errors; `npm --prefix frontend run build` also passed.
+This is frontend/local evidence only; Docker/live E2E, WebSocket/SSE tailing,
+full workload lifecycle status, and full WEB coverage remain open.
+WEB-007 frontend usage workflow is now strengthened in `frontend/src/App.tsx`
+with active-Project-filtered current-user usage and request-usage tables,
+compact visible row/resource totals, the existing Project GPU pods summary, and
+a Usage-local manual refresh button that re-runs only `/api/v1/me/usage`,
+`/api/v1/me/request-usage`, and `/api/v1/projects/{projectID}/gpu-usage`.
+Focused App test evidence passed, covering filtering/totals, manual refresh
+route counts, GPU-route failure isolation with non-secret text, no admin usage
+fallback, and no `localStorage`/`sessionStorage` credential persistence;
+`npm --prefix frontend run build` also passed. This is frontend/local evidence
+only; live usage attribution, real per-device GPU utilization, full WEB
+coverage, Full GA, and first-version completion remain open.
 Remaining WEB gaps are full WebRTC media session, real workload GPU
-telemetry/utilization evidence, continuous log tailing/full status workflow
-evidence, full usage workflow evidence, full image-build/allow-list/SBOM/
-signing/GUI scan workflow, Harbor scan lifecycle synchronization, and
-registry-wide automatic delete lifecycle automation beyond explicit per-tag
-sync/delete-resync. Browser-operated WebRTC sessions remain covered by the RTC
-family and are not a substitute for a management Web UI.
+telemetry/utilization evidence, live continuous log tailing/full status workflow
+evidence beyond the focused REST polling slice, live usage attribution beyond
+the focused WEB-007 frontend workflow, full image-build/allow-list/SBOM/signing/GUI
+scan workflow, Harbor scan lifecycle synchronization, and registry-wide
+automatic delete lifecycle automation beyond explicit per-tag sync/delete-resync.
+Browser-operated WebRTC sessions remain covered by the RTC family and are not a
+substitute for a management Web UI.
 
 | ID | Proposed Acceptance Criteria |
 |---|---|
@@ -164,6 +273,52 @@ project storage) both depend on storage, but no AC defines mount-plan
 validation, storage isolation, or PVC approval — yet workloads cannot run
 without it.
 
+**Current implementation status (2026-06-23):** `STORAGE-004` mount-plan audit
+evidence exists, `STORAGE-001` now has local/in-memory resolver proof for
+storage-owned project bindings, dispatch-ready group storage sources, effective
+PVC permission, and project-permission precedence, and `STORAGE-002` now has
+local/in-memory resolver proof for unrelated Project binding rejection and
+other-user permission denial. `STORAGE-003` now has local handler-level
+permission-management RBAC proof for plain group member / Project reader denial
+across direct create/set, batch set, and batch delete group/project storage
+permission rows, including no unauthorized target-row creation and seeded-row
+retention after denied deletes. Project storage binding creation now also has
+local/static external REST fixture coverage for
+`POST /api/v1/projects/{id}/storage/bindings`, checked against `storage.Spec()`
+for route/auth/state/service-auth/adapter metadata, request fields, statuses,
+direct response shape, and `ProjectStorageBindingChanged` metadata. Storage
+permission creation now also has local/static external REST fixture coverage
+for `POST /api/v1/storage/permissions`, checked against `storage.Spec()` for
+route/auth/state/service-auth/adapter metadata, no path params, required
+request fields, statuses, direct permission response shape, and
+`StoragePermissionChanged` metadata. Project storage permission update now also
+has local/static typed external REST fixture coverage for
+`PUT /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions`, checked
+against `storage.Spec()` for route/auth/state/service-auth/adapter metadata,
+path params, required request fields, statuses, direct project permission
+response shape, and `ProjectStoragePermissionChanged` metadata. It also now has
+local/in-memory DATA-016 storage projection drift helper coverage for identity
+users, identity roles, projects, project members, and user groups with
+missing/orphan/stale/clean reporting, deterministic ordering, blank-ID skip,
+canonical-id normalization, and nil app/store fail-closed checks. This does not
+prove live permission enforcement, live Kubernetes mount execution, cluster PVC
+isolation, namespace enforcement, CSI behavior, full storage GA, Full GA, or
+first-version readiness. The broader storage isolation and mount validation
+criteria below still should not be treated as fully proven unless `gap.md`
+records explicit evidence for those slices.
+
+Storage project permission delete now also has local/static external REST
+fixture coverage for
+`DELETE /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/{userId}`,
+with no required request fields, no optional request fields, `200 OK`,
+configured error statuses, and `ProjectStoragePermissionChanged`; it is also
+checked against `storage.Spec()` for auth, no request body semantics, path
+params `id`/`pvcId`/`userId`, `userId` route ID param, no service key, no
+adapter, state-changing behavior, and event metadata. This is not live
+permission enforcement, live Kubernetes mount execution, cluster PVC isolation,
+namespace enforcement, CSI behavior, storage GA, Full GA, or first-version
+readiness.
+
 | ID | Proposed Acceptance Criteria |
 |---|---|
 | STORAGE-001 (PROPOSED) | A workload may mount only platform-approved PVCs / user / group / project storage resolved by the mount-plan; anything else is rejected. |
@@ -175,6 +330,13 @@ without it.
 `Secret` resources are routed through "platform secret API or ExternalSecret
 profile" (resource policy), but that API has no acceptance criteria, and secret
 handling is security-critical at launch.
+
+**Current implementation status (2026-06-22):** the proposed `SECRET-001..003`
+v1 policy slice has implementation evidence: raw Kubernetes `Secret` YAML is
+rejected by default through admission policy, secret-access rejection is audited
+without secret values, and dispatcher defense-in-depth exists. This does not
+close managed/off-cluster secret recovery, rotation/revocation, or full DR
+evidence in the GA tracker.
 
 | ID | Proposed Acceptance Criteria |
 |---|---|
@@ -205,6 +367,11 @@ non-audit blockers.
 Plan and Queue models exist and gate everything, but no AC says who creates/edits
 them or that those mutations are controlled and audited.
 
+**Current implementation status (2026-06-22):** the proposed `PLANADMIN-001..003`
+slice has implementation evidence for controlled Plan/Queue mutations and actor
+plus old/new audit data. This closes the proposed v1 slice, not every remaining
+GA operations or runtime-isolation gap.
+
 | ID | Proposed Acceptance Criteria |
 |---|---|
 | PLANADMIN-001 (PROPOSED) | Only platform admin (or delegated platform_manager) can create/edit/expire Plans and Queues. |
@@ -215,6 +382,11 @@ them or that those mutations are controlled and audited.
 Boundaries mention "coarse rate limits" but there is no AC, and §5 preflight
 parses multi-document YAML with no size bound (a DoS vector). A public first
 launch needs basic protection.
+
+**Current implementation status (2026-06-22):** the proposed `GATE-*` slice and
+K8S manifest size/document-count cap have implementation evidence for rate
+limits, request-body bounds, and pre-parse manifest limits. Broader performance
+and load evidence remains tracked separately under PERF.
 
 | ID | Proposed Acceptance Criteria |
 |---|---|
@@ -232,7 +404,8 @@ launch needs basic protection.
   As of 2026-06-21, OPS-006 PostgreSQL restore, OPS-008 MinIO object restore,
   OPS-009 Kubernetes Secret recovery copy, and OPS-007 Harbor Velero
   backup/restore on static Kubernetes `local` PVs have live drill evidence.
-  Put numeric RTO/RPO targets on them after the first load test.
+  This is drill evidence only; managed/off-cluster DR, PITR, HA storage, backup
+  retention, and numeric RTO/RPO targets remain open in the Full GA tracker.
 - **i18n / accessibility ACs** for the Web UI — product polish.
 - **Billing** — explicitly future in the monitoring goal.
 
@@ -244,6 +417,14 @@ launch needs basic protection.
   Implementation evidence now covers one-time refresh rotation/replay rejection,
   session expiry, internal expired/revoked credential rejection, and cleanup of
   expired/revoked credentials.
+- **SEC:** scoped internal service identity now has v1 implementation evidence.
+  Internal callers send `X-Service-Name` + `X-Service-Key`; receivers validate
+  trusted caller keys and target audiences; strict staging/production config
+  rejects legacy-only remote service auth. This does not close future credential
+  rotation, workload identity, mTLS/SPIFFE, or remaining live migration
+  drill/full rollback maturity gaps. The JWT/JWKS library-verifier slice is
+  separately implemented with `github.com/coreos/go-oidc/v3`; it closes only the
+  custom JWT/JWKS parsing and signature-verification replacement.
 - **DATA:** replay idempotency has implementation evidence: projection replay
   retries only unresolved dead-letter events and tests assert that successful
   events are not double-applied. Transactional outbox coupling now includes the
@@ -262,6 +443,15 @@ launch needs basic protection.
   controlled relay unavailability plus relay-capable pod restart recovery; it
   does not claim handler mid-transaction crash interleavings or the exact
   restarted pod as publisher.
+- **OPS / migrations:** the existing pgx migration runner now has a first-
+  release ledger/checksum/advisory-lock/dirty-state implementation slice.
+  `validate-migrations` remains DB-free and focused/full backend tests pass.
+  PostgreSQL integration evidence now passes against live cluster PostgreSQL
+  through redacted `platform-gateway-runtime-secret:DATABASE_URL` port-forward
+  execution for temporary-schema isolation, dirty-state persistence, checksum
+  mismatch blocking, first ledger adoption/skip, and advisory-lock contention.
+  This still does not claim live staging migration drill, schema-change
+  rollback, full migration-runner GA, Full GA, or first-version completion.
 - **OPS:** OPS-011 Redis/event-broker outage evidence now exists: Redis was
   scaled from `1` to `0`, a direct `storage-service` pod request returned HTTP
   `201`, exact `GroupStorageCreated` event
@@ -309,12 +499,304 @@ launch needs basic protection.
 
 | Tag | Items |
 |---|---|
-| Blocks-v1 | STORAGE-*, SECRET-*, AUDIT-*, PLANADMIN-*, GATE-* |
+| Originally proposed Blocks-v1 families | STORAGE-*, SECRET-*, AUDIT-*, PLANADMIN-*, GATE-* |
+| Now evidenced v1 slices | SECRET-001..003, AUDIT-001..004, PLANADMIN-001..003, GATE-*, K8S manifest cap, STORAGE-001 local/in-memory mount-plan authorization proof, STORAGE-002 local/in-memory cross-Project and cross-user mount-plan isolation proof, STORAGE-003 local handler-level permission-management RBAC proof, STORAGE-004 audit, org-project project update/delete/batch-delete typed external fixture coverage, org-project group update/delete/batch-delete typed external fixture coverage, and storage project permission delete and batch typed external fixture coverage |
+| Still not proven as Full GA | Remaining STORAGE live isolation/mount-execution/namespace-enforcement slices, WEB full coverage, DR/rollback, full OPS-019, full image workflow, full usage workflow, full WebRTC media/session, telemetry, and remaining PERF evidence |
 | Defer | NOTIF, IDE, DR RTO/RPO numbers, i18n/a11y, billing |
 | Conditional | WEB-* blocks any release that advertises the NexusPaaS management Web UI as GA; the current `/ui/` implementation is partial and must stay labeled as such until the WEB ACs pass. |
-| Strengthen-existing | K8S manifest size cap, SEC/CLI token lifecycle, OPS-011 Redis/event-broker outage evidence, partial OPS-013 Prometheus/telemetry stale and quota non-grant evidence, Harbor dependency/status outage evidence, OPS-012 image-registry build/list degraded-route evidence, PERF stream credential issuance p95 evidence |
+| Strengthen-existing | K8S manifest size cap, SEC/CLI token lifecycle, RBAC-016 local catalog-driven public route auth coverage, RBAC-017 local/static OpenAPI auth metadata parity, DATA-016 local/in-memory authorization-policy projection drift-check coverage, DATA-016 local/in-memory IDE projection drift-check coverage for six IDE read-model pairs, DATA-016 local/in-memory dashboard projection drift-check coverage for six dashboard read-model pairs, DATA-016 local/in-memory clusterread projection drift-check coverage for six clusterread read-model pairs, DATA-016 local/in-memory request-notification project-access drift-check coverage for three project-access read-model pairs, DATA-016 local/in-memory GPU usage projection drift-check coverage for five GPU usage read-model pairs, DATA-016 local/in-memory image-registry projection drift-check coverage for five image-registry access read-model pairs, DATA-016 local/in-memory storage projection drift-check coverage for five storage read-model pairs, STORAGE-001 local/in-memory mount-plan authorization proof, STORAGE-002 local/in-memory cross-Project and cross-user mount-plan isolation proof, STORAGE-003 local handler-level permission-management RBAC proof, request-notification create-form local/static external API fixture coverage, image-registry Dockerfile build local/static external API fixture coverage, workload submit-job local/static external API fixture coverage, workload create-configfile/update-configfile/delete-configfile local/static external API fixture coverage with ConfigFileChanged event metadata repair, workload cancel-job local/static external API fixture coverage, org-project create-project local/static external API fixture coverage, org-project project update/delete/batch-delete local/static external API fixture coverage, org-project create-group/update-group/delete-group/batch-delete-group local/static external API fixture coverage, storage permission create local/static external API fixture coverage, storage project permission delete local/static external API fixture coverage, storage project permission batch update/delete local/static external API fixture coverage, migration-runner ledger/checksum/lock/dirty code slice with live PostgreSQL temporary-schema/dirty/checksum/adoption/lock evidence, OPS-011 Redis/event-broker outage evidence, partial OPS-013 Prometheus/telemetry stale and quota non-grant evidence, Harbor dependency/status outage evidence, OPS-012 image-registry build/list degraded-route evidence, PERF stream credential issuance p95 evidence |
 
 The original spec covers the **compute, GPU, queue, RBAC, image, and security
-core** thoroughly. The launch-blocking gaps are the **supporting surfaces every
-real deployment touches** — Web UI, storage, secrets, audit query, Plan/Queue
-administration, and basic gateway abuse limits.
+core** thoroughly. The original v1 gap review identified the **supporting
+surfaces every real deployment touches** — Web UI, storage, secrets, audit
+query, Plan/Queue administration, and basic gateway abuse limits. Several of
+those proposed slices now have evidence, but that evidence must not be read as
+Full GA completion; the remaining GA gaps are tracked in `gap.md`.
+
+RBAC-016 now has local catalog-driven public route coverage:
+`TestRBACPublicAPIRoutesRequireAuthUnlessExplicitlyAllowed` checks registered
+external `/api/v1/` routes, excluding `/api/v1/internal/` and service-auth
+routes. Intentional public auth/OIDC entry routes require exact method+pattern
+allowlist reasons; all other scoped routes must require auth and return `401`
+through `app.ServeHTTP` with no credentials. This is not live gateway proof,
+every business authorization branch, full RBAC GA, Full GA, or first-version
+completion.
+
+RBAC-017 now has local/static OpenAPI metadata parity evidence: generated
+operations mirror `RouteSpec` auth flags, include service-auth metadata and
+schemes for `X-Service-Name`/`X-Service-Key`, omit public-route security, and
+model combined user+service auth as requiring both categories. This is not live
+gateway proof, service credential rotation, workload identity, mTLS/SPIFFE,
+full RBAC GA, Full GA, or first-version completion.
+
+DATA-016 now has local/in-memory authorization-policy, IDE, dashboard,
+clusterread, request-notification project-access, GPU usage, and image-registry
+projection drift-check coverage: the authorization-policy
+repository compares raw owner/source resources with local authorization-policy
+read-model resources for identity users/roles and policy projects/plans/image
+allow lists, the IDE repository compares raw owner/source resources with six
+local IDE read-model pairs for identity users/roles, policy roles, projects,
+project members, and user groups, the dashboard helper compares raw
+owner/source resources with six local dashboard read-model pairs for users,
+projects, project members, forms, live quotas, and queues, and the clusterread
+helper compares raw owner/source resources with six local clusterread
+read-model pairs for identity users/roles, policy roles, projects, project
+members, and user groups, and the request-notification project-access
+repository compares raw org-project source resources with three local
+request-notification project-access read-model pairs for projects, project
+members, and user groups, and the GPU usage helper compares raw owner/source
+resources with five local GPU usage read-model pairs for identity users,
+identity roles, authorization-policy roles, org projects, and workload jobs,
+the storage helper compares raw owner/source resources with five local storage
+read-model pairs for identity users, identity roles, projects, project members,
+and user groups, and the image-registry helper compares raw owner/source
+resources with five
+local image-registry access read-model pairs for identity users, identity
+roles, org projects, project members, and user groups.
+Focused tests cover missing, orphan, stale, clean, deterministic ordering,
+canonical id normalization, nil app/store fail-closed behavior,
+projection-pair coverage, GPU usage snapshot/summary exclusion,
+request-notification source guard coverage, image-registry
+catalog/build/image-request/sync exclusion, excluded clusterread
+policy-assignment and read-model telemetry resources, blank-id skip behavior,
+storage canonical id normalization coverage, dashboard/clusterread/
+request-notification/GPU usage/image-registry
+co-hosted fallback-trap coverage. This is local/in-memory helper evidence only, not a
+live drift job, read-model rebuild/replay cutover, all-service DATA-016
+coverage, DATA GA, Full GA, first-version readiness, rebuild/replay cutover
+readiness, or production readiness.
+
+Request-notification create-form now has local/static external API fixture
+coverage for `POST /api/v1/forms`: the fixture validator checks metadata,
+required request fields, forbidden example keys, additive/tolerant decoding,
+and request/response example shape, while the service parity test checks the
+fixture against `requestnotification.Spec()`. This is not OpenAPI-first
+completion, all-critical-API typed contract coverage, DATA GA, Full GA, or
+first-version completion.
+
+Image-registry Dockerfile build submission now has local/static external API
+fixture coverage for `POST /api/v1/images/build/dockerfile`: the fixture
+validator accepts non-empty all-2xx success statuses, the fixture uses `202`,
+required request fields are `project_id` and `image_reference`, forbidden
+example keys and additive/tolerant decoding are covered for all external API
+fixtures, and the service parity test checks `imageregistry.Spec()` metadata
+including user auth, no service key, no path params, state-changing behavior,
+`harbor` adapter metadata, and `ImageBuildStarted`. This is not live Harbor
+build execution, SBOM/signing, allow-list enforcement, image scan lifecycle,
+full image workflow, Full GA, or first-version completion.
+
+Workload job submission now has local/static external API fixture coverage for
+`POST /api/v1/jobs`: the fixture validator checks metadata, exact required
+request fields `project_id` and `user_id`, forbidden example keys,
+additive/tolerant decoding, `201 Created`, and `JobSubmitted`, while the
+service parity test checks `workload.Spec()` metadata including user auth, no
+service key, no path params/ID param, non-admin state-changing route behavior,
+success status, and event metadata. Queue/resource/config/streaming fields are
+optional UI/admission/defaultable payload examples only. This is not live
+scheduler admission, queue policy completeness, Kubernetes job execution,
+logs/tailing, GPU telemetry, WEB-003/WEB-004 completion, Full GA, or
+first-version completion.
+
+Workload ConfigFile creation now has local/static external API fixture coverage
+for `POST /api/v1/configfiles`: the fixture validator checks metadata, exact
+required request fields `project_id` and `name`, forbidden example keys,
+additive/tolerant decoding, `201 Created`, source-backed error statuses, and
+`ConfigFileChanged` as handler-emitted create evidence, while the service parity
+test checks `workload.Spec()` metadata including user auth, no service key, no
+path params/ID param, non-admin state-changing route behavior, and success
+status. Accepted aliases and payload fields remain optional. This is not live
+scheduler admission, Kubernetes job execution, logs/tailing, GPU telemetry,
+WEB-003/WEB-004 completion, DATA GA, Full GA, or first-version completion.
+
+Workload ConfigFile deletion now has local/static external API fixture coverage
+for `DELETE /api/v1/configfiles/{id}`: the fixture validator checks metadata,
+exact path parameter `id`, empty required and optional request fields, empty
+request object, forbidden example keys, additive/tolerant decoding, `200 OK`,
+source-backed error statuses, and `ConfigFileChanged` as handler-emitted delete
+evidence, while the service parity test checks `workload.Spec()` metadata
+including user auth, no service key, `id` route parameter/ID param, non-admin
+state-changing route behavior, response shape, and event metadata. This is not
+live ConfigFile deletion, project isolation, event delivery, scheduler
+admission, Kubernetes job execution, ConfigFile runtime rollout, logs/tailing,
+GPU telemetry, WEB-003/WEB-004 completion, DATA GA, Full GA, or first-version
+completion.
+
+Workload ConfigFile update now has local/static external API fixture coverage
+for `PUT /api/v1/configfiles/{id}`: the fixture validator checks metadata,
+exact path parameter `id`, exact required request field `content`, optional
+`name`/`filename`/`path`/`manifest`/`yaml`/`config` and same-Project
+`projectId`/`project_id` aliases, forbidden example keys, additive/tolerant
+decoding, `200 OK`, source-backed error statuses, and `ConfigFileChanged` as
+handler-emitted update evidence, while the service parity test checks
+`workload.Spec()` metadata including user auth, no service key, `id` route
+parameter/ID param, non-admin state-changing route behavior, response shape,
+and event metadata. The optional project aliases do not imply cross-Project
+ConfigFile moves are supported. This is not live ConfigFile update, project
+isolation, event delivery, ConfigFile runtime rollout, logs/tailing, GPU
+telemetry, WEB-003/WEB-004 completion, DATA GA, Full GA, or first-version
+completion.
+
+Workload ConfigFile read now has local/static external API fixture coverage for
+`GET /api/v1/configfiles/{id}`: the fixture validator checks metadata, exact
+path parameter `id`, empty required and optional request fields, empty request
+object, forbidden example keys, additive/tolerant decoding, `200 OK`,
+source-backed error statuses, and no emitted events, while the service parity
+test checks `workload.Spec()` metadata including user auth, no service key,
+`id` route parameter/ID param, non-admin read-only route behavior, response
+shape, and no events. This is not live ConfigFile read proof, project
+isolation, event delivery, ConfigFile runtime rollout, logs/tailing, GPU
+telemetry, WEB-003/WEB-004 completion, DATA GA, Full GA, or first-version
+completion.
+
+Workload ConfigFile version commit now has local/static external API fixture
+coverage for `POST /api/v1/configfiles/{id}/versions`: the fixture validator
+checks metadata, exact path parameter `id`, exact required request field
+`content`, optional `message`/`manifest`/`yaml`/`config`, forbidden example
+keys, additive/tolerant decoding, `201 Created`, source-backed error statuses,
+and `ConfigCommitted`, while the service parity test checks `workload.Spec()`
+metadata including user auth, no service key, `id` route parameter/ID param,
+non-admin state-changing route behavior, response shape, and event metadata.
+This is not live scheduler admission, Kubernetes job execution, ConfigFile
+runtime rollout, logs/tailing, GPU telemetry, WEB-003/WEB-004 completion, DATA
+GA, Full GA, or first-version completion.
+
+Org-project Project creation now has local/static external API fixture coverage
+for `POST /api/v1/projects`: the fixture validator checks metadata, exact
+required request fields `project_name` and `g_id`, forbidden example keys,
+additive/tolerant decoding, `201 Created`, source-backed error statuses, and
+`ProjectCreated`, while the service parity test checks `orgproject.Spec()`
+metadata including user auth, no service key, no path params/ID param,
+non-admin route metadata, state-changing route behavior, and event metadata.
+Conservative aliases and policy/quota fields remain optional. This is not live
+admin authorization proof, full Project lifecycle, tenant isolation, DATA GA,
+Full GA, or first-version completion.
+
+Org-project Project update now has local/static external API fixture coverage
+for `PUT /api/v1/projects/{id}`: the fixture validator checks metadata, exact
+path param `id`, required request field `project_name`, mutable optional
+Project fields, forbidden example keys, additive/tolerant decoding, `200 OK`,
+configured error statuses, and `ProjectUpdated`, while the service parity test
+checks `orgproject.Spec()` metadata including user auth, admin route metadata,
+state-changing route behavior, no service key, direct Project response shape,
+and event metadata. This is not live admin authorization proof, full Project
+lifecycle, tenant isolation, DATA GA, Full GA, or first-version completion.
+
+Org-project Project delete now has local/static external API fixture coverage
+for `DELETE /api/v1/projects/{id}`: the fixture validator checks metadata,
+exact path param `id`, no-body DELETE request shape, empty response example,
+forbidden example keys, additive/tolerant decoding, `200 OK`, configured error
+statuses, and `ProjectDeleted`, while the service parity test checks
+`orgproject.Spec()` metadata including user auth, non-admin route metadata,
+state-changing route behavior, no service key, and event metadata. This is not
+live admin authorization proof, full Project lifecycle, tenant isolation, DATA
+GA, Full GA, or first-version completion.
+
+Org-project Project batch delete now has local/static external API fixture
+coverage for `DELETE /api/v1/projects/batch`: the fixture validator checks
+metadata, no path params, required top-level `ids`, forbidden example keys,
+additive/tolerant decoding, `200 OK`, configured error statuses, and
+`ProjectDeleted`, while the service parity test checks `orgproject.Spec()`
+metadata including user auth, non-admin route metadata, state-changing route
+behavior, no service key, canonical project IDs, and direct
+`succeeded`/`failed`/`errors` batch result response shape. This is not live
+admin authorization proof, full Project lifecycle, tenant isolation, DATA GA,
+Full GA, or first-version completion.
+
+Org-project Group creation now has local/static external API fixture coverage
+for `POST /api/v1/groups`: the fixture validator checks metadata, exact
+required request field `group_name`, forbidden example keys, additive/tolerant
+decoding, `201 Created`, source-backed error statuses, and `GroupCreated`,
+while the service parity test checks `orgproject.Spec()` metadata including
+user auth, no service key, no path params/ID param, admin route metadata,
+state-changing route behavior, direct group response shape, and event metadata.
+Conservative aliases and policy fields remain optional. This is not live admin
+authorization proof, full Group lifecycle, tenant isolation, DATA GA, Full GA,
+or first-version completion.
+
+Org-project Group update now has local/static external API fixture coverage for
+`PUT /api/v1/groups/{id}`: the fixture validator checks metadata, exact path
+param `id`, required request field `group_name`, mutable optional Group fields,
+forbidden example keys, additive/tolerant decoding, `200 OK`, configured error
+statuses, and `GroupUpdated`, while the service parity test checks
+`orgproject.Spec()` metadata including user auth, admin route metadata,
+state-changing route behavior, no service key, direct group response shape, and
+event metadata. `GroupUpdated` is now also listed in `orgproject.Spec().Events`
+to match the existing handler emission. This is not live admin authorization
+proof, full Group lifecycle, tenant isolation, DATA GA, Full GA, or
+first-version completion.
+
+Org-project Group delete now has local/static external API fixture coverage for
+`DELETE /api/v1/groups/{id}`: the fixture validator checks metadata, exact path
+param `id`, no-body DELETE request shape, empty response example, forbidden
+example keys, additive/tolerant decoding, `200 OK`, configured error statuses,
+and `GroupDeleted`, while the service parity test checks `orgproject.Spec()`
+metadata including user auth, admin route metadata, state-changing route
+behavior, no service key, empty response shape, and event metadata.
+`GroupDeleted` is now also listed in `orgproject.Spec().Events` to match the
+existing handler emission. This is not live admin authorization proof, full
+Group lifecycle, tenant isolation, DATA GA, Full GA, or first-version
+completion.
+
+Org-project Group batch delete now has local/static external API fixture
+coverage for `DELETE /api/v1/groups/batch`: the fixture validator checks
+metadata, DELETE-with-body request shape with required top-level `ids`,
+forbidden example keys, additive/tolerant decoding, `200 OK`, configured error
+statuses, and `GroupDeleted`, while the service parity test checks
+`orgproject.Spec()` metadata including user auth, admin route metadata,
+state-changing route behavior, no service key/path params, canonical group IDs,
+direct batch result response shape, and event metadata. This is not live admin
+authorization proof, full Group lifecycle, tenant isolation, DATA GA, Full GA,
+or first-version completion.
+
+Storage permission creation now has local/static external API fixture coverage
+for `POST /api/v1/storage/permissions`: the fixture validator checks metadata,
+exact required request fields `group_id`, `pvc_id`, `user_id`, and
+`permission`, forbidden example keys, additive/tolerant decoding, `200 OK`,
+configured error statuses, and `StoragePermissionChanged`, while the service
+parity test checks `storage.Spec()` metadata including user auth, no service
+key, no path params/ID param, non-admin state-changing route behavior, no
+adapter, direct permission response shape, and event metadata. This is not live
+permission enforcement, Kubernetes mount execution, cluster PVC isolation,
+namespace enforcement, CSI behavior, storage GA, Full GA, or first-version
+completion.
+
+Storage project permission update now has local/static external API fixture
+coverage for
+`PUT /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions`: the fixture
+validator checks metadata, exact path params `id` and `pvcId`, required request
+fields `user_id` and `permission`, no optional fields, forbidden example keys,
+additive/tolerant decoding, `200 OK`, configured error statuses, and
+`ProjectStoragePermissionChanged`, while the service parity test checks
+`storage.Spec()` metadata including user auth, no service key, `pvcId` route ID
+param, non-admin state-changing route behavior, no adapter, direct project
+permission response shape, and event metadata. This is not live permission
+enforcement, Kubernetes mount execution, cluster PVC isolation, namespace
+enforcement, CSI behavior, storage GA, Full GA, or first-version completion.
+
+Storage project permission delete now has local/static external API fixture
+coverage for
+`DELETE /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/{userId}`: the
+fixture validator checks metadata, exact path params `id`, `pvcId`, and
+`userId`, no required/optional request fields, forbidden example keys,
+additive/tolerant decoding, `200 OK`, configured error statuses, and
+`ProjectStoragePermissionChanged`, while the service parity test checks
+`storage.Spec()` metadata including user auth, no request body, `userId` route ID
+param, non-admin state-changing route behavior, no service key, no adapter, and
+event metadata. This is not live permission enforcement, Kubernetes mount
+execution, cluster PVC isolation, namespace enforcement, CSI behavior, storage
+GA, Full GA, or first-version completion.
+
+Storage project permission batch update and batch delete now have local/static
+external API fixture coverage for
+`PUT /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/batch` and
+`DELETE /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/batch`: the
+fixture validator checks metadata, exact path params `id` and `pvcId`, required
+top-level `items` request bodies, forbidden example keys, additive/tolerant
+decoding, `200 OK`, configured error statuses, and
+`ProjectStoragePermissionChanged`, while the service parity tests check
+`storage.Spec()` metadata including user auth, `pvcId` route ID param,
+non-admin state-changing route behavior, no service key, no adapter, canonical
+item fields, direct `succeeded`/`failed`/`errors` batch result responses, and
+event metadata. This is not live permission enforcement, Kubernetes mount
+execution, cluster PVC isolation, namespace enforcement, CSI behavior, storage
+GA, Full GA, or first-version completion.

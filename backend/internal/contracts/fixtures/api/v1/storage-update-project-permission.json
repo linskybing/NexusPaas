@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "contract_name": "storage.update_project_permission",
+  "owner_service": "storage-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "storage-service:project_storage_permissions",
+  "action": "update",
+  "method": "PUT",
+  "path": "/api/v1/projects/{id}/storage/bindings/{pvcId}/permissions",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [
+    "id",
+    "pvcId"
+  ],
+  "required_request_fields": [
+    "user_id",
+    "permission"
+  ],
+  "optional_request_fields": [],
+  "request_example": {
+    "user_id": "user-ga-reader",
+    "permission": "read_write"
+  },
+  "success_statuses": [
+    200
+  ],
+  "error_statuses": [
+    400,
+    401,
+    403,
+    409,
+    500
+  ],
+  "emits_events": [
+    "ProjectStoragePermissionChanged"
+  ],
+  "response_example": {
+    "id": "project-ga-001:datasets:user-ga-reader",
+    "project_id": "project-ga-001",
+    "pvc_id": "datasets",
+    "user_id": "user-ga-reader",
+    "permission": "read_write",
+    "updated_at": "2026-06-23T00:00:00Z"
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

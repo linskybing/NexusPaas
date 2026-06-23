@@ -3,6 +3,25 @@
 _Updated: 2026-06-22 (re-verified). Bar: **Full GA**
 (`docs/acceptance/ga-checklist.md`), not just the v1 launch bar._
 
+## First Version (V1) Status — single source of truth
+
+- **V1 functional / Release-Candidate scope: PASSED (local).** `GATE-*`,
+  `STORAGE-*`, `SECRET-*`, `AUDIT-*`, `PLANADMIN-*`, and the accepted GA families
+  passed the `beta-rc` gate and a **local** RKE2 staging rollout/rollback
+  rehearsal (`localhost:5000` registry, 15 deployments). See
+  `docs/plan/2026-06-20-v1-launch-gap-gate.md`.
+- **V1 external production launch: OPEN.** Still unproven: a real external image
+  registry (Harbor is only an isolated `harbor-system` foundation, never used
+  for external promotion/rollback), 8-unit topology deploy/smoke, previous-image
+  rollback per unit, production secrets (no `*-dev-*` references in the deploy
+  path), live staging DB migration/rollback drill, and remote CI/Sonar.
+- **Web UI (`WEB-*`) is out of V1 scope** (API/CLI-first). The existing
+  `frontend/` GUI is beta/future; `WEB-*` is required only before a future Web
+  UI launch.
+- Throughout this file, **"first-version readiness/completion" in slice
+  disclaimers means the V1 *external production launch* state above (OPEN)** — it
+  does **not** mean the individual slice is unfinished.
+
 This is the live status tracker. The verbose narrative analysis lives in
 [`docs/acceptance/gap-analysis.md`](docs/acceptance/gap-analysis.md). Code-level
 issues are in [`problem.md`](problem.md).
@@ -89,26 +108,467 @@ Latest local SonarScanner Quality Gate passes with API readback:
 `new_coverage=81.8`, `new_violations=0`,
 `new_duplicated_lines_density=0.8262`.
 
-## 1. Done — v1 launch-gap families (code-complete + tests green)
+## 1. Done — evidenced v1 proposed gap slices (not full GA)
 
 | Family | Evidence | Status |
 |---|---|---|
 | `GATE-*` + K8S manifest cap | `backend/internal/platform/input_limits.go`, `middleware.go` (429 `Retry-After`, `MaxBytesReader`/413), `config.go` limits | Done |
+| `STORAGE-001` mount-plan authorization | `storage/mount_plan_contracts_test.go` direct in-memory resolver tests for project binding, dispatch-ready group source, effective permission, and project-over-group permission precedence | Done for local/in-memory mount-plan authorization proof only |
+| `STORAGE-002` mount-plan isolation | `storage/mount_plan_contracts_test.go` direct in-memory resolver tests for unrelated Project binding rejection and other-user permission denial | Done for local/in-memory cross-Project and cross-user mount-plan isolation proof only |
+| `STORAGE-003` permission-management RBAC | `storage/handler_test.go` direct handler tests prove a plain group member / Project reader cannot create, batch-set, or batch-delete group/project storage permission rows, and denied deletes leave seeded rows intact | Done for local handler-level storage permission-management RBAC proof only |
 | `STORAGE-004` audit | `storage/mount_plan_contracts.go` `StorageMountPlanResolved` + project-scoped AuditEvent | Done |
 | `SECRET-001..003` (v1 policy) | `schedulerquota/admission_resources.go` + `admission.go` reject raw `Secret`, safe `SecretAccessRejected`/`AuditEvent`; dispatcher defense-in-depth | Done |
 | `AUDIT-001..004` | `auditcompliance/handler.go` read-time hash chain, CSV integrity columns, brand naming, project/group-scoped audit-log query RBAC with event-fed read models; `auditcompliance/cleanup.go` service-internal retention cleanup trigger | Done |
 | `PLANADMIN-001..003` | `schedulerquota/handler.go` actor + old/new on Plan/Queue events | Done |
 | DATA replay idempotency | `projection.go` targeted dead-letter replay + `events*.go` targeted inbox reset; tests prove replay retry does not double-apply previously successful events | Done |
+| DATA-016 projection drift checks | `authorization_policy_projection_repository.go` compares raw owner/source rows with local authorization-policy projection rows for identity users/roles and policy projects/plans/image allow lists; `ide_projection_repository.go` compares raw owner/source rows with six local IDE read-model pairs for identity users/roles, policy roles, projects, project members, and user groups; `dashboard/handler.go` compares raw owner/source rows with six local dashboard read-model pairs for users, projects, project members, forms, live quotas, and queues; `clusterread/handler.go` compares raw owner/source rows with six local clusterread read-model pairs for identity users/roles, policy roles, projects, project members, and user groups; `requestnotification/project_access_repository.go` compares raw org-project source rows with three local request-notification project-access read-model pairs for projects, project members, and user groups; `gpuusage/projection.go` compares raw owner/source rows with five local GPU usage read-model pairs for identity users/roles, authorization-policy roles, org projects, and workload jobs; `imageregistry/helpers.go` compares raw owner/source rows with five local image-registry access read-model pairs for identity users/roles, org projects, project members, and user groups; focused tests cover missing, orphan, stale, clean, deterministic ordering, nil-store fail-closed behavior, canonical id normalization, projection-pair coverage, snapshot/summary exclusion for GPU usage, image-registry catalog/build/image-request/sync exclusion, and co-hosted fallback traps where applicable | Done for local/in-memory authorization-policy, IDE, dashboard, clusterread, request-notification project-access, GPU usage, and image-registry helper coverage only |
 | SEC/CLI token lifecycle strengthen | `identity/auth_repository.go`, `auth.go`, internal identity auth contracts, and cleanup worker enforce session expiry, one-time refresh rotation/replay rejection, API-token expiry/revocation, and expired/revoked credential cleanup; focused handler/internal-contract tests pass | Done |
 
 Reference: `docs/plan/2026-06-20-v1-launch-gap-gate.md`.
+
+2026-06-23 workload local/static fixture update:
+`backend/internal/contracts/fixtures/api/v1/workload-delete-configfile.json`
+now records typed external REST fixture coverage for
+`DELETE /api/v1/configfiles/{id}` with an empty request body, `id` path
+parameter, `200 OK`, `[401, 403, 404, 500]` errors, `ConfigFileChanged`, and
+`{"id":"config-ga-001","deleted":true}` response evidence. The shared fixture
+registry and workload service parity test check this local/static contract
+against `workload.Spec()`. This does not prove live ConfigFile deletion, project
+isolation, event delivery, WEB-003/WEB-004 completion, DATA GA, Full GA, or V1
+external production launch readiness.
+
+2026-06-23 workload ConfigFile update local/static fixture update:
+`backend/internal/contracts/fixtures/api/v1/workload-update-configfile.json`
+now records typed external REST fixture coverage for
+`PUT /api/v1/configfiles/{id}` with `id` as the path parameter, required
+`content`, source-backed optional update fields, `200 OK`,
+`[400, 401, 403, 404, 413, 422, 500]` errors, `ConfigFileChanged`, and an
+updated ConfigFile record response. Optional `project_id`/`projectId` remain
+documented only as same-Project aliases; the fixture does not imply
+cross-Project ConfigFile moves, which the handler rejects with `400`.
+`ConfigFileChanged` is now listed in `workload.Spec().Events` to match existing
+handler emission, and create/delete/update fixture parity tests check that
+metadata. This is local/static typed external API fixture coverage only; it does
+not prove live ConfigFile update, project isolation, event delivery, ConfigFile
+runtime rollout, WEB-003/WEB-004 completion, DATA GA, Full GA, or V1 external
+production launch readiness.
+
+2026-06-23 workload ConfigFile PATCH local/static fixture update:
+`backend/internal/contracts/fixtures/api/v1/workload-patch-configfile.json`
+now records typed external REST fixture coverage for
+`PATCH /api/v1/configfiles/{id}` with `id` as the path parameter, required
+`content`, source-backed optional update fields, `200 OK`,
+`[400, 401, 403, 404, 413, 422, 500]` errors, `ConfigFileChanged`, and the
+same updated ConfigFile record response evidence as the PUT update fixture. The
+request example intentionally omits `project_id`/`projectId`, so it does not
+imply cross-Project ConfigFile moves. The shared fixture registry and workload
+service parity test check this local/static PATCH contract against
+`workload.Spec()`. This is local/static typed external API fixture coverage
+only; it does not prove live ConfigFile PATCH update, project isolation, event
+delivery, ConfigFile runtime rollout, WEB-003/WEB-004 completion, DATA GA, Full
+GA, or V1 external production launch readiness.
+
+2026-06-23 workload ConfigFile GET local/static fixture update:
+`backend/internal/contracts/fixtures/api/v1/workload-get-configfile.json`
+now records typed external REST fixture coverage for
+`GET /api/v1/configfiles/{id}` with `id` as the path parameter, empty request
+fields/example, `200 OK`, `[401, 403, 404, 500]` errors, no emitted events, and
+a public ConfigFile record response. The shared fixture validator now permits
+empty `emits_events` only for GET read fixtures and still rejects empty events
+for state-changing fixtures; workload parity checks the route is read-only.
+This is local/static typed external API fixture coverage only; it does not
+prove live ConfigFile reads, project isolation, event delivery, ConfigFile
+runtime rollout, WEB-003/WEB-004 completion, DATA GA, Full GA, or V1 external
+production launch readiness.
+
+2026-06-23 STORAGE-001/STORAGE-002 local/in-memory update:
+`TestResolveStorageMountPlan*` now proves mount-plan authorization decisions for
+storage-owned project bindings, dispatch-ready group storage sources, effective
+PVC permission, and project-permission precedence over group read-write grants.
+It also proves local mount-plan isolation rejects another Project's binding and
+another user's permission grant. This is resolver proof only; it does not claim
+live Kubernetes mount execution, cluster PVC isolation, CSI behavior, full
+storage GA, Full GA, or first-version readiness.
+
+2026-06-23 STORAGE-003 local handler-level update:
+`TestStoragePermissionManagementFollowsGroupRBAC` and
+`TestProjectStoragePermissionManagementFollowsProjectRBAC` now prove plain
+group member / Project reader denial for direct create/set, batch set, and
+batch delete storage permission-management handlers, including no unauthorized
+target-row creation and seeded-row retention after denied deletes. This is
+local direct-handler RBAC proof only; it does not claim live Kubernetes PVC
+isolation, namespace enforcement, storage GA, Full GA, or first-version
+readiness.
+
+2026-06-23 Storage project binding typed API local/static fixture update:
+project storage binding creation now has an external REST fixture for
+`POST /api/v1/projects/{id}/storage/bindings`, with `201 Created`, required
+`group_id`/`pvc_id`, no optional request fields, `ProjectStorageBindingChanged`,
+generic forbidden-key checks, additive/tolerant decoding, and `storage.Spec()`
+parity for auth, route, path params, non-admin state-changing behavior, no
+service key, no adapter, success/error statuses, direct response shape, and
+event metadata. This is local/static typed external API fixture coverage only;
+it does not claim live Kubernetes mount execution, cluster PVC isolation, CSI
+behavior, storage GA, Full GA, or first-version completion.
+
+2026-06-23 Storage permission creation typed API local/static fixture update:
+storage permission creation now has an external REST fixture for
+`POST /api/v1/storage/permissions`, with `200 OK`, required
+`group_id`/`pvc_id`/`user_id`/`permission`, no optional request fields,
+`StoragePermissionChanged`, generic forbidden-key checks, additive/tolerant
+decoding, and `storage.Spec()` parity for auth, route, no path params,
+non-admin state-changing behavior, no service key, no adapter, success/error
+statuses, direct response shape, and event metadata. This is local/static typed
+external API fixture coverage only; it does not claim live permission
+enforcement, Kubernetes mount execution, cluster PVC isolation, namespace
+enforcement, CSI behavior, storage GA, Full GA, or first-version completion.
+
+2026-06-23 Storage project permission update typed API local/static fixture
+update: project storage permission update now has an external REST fixture for
+`PUT /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions`, with
+`200 OK`, required `user_id`/`permission`, no optional request fields,
+`ProjectStoragePermissionChanged`, generic forbidden-key checks,
+additive/tolerant decoding, and `storage.Spec()` parity for auth, route,
+`id`/`pvcId` path params, `pvcId` route ID param, non-admin state-changing
+behavior, no service key, no adapter, success/error statuses, direct project
+permission response shape, and event metadata. This is local/static typed
+external API fixture coverage only; it does not claim live permission
+enforcement, Kubernetes mount execution, cluster PVC isolation, namespace
+enforcement, CSI behavior, storage GA, Full GA, or first-version completion.
+
+2026-06-23 Storage project permission delete typed API local/static fixture
+update: project storage permission delete now has an external REST fixture for
+`DELETE /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/{userId}`,
+with `200 OK`, no required request fields, no optional request fields,
+`ProjectStoragePermissionChanged`, and `storage.Spec()` parity for auth, route,
+`id`/`pvcId`/`userId` path params, no request-body path-only semantics,
+no service key, no adapter, state-changing behavior, and event metadata. This
+is local/static typed external API fixture coverage only; it does not claim
+live permission enforcement, Kubernetes mount execution, cluster PVC isolation,
+namespace enforcement, CSI behavior, storage GA, Full GA, or first-version
+completion.
+
+2026-06-23 Storage project permission batch typed API local/static fixture
+update: project storage permission batch update and batch delete now have
+external REST fixtures for
+`PUT /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/batch` and
+`DELETE /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/batch`,
+with `200 OK`, required `items` request bodies, batch result response examples,
+`ProjectStoragePermissionChanged`, generic forbidden-key checks,
+additive/tolerant decoding, and `storage.Spec()` parity for auth, route,
+`id`/`pvcId` path params, `pvcId` route ID param, non-admin state-changing
+behavior, no service key, no adapter, success/error statuses, canonical item
+	fields, and event metadata. This is local/static typed external API fixture
+	coverage only; it does not claim live permission enforcement, Kubernetes mount
+	execution, cluster PVC isolation, namespace enforcement, CSI behavior, storage
+	GA, Full GA, or first-version completion.
+
+2026-06-23 Org-project Project update typed API local/static fixture update:
+Project update now has an external REST fixture for `PUT /api/v1/projects/{id}`,
+with `200 OK`, required `project_name`, source-backed mutable optional fields,
+`ProjectUpdated`, generic forbidden-key checks, additive/tolerant decoding, and
+`orgproject.Spec()` parity for auth, route, `id` path param, admin
+state-changing behavior, no service key, success/error statuses, direct Project
+response shape, and event metadata. This is local/static typed external API
+fixture coverage only; it does not claim live admin authorization proof, full
+Project lifecycle, tenant isolation, DATA GA, Full GA, or first-version
+completion.
+
+2026-06-23 Org-project Project delete typed API local/static fixture update:
+Project delete now has an external REST fixture for
+`DELETE /api/v1/projects/{id}`, with `200 OK`, no required or optional request
+fields, empty request/response examples, `ProjectDeleted`, generic forbidden-key
+checks, additive/tolerant decoding, and `orgproject.Spec()` parity for auth,
+route, `id` path param, non-admin route metadata, state-changing behavior, no
+service key, success/error statuses, and event metadata. This is local/static
+typed external API fixture coverage only; it does not claim live admin
+authorization proof, full Project lifecycle, tenant isolation, DATA GA, Full GA,
+or first-version completion.
+
+2026-06-23 Org-project Project batch delete typed API local/static fixture
+update: Project batch delete now has an external REST fixture for
+`DELETE /api/v1/projects/batch`, with `200 OK`, required top-level `ids`,
+direct `succeeded`/`failed`/`errors` batch result response, `ProjectDeleted`,
+generic forbidden-key checks, additive/tolerant decoding, and `orgproject.Spec()`
+parity for auth, route, non-admin route metadata, state-changing behavior, no
+service key, no path params, success/error statuses, canonical project IDs, and
+event metadata. This is local/static typed external API fixture coverage only;
+it does not claim live admin authorization proof, full Project lifecycle, tenant
+isolation, DATA GA, Full GA, or first-version completion.
+
+These rows close only the named v1/proposed slices. Remaining full-GA gaps stay
+visible in Section 2.
+
+2026-06-22 RBAC-016 local catalog-driven coverage update:
+`TestRBACPublicAPIRoutesRequireAuthUnlessExplicitlyAllowed` now iterates
+registered external `/api/v1/` service routes, excluding `/api/v1/internal/`
+and service-auth routes; intentional public auth/OIDC entry routes must be exact
+method+pattern allowlist entries with reasons, and every other scoped route is
+verified to require auth and return `401` through `app.ServeHTTP` with no
+credentials. This is local test coverage evidence only; it does not claim full
+RBAC GA, live gateway proof, every business authorization branch, Full GA, or
+first-version completion.
+
+2026-06-22 RBAC-017 local/static metadata update: generated OpenAPI now mirrors
+registered `RouteSpec` auth metadata for `x-auth`, `x-admin`,
+`x-policy-bypass`, and `x-service-auth-required`, and emits user/service
+security, including combined user+service requirements. Focused platform
+generator and registered-route parity tests pass. This is contract metadata
+evidence only; it does not claim full RBAC GA, live gateway proof, service
+credential rotation, workload identity, mTLS/SPIFFE, Full GA, or first-version
+completion.
+
+2026-06-22 DATA-016 local authorization-policy drift update:
+`projectionDrift` compares raw owner/source resources with local
+authorization-policy read-model resources and reports missing, orphan, and
+stale rows with deterministic ordering. Focused tests cover clean rows,
+nil-store fail-closed behavior, and all current authorization-policy projection
+pairs. This is local/in-memory repository evidence only; it does not claim a
+live drift job, read-model rebuild/replay cutover, all-service DATA-016
+coverage, DATA GA, Full GA, or first-version completion.
+
+2026-06-23 DATA-016 local IDE projection drift update:
+`recordStoreIDEProjectionRepository.projectionDrift` compares raw owner/source
+resources with the six local IDE read-model pairs for identity users,
+identity roles, authorization-policy roles, projects, project members, and user
+groups. Focused in-memory tests cover missing, orphan, stale, clean,
+deterministic ordering across resource pairs, canonical id normalization,
+nil-store fail-closed behavior, and exact six-pair coverage. This is
+local/in-memory IDE repository evidence only; it does not claim live drift
+jobs, read-model rebuild/replay cutover, all-service DATA-016 coverage, DATA
+GA, Full GA, or first-version readiness.
+
+2026-06-23 DATA-016 local dashboard projection drift update:
+`dashboard.projectionDrift` compares raw owner/source resources with the six
+local dashboard read-model pairs for users, projects, project members, forms,
+live quotas, and queues. Focused in-memory tests cover missing, orphan, stale,
+clean, deterministic ordering across resource pairs, canonical id
+normalization, nil app/store fail-closed behavior, exact six-pair coverage,
+and the co-hosted fallback trap. This is local/in-memory dashboard helper
+evidence only; it does not claim live drift jobs, read-model rebuild/replay
+cutover, all-service DATA-016 coverage, DATA GA, Full GA, or first-version
+readiness.
+
+2026-06-23 DATA-016 local clusterread projection drift update:
+`clusterread.projectionDrift` compares raw owner/source resources with the six
+local clusterread read-model pairs for identity users, identity roles,
+authorization-policy roles, projects, project members, and user groups.
+Focused in-memory tests cover missing, orphan, stale, clean, deterministic
+ordering across resource pairs, canonical id normalization, nil app/store
+fail-closed behavior, exact six-pair coverage, excluded cluster policy role
+assignments/read-model telemetry resources, and the co-hosted fallback trap.
+This is local/in-memory clusterread helper evidence only; it does not claim
+live drift jobs, read-model rebuild/replay cutover, all-service DATA-016
+coverage, DATA GA, Full GA, or first-version readiness.
+
+2026-06-23 DATA-016 local request-notification project-access drift update:
+`recordStoreProjectAccessRepository.projectionDrift` compares raw org-project
+source resources with the three local request-notification project-access
+read-model pairs for projects, project members, and user groups. Focused
+in-memory tests cover missing, orphan, stale, clean, deterministic ordering
+across resource pairs, canonical id normalization, nil store fail-closed
+behavior, exact three-pair coverage, blank-id skip behavior, source guard
+coverage, and the co-hosted fallback trap. This is local/in-memory
+request-notification project-access repository evidence only; it does not claim
+live drift jobs, read-model rebuild/replay cutover, all-service DATA-016
+coverage, DATA GA, Full GA, or first-version readiness.
+
+2026-06-23 DATA-016 local GPU usage projection drift update:
+`gpuusage.projectionDrift` compares raw owner/source resources with the five
+local GPU usage read-model pairs for identity users, identity roles,
+authorization-policy roles, org projects, and workload jobs. Focused
+in-memory tests cover missing, orphan, stale, clean, deterministic ordering
+across resource pairs, canonical id normalization for jobs/projects, nil
+app/store fail-closed behavior, exact five-pair coverage, blank-id skip
+behavior, snapshot/summary exclusion, and the co-hosted fallback trap. This is
+local/in-memory GPU usage helper evidence only; it does not claim live drift
+jobs, read-model rebuild/replay cutover, all-service DATA-016 coverage, DATA
+GA, Full GA, first-version readiness, rebuild/replay cutover readiness, or
+production readiness.
+
+2026-06-23 DATA-016 local image-registry projection drift update:
+`imageregistry.imageProjectionDrift` compares raw owner/source resources with
+the five local image-registry access read-model pairs for identity users,
+identity roles, org projects, project members, and user groups. Focused
+in-memory tests cover missing, orphan, stale, clean, deterministic ordering
+across resource pairs, canonical id normalization for projects/project
+members, nil app/store fail-closed behavior, exact five-pair coverage,
+blank-id skip behavior, catalog/build/image-request/sync exclusion, and the
+co-hosted fallback trap. This is local/in-memory image-registry helper evidence
+only; it does not claim live drift jobs, read-model rebuild/replay cutover,
+all-service DATA-016 coverage, DATA GA, Full GA, first-version readiness,
+rebuild/replay cutover readiness, or production readiness.
+
+2026-06-23 DATA-016 local storage projection drift update:
+`storage.storageProjectionDrift` compares raw owner/source resources with the
+five local storage read-model pairs for identity users, identity roles,
+projects, project members, and user groups. Focused in-memory tests cover
+missing, orphan, stale, clean, deterministic ordering across resource pairs,
+canonical id normalization, nil app/store fail-closed behavior, exact five-pair
+coverage, and blank-id skip behavior. It also includes a `Config{ServiceName:"all"}`
+trap proving no source fallback/merge dependency. This is local/in-memory storage
+helper evidence only; it does not claim live drift jobs, read-model
+rebuild/replay cutover, all-service DATA-016 coverage, DATA GA, Full GA,
+first-version readiness, rebuild/replay cutover readiness, or production
+readiness.
+
+2026-06-22 Typed API local/static fixture update: request-notification
+create-form now has an external REST fixture for `POST /api/v1/forms` plus
+focused contracts/spec parity tests for metadata, required request fields,
+forbidden example keys, additive/tolerant decoding, and route auth/action
+alignment. This is local/static request-notification create-form external API
+fixture coverage only; it does not claim OpenAPI-first completion, all critical
+APIs, DATA GA, Full GA, or first-version completion.
+
+2026-06-22 Image-registry typed API local/static fixture update: Dockerfile
+build submission now has an external REST fixture for
+`POST /api/v1/images/build/dockerfile`, with `202 Accepted`, required
+`project_id`/`image_reference`, `ImageBuildStarted`, generic all-2xx success
+status validation, forbidden-key checks, additive/tolerant decoding, and
+`imageregistry.Spec()` parity for auth, route, path params, state-changing, and
+`harbor` adapter metadata. This is local/static typed external API fixture
+coverage only; it does not claim live Harbor build execution, SBOM/signing,
+allow-list enforcement, image scan lifecycle, full image workflow, Full GA, or
+first-version completion.
+
+2026-06-22 Workload typed API local/static fixture update: job submission now
+has an external REST fixture for `POST /api/v1/jobs`, with `201 Created`,
+required `project_id`/`user_id`, optional UI/admission/defaultable fields kept
+out of direct validation requirements, `JobSubmitted`, generic forbidden-key
+checks, additive/tolerant decoding, and `workload.Spec()` parity for auth,
+route, path params, state-changing, success status, and event metadata. This is
+local/static typed external API fixture coverage only; it does not claim live
+scheduler admission, queue policy completeness, Kubernetes job execution,
+logs/tailing, GPU telemetry, WEB-003/WEB-004 completion, Full GA, or
+first-version completion.
+
+2026-06-22 Workload ConfigFile typed API local/static fixture update:
+ConfigFile creation now has an external REST fixture for
+`POST /api/v1/configfiles`, with `201 Created`, required `project_id`/`name`,
+source-backed optional aliases/payload fields, `ConfigFileChanged` as the
+handler-emitted create event, generic forbidden-key checks, additive/tolerant
+decoding, and `workload.Spec()` parity for auth, route, no service key/path
+params, non-admin state-changing behavior, success status, and source-backed
+error statuses. This is local/static typed external API fixture coverage only;
+it does not claim live scheduler admission, Kubernetes job execution,
+logs/tailing, GPU telemetry, WEB-003/WEB-004 completion, DATA GA, Full GA, or
+first-version completion.
+
+2026-06-23 Workload ConfigFile update typed API local/static fixture update:
+ConfigFile update now has an external REST fixture for
+`PUT /api/v1/configfiles/{id}`, with `200 OK`, `id` path parameter, required
+`content`, source-backed optional update fields, `ConfigFileChanged`,
+forbidden-key checks, additive/tolerant decoding, and `workload.Spec()` parity
+for auth, route, `id` route parameter, non-admin state-changing behavior, no
+service key, success/error statuses, response shape, and event metadata.
+Optional `project_id`/`projectId` are same-Project aliases only and do not
+indicate cross-Project moves are supported. This is local/static typed external
+API fixture coverage only; it does not claim live ConfigFile update, project
+isolation, event delivery, ConfigFile runtime rollout, WEB-003/WEB-004
+completion, DATA GA, Full GA, or first-version completion.
+
+2026-06-23 Workload ConfigFile GET typed API local/static fixture update:
+ConfigFile read now has an external REST fixture for
+`GET /api/v1/configfiles/{id}`, with `200 OK`, `id` path parameter, empty
+request fields/example, no emitted events, forbidden-key checks,
+additive/tolerant decoding, and `workload.Spec()` parity for auth, route, `id`
+route parameter, read-only state, no service key, success/error statuses, and
+response shape. This is local/static typed external API fixture coverage only;
+it does not claim live ConfigFile reads, project isolation, event delivery,
+ConfigFile runtime rollout, WEB-003/WEB-004 completion, DATA GA, Full GA, or
+first-version completion.
+
+2026-06-23 Workload cancel-job typed API local/static fixture update:
+job cancellation now has an external REST fixture for
+`POST /api/v1/jobs/{id}/cancel`, with empty `{}` request body, `id` path
+parameter, `202 Accepted`, command-record response example,
+`JobCancelRequested`, generic forbidden-key checks, additive/tolerant decoding,
+and `workload.Spec()` parity for auth, route, `id` route parameter,
+non-admin state-changing behavior, no service key, success/error statuses,
+empty-body command semantics, and event metadata. `JobCancelRequested` is now
+listed in `workload.Spec().Events` to match the existing handler emission. This
+is local/static typed external API fixture coverage only; it does not claim
+live scheduler cancellation, Kubernetes job termination, cancellation
+propagation, logs/tailing, GPU telemetry, WEB-004 completion, DATA GA, Full GA,
+or first-version completion.
+
+2026-06-23 Workload ConfigFile version commit typed API local/static fixture
+update: ConfigFile version commit now has an external REST fixture for
+`POST /api/v1/configfiles/{id}/versions`, with `id` path parameter,
+required `content`, optional `message`/`manifest`/`yaml`/`config`,
+`201 Created`, version-record response metadata including `config_id`,
+`content`, `message`, `sha256`, `immutable: true`, and `committed_at`,
+`ConfigCommitted`, generic forbidden-key checks, additive/tolerant decoding,
+and `workload.Spec()` parity for auth, route, `id` route parameter,
+non-admin state-changing behavior, no service key, success/error statuses,
+response shape, and event metadata. This is local/static typed external API
+fixture coverage only; it does not claim live scheduler admission, Kubernetes
+job execution, ConfigFile runtime rollout, logs/tailing, GPU telemetry,
+WEB-003/WEB-004 completion, DATA GA, Full GA, or first-version completion.
+
+2026-06-22 Org-project typed API local/static fixture update: Project creation
+now has an external REST fixture for `POST /api/v1/projects`, with
+`201 Created`, required `project_name`/`g_id`, conservative source-backed
+optional fields, `ProjectCreated`, generic forbidden-key checks,
+additive/tolerant decoding, and `orgproject.Spec()` parity for auth, route, no
+service key/path params, non-admin route metadata, state-changing behavior,
+success/error statuses, and event metadata. This is local/static typed external
+API fixture coverage only; it does not claim live admin authorization proof,
+full Project lifecycle, tenant isolation, DATA GA, Full GA, or first-version
+completion.
+
+2026-06-22 Org-project Group create typed API local/static fixture update:
+Group creation now has an external REST fixture for `POST /api/v1/groups`, with
+`201 Created`, required `group_name`, conservative source-backed optional
+fields, `GroupCreated`, generic forbidden-key checks, additive/tolerant
+decoding, and `orgproject.Spec()` parity for auth, route, no service key/path
+params, admin route metadata, state-changing behavior, success/error statuses,
+direct group response shape, and event metadata. This is local/static typed
+external API fixture coverage only; it does not claim live admin authorization
+proof, full Group lifecycle, tenant isolation, DATA GA, Full GA, or
+first-version completion.
+
+2026-06-23 Org-project Group update typed API local/static fixture update:
+Group update now has an external REST fixture for `PUT /api/v1/groups/{id}`,
+with `200 OK`, required `group_name`, source-backed mutable optional fields,
+`GroupUpdated`, generic forbidden-key checks, additive/tolerant decoding, and
+`orgproject.Spec()` parity for auth, route, `id` path param, admin route
+metadata, state-changing behavior, success/error statuses, direct group
+	response shape, and event metadata. `GroupUpdated` is now listed in
+	`orgproject.Spec().Events` to match the existing handler emission. This is
+	local/static typed external API fixture coverage only; it does not claim live
+	admin authorization proof, full Group lifecycle, tenant isolation, DATA GA,
+	Full GA, or first-version completion.
+
+2026-06-23 Org-project Group delete typed API local/static fixture update:
+Group delete now has an external REST fixture for `DELETE /api/v1/groups/{id}`,
+with `200 OK`, no required or optional request fields, empty request/response
+examples, `GroupDeleted`, generic forbidden-key checks, additive/tolerant
+decoding, and `orgproject.Spec()` parity for auth, route, `id` path param,
+admin route metadata, state-changing behavior, success/error statuses, empty
+response shape, and event metadata. `GroupDeleted` is now listed in
+`orgproject.Spec().Events` to match the existing handler emission. This is
+local/static typed external API fixture coverage only; it does not claim live
+admin authorization proof, full Group lifecycle, tenant isolation, DATA GA,
+Full GA, or first-version completion.
+
+2026-06-23 Org-project Group batch delete typed API local/static fixture
+update: Group batch delete now has an external REST fixture for
+`DELETE /api/v1/groups/batch`, with `200 OK`, required top-level `ids`, direct
+`succeeded`/`failed`/`errors` batch result response, `GroupDeleted`, generic
+forbidden-key checks, additive/tolerant decoding, and `orgproject.Spec()` parity
+for auth, route, admin route metadata, state-changing behavior, no service key,
+no path params, success/error statuses, canonical group IDs, and event metadata.
+This is local/static typed external API fixture coverage only; it does not
+claim live admin authorization proof, full Group lifecycle, tenant isolation,
+DATA GA, Full GA, or first-version completion.
 
 ## 2. Incomplete for GA
 
 | AC family | What's missing | Evidence |
 |---|---|---|
-| `WEB-001..007` | Partial — first-party `frontend/` operations GUI exists and is served by `platform-gateway` at `/ui/`; live Playwright smoke passes. WEB-001 now has live OIDC browser-login evidence: Dex login through `platform-gateway` reached `/ui/?auth=oidc`, session cookie names existed without logging values, browser storage had no API key or token, and dashboard panels loaded through same-origin cookie auth on image `ci-ga-web-oidc-20260621203712` (`sha256:a4cc30f2f8b6b8b949c47949de186023ba61a8ad78ea52e72b927e17ea1d670b`). WEB-002 has live active-Project evidence: seeded E2E created a real Group/Project through existing REST routes, connected to `/ui/`, selected the seeded Project, and proved it was present in the active selector. WEB-003/WEB-004 have partial Workloads coverage: the GUI calls existing ConfigFile/job REST routes, lists ConfigFiles, filters authorized jobs by active Project for display, submits a minimal ConfigFile and Job for the active Project, sends job cancel requests, and reaches the existing job logs route from the browser. Earlier live seeded E2E submitted ConfigFile `CFG2600007`, submitted Job `e2e-job-mqneymza-1tqckn`, displayed that job, requested logs with `job_logs_status=200` / `job_logs_count=0`, and requested cancel with command `94925e294549528a2190b3dbafd09592`. WEB-005/WEB-007 remain partial read-only surfaces: Images lists Project images and image builds from existing image-registry routes, Usage lists current-user GPU/request usage and active-Project GPU usage from existing usage-observability routes, project GPU failures render as unavailable, and tests prove no admin-usage fallback or credential persistence. Harbor foundation now exists in `harbor-system`, and Harbor-side push/scan/delete evidence has passed with Trivy. WEB-005 catalog-derived image status display now has live API and Playwright GUI evidence under trace `ga-web-image-status-20260621214849`: a seeded Project image on `ci-ga-web-image-status-20260621214330` exposed top-level `scan_status="Success"`, `deleted=true`, `unavailable=false`, the seeded digest, and visible GUI state `deleted`. This proves UI/API display of read-model metadata. Bounded Harbor-to-catalog sync is also live-evidenced through `docs/plan/2026-06-21-harbor-catalog-sync-execution.md`: trace `654e8a882af7e6a2099a5cce75a8377e`, image `ci-ga-harbor-catalog-sync-reviewfix-20260621224351` (`sha256:3730083b5b028d8a592de463892ced37b399c07bc68aef1471b9d80214168939`), Harbor artifact digest `sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662`, sync status `synced`, `code="ok"`, and exact cleanup verified. Explicit delete-resync lifecycle is live-evidenced through `docs/plan/2026-06-21-harbor-delete-lifecycle-sync.md`: image `ci-ga-harbor-delete-lifecycle-20260621225732` (`sha256:68b5eefe30ee0644edb4e5146523bce82ad83ea572d31fc7c7be6d5f3d1cccca`), artifact `library/nexuspaas-sync:ga-harbor-delete-lifecycle-20260621225849`, Harbor delete `200`, exact tag lookup `404`, re-sync `code="artifact_not_found"`, catalog `deleted=true`, `unavailable=true`, `status="missing"`, and exact cleanup verified. The WebRPC GUI contract for GA v1 is approved as existing same-origin REST/OpenAPI consumption; no separate WebRPC/tRPC/gRPC transport is required until a concrete API gap is proven. Earlier live seeded proof had `project_count=1`, `seeded_project_present=true`, `config_file_count=1`, `job_count=3`, `seeded_job_present=true`, `job_cancel_requested=true`, `job_logs_requested=true`, `job_logs_status=200`, `job_logs_count=0`, `image_count=1`, `build_count=1`, `gpu_status=200`, and `gpu_ok=true`; the WEB-005 status proof separately verified `scan_status="Success"` and state `deleted`; a direct live route probe returned `used=0` for a seeded Project with no GPU pods, and the later GPU read-model proof recorded `gpu_status=200`, `gpu_ok=true`, `gpu_used=1`, and `gpu_nonzero=true`; the later WEB-004 bounded pod-log proof recorded `job_logs_status=200`, `job_logs_count=1`, `job_logs_nonempty=true`, and `job_logs_visible=true`. Remaining GA Web scope still lacks WebRTC browser operation, real workload GPU utilization/per-device telemetry evidence, continuous log tailing/full status workflow evidence, Harbor scan lifecycle synchronization and registry-wide automatic delete lifecycle beyond explicit per-tag sync/delete-resync, the full image-build/allow-list/SBOM/signing/GUI scan workflow, and full WEB AC coverage. | `docs/plan/2026-06-22-gpu-usage-read-model-live-proof.md`; `docs/plan/2026-06-22-web-gui-oidc-browser-login.md`; `docs/plan/2026-06-22-oidc-gateway-forwarded-origin.md`; `docs/plan/2026-06-21-web-gui-job-logs-route-proof.md`; `docs/plan/2026-06-21-web-gui-job-submit-cancel-live-e2e.md`; `docs/plan/2026-06-21-gateway-adapter-route-proxy-precedence.md`; `docs/plan/2026-06-21-image-build-live-list-evidence.md`; `docs/plan/2026-06-21-clusterread-static-admin-gpu-usage.md`; `docs/plan/2026-06-21-web-gui-active-project-live-e2e.md`; `docs/plan/2026-06-21-orgproject-static-admin-compatibility.md`; `docs/plan/2026-06-21-web-gui-foundation-live-e2e.md`; `docs/plan/2026-06-21-web-gui-first-party-serving.md`; `docs/plan/2026-06-21-web-gui-project-selector.md`; `docs/plan/2026-06-21-web-gui-workload-workflows.md`; `docs/plan/2026-06-21-web-gui-image-usage-contract.md`; `docs/plan/2026-06-21-web-gui-image-status-parity.md`; `docs/plan/2026-06-21-gateway-downstream-catalog-proxy.md`; `docs/plan/2026-06-21-platform-admin-policy-bootstrap.md`; `docs/plan/2026-06-21-harbor-foundation-live-deploy.md`; `docs/plan/2026-06-21-harbor-foundation-credential-rebaseline.md`; `docs/plan/2026-06-21-harbor-image-scan-live-evidence.md`; `docs/plan/2026-06-21-harbor-delete-lifecycle-sync.md`; OIDC image `localhost:5000/nexuspaas-backend:ci-ga-web-oidc-20260621203712` (`sha256:a4cc30f2f8b6b8b949c47949de186023ba61a8ad78ea52e72b927e17ea1d670b`); image-registry image `localhost:5000/nexuspaas-backend:ci-ga-harbor-delete-lifecycle-20260621225732` (`sha256:68b5eefe30ee0644edb4e5146523bce82ad83ea572d31fc7c7be6d5f3d1cccca`); gateway image `localhost:5000/nexuspaas-backend:ci-ga-web-job-logs-20260621143553` (`sha256:3111ba2be88c8b0cb4c344f172e468253c8b8c862930763d426117776ab1a824`); WEB-005 status image `localhost:5000/nexuspaas-backend:ci-ga-web-image-status-20260621214330` (`sha256:613c1f2cefbab9f029afc580213dc619e7892753826c02367fa6ea6be129f83e`); previous gateway job-submit image `localhost:5000/nexuspaas-backend:ci-ga-web-job-submit-20260621141339` (`sha256:aee156e2904e03d30dc3d671545a1b9e86e45e27092a03645427663d2544ccc4`); previous gateway proxy-adapter image `localhost:5000/nexuspaas-backend:ci-ga-gateway-proxy-adapter-20260621054757` (`sha256:3cda2888dda836a1cd197c476c31342dd7e2f6f6befe5fa7e785ab46d13bc700`); org-project image `localhost:5000/nexuspaas-backend:ci-ga-org-static-admin-20260621125516` (`sha256:7310012c13eb9ee0667ac3f27eddf839c0d13c8d53b8b1560916762158b61471`); usage-observability/image-registry image `localhost:5000/nexuspaas-backend:ci-ga-clusterread-static-admin-20260621132623` (`sha256:f6c6ab5badac315095c4ac299fb2ded4fac8c4f29ae910f65bed16eb9368a87f`) |
-| E2E (ga-checklist) | Full critical **live** E2E not evidenced — focused/local E2E plus local RKE2 single-namespace smoke exist. Latest live smokes prove PDP service-key scope, HTTP form create, durable outbox row, first-party `/ui/` dashboard rendering, gateway project-list routing, OIDC browser login through Dex and HttpOnly session cookies, active Project seeded selection, live GUI ConfigFile submit, live GUI job submit/cancel, live GUI job logs route consumption with bounded non-empty rendering, Project image list rendering, image build list rendering for a seeded build, catalog-derived Project image scan/deleted state rendering in the GUI, current-user usage/request-usage API rendering, active-Project GPU usage route success for a seeded Project with no GPU pods plus nonzero requested-GPU pod visibility evidence, current-live 15 first-party backend deployment same-image rollout/undo success, OPS-006 PostgreSQL logical backup/restore drill success, OPS-008 MinIO synthetic object restore drill success, OPS-009 current-live Kubernetes Secret recovery copy drill success, live Harbor foundation deploy/credential rebaseline readiness success, OPS-007 Harbor static-local Velero backup/restore drill success, Harbor-side Trivy push/scan/delete success, OPS-011 Redis/event-broker outage evidence, partial OPS-013 Prometheus/telemetry stale and quota non-grant evidence, Harbor dependency outage evidence through `/api/v1/harbor-status`, and OPS-012 image-registry build/list degraded-route outage evidence. They still are not the full critical-path E2E suite because WebRTC session launch, Harbor scan lifecycle synchronization and registry-wide automatic delete lifecycle beyond explicit per-tag sync/delete-resync, real workload GPU utilization/per-device telemetry evidence, continuous log tailing/full workload status, full NexusPaaS image-build/allow-list/SBOM/signing/GUI scan workflow evidence, managed/off-cluster secret recovery, PITR/off-cluster DR, target 8-unit/previous-image rollback per unit, full failure injection beyond the completed Redis/event-broker, Prometheus telemetry/admission, Harbor dependency/status API, and OPS-012 build/list degraded-route slices, and load/perf evidence remain open. | OIDC browser-login proof `docs/plan/2026-06-22-web-gui-oidc-browser-login.md` and `docs/plan/2026-06-22-oidc-gateway-forwarded-origin.md`, image `ci-ga-web-oidc-20260621203712` (`sha256:a4cc30f2f8b6b8b949c47949de186023ba61a8ad78ea52e72b927e17ea1d670b`), live Playwright reached `/ui/?auth=oidc`, observed only cookie names, found no browser storage API key/token, and loaded dashboard panels; `POST /api/v1/forms` -> `FormCreated` outbox row (`ga-outbox-live-20260620163919`); `platform-gateway /ui/` Playwright smoke and live `GET /api/v1/projects` through gateway on `ci-ga-admin-policy-20260621020259`; `ci-ga-web-workloads-20260620193544` rolled `/ui/` HTML/asset/Playwright smoke and live `GET /api/v1/configfiles`, `GET /api/v1/jobs` empty-list checks; `ci-ga-web-image-usage-20260621013315` rolled Images/Usage panels; gateway proxy-adapter image `ci-ga-gateway-proxy-adapter-20260621054757`; gateway job-submit image `ci-ga-web-job-submit-20260621141339`; gateway job-logs image `ci-ga-web-job-logs-20260621143553`; seeded active-Project E2E route proof `project_count=1`, `seeded_project_present=true`, `config_file_count=1`, `job_count=3`, `seeded_job_present=true`, `job_cancel_requested=true`, `job_cancel_command_id=94925e294549528a2190b3dbafd09592`, `job_logs_requested=true`, `job_logs_status=200`, `job_logs_count=0`, `image_count=1`, `build_count=1`, `gpu_status=200`, `gpu_ok=true`; WEB-005 status proof `docs/plan/2026-06-21-web-gui-image-status-parity.md` (`ga-web-image-status-20260621214849`, image `ci-ga-web-image-status-20260621214330`, digest `sha256:613c1f2cefbab9f029afc580213dc619e7892753826c02367fa6ea6be129f83e`, `scan_status="Success"`, state `deleted`); direct GPU route probe `status=200 used=0`; GPU read-model proof `gpu_status=200`, `gpu_ok=true`, `gpu_used=1`, `gpu_nonzero=true`; WEB-004 bounded pod-log proof `job_logs_status=200`, `job_logs_count=1`, `job_logs_nonempty=true`, `job_logs_visible=true`; current-live rollout/undo plan `docs/plan/2026-06-21-current-live-rollout-undo-evidence.md`; PostgreSQL restore drill `docs/plan/2026-06-21-postgres-backup-restore-drill.md`; MinIO object restore drill `docs/plan/2026-06-21-minio-object-restore-drill.md`; Kubernetes Secret recovery drill `docs/plan/2026-06-21-kubernetes-secret-recovery-drill.md`; Harbor foundation/rebaseline plans `docs/plan/2026-06-21-harbor-foundation-live-deploy.md` and `docs/plan/2026-06-21-harbor-foundation-credential-rebaseline.md`; blocked Harbor Velero attempt `docs/plan/2026-06-21-harbor-velero-backup-restore-drill.md`; Harbor static local Velero drill `docs/plan/2026-06-21-harbor-static-local-pv-velero-drill.md`; Harbor scan plan `docs/plan/2026-06-21-harbor-image-scan-live-evidence.md`; Harbor outage plan `docs/plan/2026-06-21-harbor-outage-failure-injection.md` (`ga-harbor-outage-20260621200008`); image-registry Harbor degraded build/list plan `docs/plan/2026-06-21-image-registry-harbor-degraded-build-list.md` (`ga-image-harbor-degraded-20260621212113`, image `ci-ga-image-harbor-degraded-20260621211729`, digest `sha256:21345ac6ad43db05f489bfa2ee37122b0b79873daca6f04619506c8bcef9d319`); Redis outage plan `docs/plan/2026-06-21-redis-event-broker-outage-evidence.md` (`ga-redis-outage-20260621202250`, event `33fc697b-2cac-4715-ac04-e46097b0ea99`); Prometheus stale/quota plan `docs/plan/2026-06-21-prometheus-stale-quota-evidence.md`, image `ci-ga-prometheus-stale-20260621205458` (`sha256:43a52e3875fa2ae9c0febf9a158537b7cdaeed97c7ef285f00ab9f5fee194a86`), trace `ga-prometheus-stale-20260621205959`; org-project static admin compatibility image `ci-ga-org-static-admin-20260621125516`; usage-observability/image-registry static admin compatibility image `ci-ga-clusterread-static-admin-20260621132623` |
+| `WEB-001..007` (not a V1 blocker — Web UI out of V1 scope) | Partial — first-party `frontend/` operations GUI exists and is served by `platform-gateway` at `/ui/`; live Playwright smoke passes. WEB-001 now has live OIDC browser-login evidence: Dex login through `platform-gateway` reached `/ui/?auth=oidc`, session cookie names existed without logging values, browser storage had no API key or token, and dashboard panels loaded through same-origin cookie auth on image `ci-ga-web-oidc-20260621203712` (`sha256:a4cc30f2f8b6b8b949c47949de186023ba61a8ad78ea52e72b927e17ea1d670b`). WEB-002 has live active-Project evidence: seeded E2E created a real Group/Project through existing REST routes, connected to `/ui/`, selected the seeded Project, and proved it was present in the active selector. WEB-003/WEB-004 have partial Workloads coverage: the GUI calls existing ConfigFile/job REST routes, lists ConfigFiles, filters authorized jobs by active Project for display, submits a minimal ConfigFile and Job for the active Project, sends job cancel requests, and reaches the existing job logs route from the browser. Earlier live seeded E2E submitted ConfigFile `CFG2600007`, submitted Job `e2e-job-mqneymza-1tqckn`, displayed that job, requested logs with `job_logs_status=200` / `job_logs_count=0`, and requested cancel with command `94925e294549528a2190b3dbafd09592`. WEB-005/WEB-007 remain partial surfaces: Images lists Project images and image builds from existing image-registry routes, Usage lists current-user GPU/request usage and active-Project GPU usage from existing usage-observability routes, project GPU failures render as unavailable, and tests prove no admin-usage fallback or credential persistence. Harbor foundation now exists in `harbor-system`, and Harbor-side push/scan/delete evidence has passed with Trivy. WEB-005 catalog-derived image status display now has live API and Playwright GUI evidence under trace `ga-web-image-status-20260621214849`: a seeded Project image on `ci-ga-web-image-status-20260621214330` exposed top-level `scan_status="Success"`, `deleted=true`, `unavailable=false`, the seeded digest, and visible GUI state `deleted`. This proves UI/API display of read-model metadata. WEB-005 / IMG-024 now also has focused local frontend evidence for active-Project Dockerfile build submission through `POST /api/v1/images/build/dockerfile`, including trimmed `image_reference`, success refresh of Project images/builds, no `/admin` fallback, no browser storage persistence, and generic secret-safe submit failure text; this does not prove live Harbor build execution, SBOM/signing, allow-list enforcement, or full image workflow GA. Bounded Harbor-to-catalog sync is also live-evidenced through `docs/plan/2026-06-21-harbor-catalog-sync-execution.md`: trace `654e8a882af7e6a2099a5cce75a8377e`, image `ci-ga-harbor-catalog-sync-reviewfix-20260621224351` (`sha256:3730083b5b028d8a592de463892ced37b399c07bc68aef1471b9d80214168939`), Harbor artifact digest `sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662`, sync status `synced`, `code="ok"`, and exact cleanup verified. Explicit delete-resync lifecycle is live-evidenced through `docs/plan/2026-06-21-harbor-delete-lifecycle-sync.md`: image `ci-ga-harbor-delete-lifecycle-20260621225732` (`sha256:68b5eefe30ee0644edb4e5146523bce82ad83ea572d31fc7c7be6d5f3d1cccca`), artifact `library/nexuspaas-sync:ga-harbor-delete-lifecycle-20260621225849`, Harbor delete `200`, exact tag lookup `404`, re-sync `code="artifact_not_found"`, catalog `deleted=true`, `unavailable=true`, `status="missing"`, and exact cleanup verified. The WebRPC GUI contract for GA v1 is approved as existing same-origin REST/OpenAPI consumption; no separate WebRPC/tRPC/gRPC transport is required until a concrete API gap is proven. Earlier live seeded proof had `project_count=1`, `seeded_project_present=true`, `config_file_count=1`, `job_count=3`, `seeded_job_present=true`, `job_cancel_requested=true`, `job_logs_requested=true`, `job_logs_status=200`, `job_logs_count=0`, `image_count=1`, `build_count=1`, `gpu_status=200`, and `gpu_ok=true`; the WEB-005 status proof separately verified `scan_status="Success"` and state `deleted`; a direct live route probe returned `used=0` for a seeded Project with no GPU pods, and the later GPU read-model proof recorded `gpu_status=200`, `gpu_ok=true`, `gpu_used=1`, and `gpu_nonzero=true`; the later WEB-004 bounded pod-log proof recorded `job_logs_status=200`, `job_logs_count=1`, `job_logs_nonempty=true`, and `job_logs_visible=true`. Remaining GA Web scope still lacks full WebRTC media/session operation, real workload GPU utilization/per-device telemetry evidence, live continuous log tailing/full workload status workflow evidence beyond the focused frontend REST polling slice, full usage workflow evidence, Harbor scan lifecycle synchronization and registry-wide automatic delete lifecycle beyond explicit per-tag sync/delete-resync, the full image-build/allow-list/SBOM/signing/GUI scan workflow, and full WEB AC coverage. | `docs/plan/2026-06-22-gpu-usage-read-model-live-proof.md`; `docs/plan/2026-06-22-web-gui-oidc-browser-login.md`; `docs/plan/2026-06-22-oidc-gateway-forwarded-origin.md`; `docs/plan/2026-06-21-web-gui-job-logs-route-proof.md`; `docs/plan/2026-06-21-web-gui-job-submit-cancel-live-e2e.md`; `docs/plan/2026-06-21-gateway-adapter-route-proxy-precedence.md`; `docs/plan/2026-06-21-image-build-live-list-evidence.md`; `docs/plan/2026-06-21-clusterread-static-admin-gpu-usage.md`; `docs/plan/2026-06-21-web-gui-active-project-live-e2e.md`; `docs/plan/2026-06-21-orgproject-static-admin-compatibility.md`; `docs/plan/2026-06-21-web-gui-foundation-live-e2e.md`; `docs/plan/2026-06-21-web-gui-first-party-serving.md`; `docs/plan/2026-06-21-web-gui-project-selector.md`; `docs/plan/2026-06-21-web-gui-workload-workflows.md`; `docs/plan/2026-06-21-web-gui-image-usage-contract.md`; `docs/plan/2026-06-21-web-gui-image-status-parity.md`; `docs/plan/2026-06-21-gateway-downstream-catalog-proxy.md`; `docs/plan/2026-06-21-platform-admin-policy-bootstrap.md`; `docs/plan/2026-06-21-harbor-foundation-live-deploy.md`; `docs/plan/2026-06-21-harbor-foundation-credential-rebaseline.md`; `docs/plan/2026-06-21-harbor-image-scan-live-evidence.md`; `docs/plan/2026-06-21-harbor-delete-lifecycle-sync.md`; OIDC image `localhost:5000/nexuspaas-backend:ci-ga-web-oidc-20260621203712` (`sha256:a4cc30f2f8b6b8b949c47949de186023ba61a8ad78ea52e72b927e17ea1d670b`); image-registry image `localhost:5000/nexuspaas-backend:ci-ga-harbor-delete-lifecycle-20260621225732` (`sha256:68b5eefe30ee0644edb4e5146523bce82ad83ea572d31fc7c7be6d5f3d1cccca`); gateway image `localhost:5000/nexuspaas-backend:ci-ga-web-job-logs-20260621143553` (`sha256:3111ba2be88c8b0cb4c344f172e468253c8b8c862930763d426117776ab1a824`); WEB-005 status image `localhost:5000/nexuspaas-backend:ci-ga-web-image-status-20260621214330` (`sha256:613c1f2cefbab9f029afc580213dc619e7892753826c02367fa6ea6be129f83e`); previous gateway job-submit image `localhost:5000/nexuspaas-backend:ci-ga-web-job-submit-20260621141339` (`sha256:aee156e2904e03d30dc3d671545a1b9e86e45e27092a03645427663d2544ccc4`); previous gateway proxy-adapter image `localhost:5000/nexuspaas-backend:ci-ga-gateway-proxy-adapter-20260621054757` (`sha256:3cda2888dda836a1cd197c476c31342dd7e2f6f6befe5fa7e785ab46d13bc700`); org-project image `localhost:5000/nexuspaas-backend:ci-ga-org-static-admin-20260621125516` (`sha256:7310012c13eb9ee0667ac3f27eddf839c0d13c8d53b8b1560916762158b61471`); usage-observability/image-registry image `localhost:5000/nexuspaas-backend:ci-ga-clusterread-static-admin-20260621132623` (`sha256:f6c6ab5badac315095c4ac299fb2ded4fac8c4f29ae910f65bed16eb9368a87f`) |
+| E2E (ga-checklist) | Full critical **live** E2E not evidenced — focused/local E2E plus local RKE2 single-namespace smoke exist. Latest live smokes prove PDP service-key scope, HTTP form create, durable outbox row, first-party `/ui/` dashboard rendering, gateway project-list routing, OIDC browser login through Dex and HttpOnly session cookies, active Project seeded selection, live GUI ConfigFile submit, live GUI job submit/cancel, live GUI job logs route consumption with bounded non-empty rendering, Project image list rendering, image build list rendering for a seeded build, catalog-derived Project image scan/deleted state rendering in the GUI, current-user usage/request-usage API rendering, active-Project GPU usage route success for a seeded Project with no GPU pods plus nonzero requested-GPU pod visibility evidence, current-live 15 first-party backend deployment same-image rollout/undo success, OPS-006 PostgreSQL logical backup/restore drill success, OPS-008 MinIO synthetic object restore drill success, OPS-009 current-live Kubernetes Secret recovery copy drill success, live Harbor foundation deploy/credential rebaseline readiness success, OPS-007 Harbor static-local Velero backup/restore drill success, Harbor-side Trivy push/scan/delete success, OPS-011 Redis/event-broker outage evidence, partial OPS-013 Prometheus/telemetry stale and quota non-grant evidence, Harbor dependency outage evidence through `/api/v1/harbor-status`, and OPS-012 image-registry build/list degraded-route outage evidence. They still are not the full critical-path E2E suite because full WebRTC media/session launch, Harbor scan lifecycle synchronization and registry-wide automatic delete lifecycle beyond explicit per-tag sync/delete-resync, real workload GPU utilization/per-device telemetry evidence, live continuous log tailing/full workload status beyond the focused frontend REST polling slice, full usage workflow evidence, full NexusPaaS image-build/allow-list/SBOM/signing/GUI scan workflow evidence, managed/off-cluster secret recovery, PITR/off-cluster DR, target 8-unit/previous-image rollback per unit, full OPS-019 failure injection beyond the completed Redis/event-broker, Prometheus telemetry/admission, Harbor dependency/status API, and OPS-012 build/list degraded-route slices, and load/perf evidence remain open. | OIDC browser-login proof `docs/plan/2026-06-22-web-gui-oidc-browser-login.md` and `docs/plan/2026-06-22-oidc-gateway-forwarded-origin.md`, image `ci-ga-web-oidc-20260621203712` (`sha256:a4cc30f2f8b6b8b949c47949de186023ba61a8ad78ea52e72b927e17ea1d670b`), live Playwright reached `/ui/?auth=oidc`, observed only cookie names, found no browser storage API key/token, and loaded dashboard panels; `POST /api/v1/forms` -> `FormCreated` outbox row (`ga-outbox-live-20260620163919`); `platform-gateway /ui/` Playwright smoke and live `GET /api/v1/projects` through gateway on `ci-ga-admin-policy-20260621020259`; `ci-ga-web-workloads-20260620193544` rolled `/ui/` HTML/asset/Playwright smoke and live `GET /api/v1/configfiles`, `GET /api/v1/jobs` empty-list checks; `ci-ga-web-image-usage-20260621013315` rolled Images/Usage panels; gateway proxy-adapter image `ci-ga-gateway-proxy-adapter-20260621054757`; gateway job-submit image `ci-ga-web-job-submit-20260621141339`; gateway job-logs image `ci-ga-web-job-logs-20260621143553`; seeded active-Project E2E route proof `project_count=1`, `seeded_project_present=true`, `config_file_count=1`, `job_count=3`, `seeded_job_present=true`, `job_cancel_requested=true`, `job_cancel_command_id=94925e294549528a2190b3dbafd09592`, `job_logs_requested=true`, `job_logs_status=200`, `job_logs_count=0`, `image_count=1`, `build_count=1`, `gpu_status=200`, `gpu_ok=true`; WEB-005 status proof `docs/plan/2026-06-21-web-gui-image-status-parity.md` (`ga-web-image-status-20260621214849`, image `ci-ga-web-image-status-20260621214330`, digest `sha256:613c1f2cefbab9f029afc580213dc619e7892753826c02367fa6ea6be129f83e`, `scan_status="Success"`, state `deleted`); direct GPU route probe `status=200 used=0`; GPU read-model proof `gpu_status=200`, `gpu_ok=true`, `gpu_used=1`, `gpu_nonzero=true`; WEB-004 bounded pod-log proof `job_logs_status=200`, `job_logs_count=1`, `job_logs_nonempty=true`, `job_logs_visible=true`; current-live rollout/undo plan `docs/plan/2026-06-21-current-live-rollout-undo-evidence.md`; PostgreSQL restore drill `docs/plan/2026-06-21-postgres-backup-restore-drill.md`; MinIO object restore drill `docs/plan/2026-06-21-minio-object-restore-drill.md`; Kubernetes Secret recovery drill `docs/plan/2026-06-21-kubernetes-secret-recovery-drill.md`; Harbor foundation/rebaseline plans `docs/plan/2026-06-21-harbor-foundation-live-deploy.md` and `docs/plan/2026-06-21-harbor-foundation-credential-rebaseline.md`; blocked Harbor Velero attempt `docs/plan/2026-06-21-harbor-velero-backup-restore-drill.md`; Harbor static local Velero drill `docs/plan/2026-06-21-harbor-static-local-pv-velero-drill.md`; Harbor scan plan `docs/plan/2026-06-21-harbor-image-scan-live-evidence.md`; Harbor outage plan `docs/plan/2026-06-21-harbor-outage-failure-injection.md` (`ga-harbor-outage-20260621200008`); image-registry Harbor degraded build/list plan `docs/plan/2026-06-21-image-registry-harbor-degraded-build-list.md` (`ga-image-harbor-degraded-20260621212113`, image `ci-ga-image-harbor-degraded-20260621211729`, digest `sha256:21345ac6ad43db05f489bfa2ee37122b0b79873daca6f04619506c8bcef9d319`); Redis outage plan `docs/plan/2026-06-21-redis-event-broker-outage-evidence.md` (`ga-redis-outage-20260621202250`, event `33fc697b-2cac-4715-ac04-e46097b0ea99`); Prometheus stale/quota plan `docs/plan/2026-06-21-prometheus-stale-quota-evidence.md`, image `ci-ga-prometheus-stale-20260621205458` (`sha256:43a52e3875fa2ae9c0febf9a158537b7cdaeed97c7ef285f00ab9f5fee194a86`), trace `ga-prometheus-stale-20260621205959`; org-project static admin compatibility image `ci-ga-org-static-admin-20260621125516`; usage-observability/image-registry static admin compatibility image `ci-ga-clusterread-static-admin-20260621132623` |
 | Backup/restore | Partial — OPS-006 PostgreSQL logical backup/restore drill passed live: `pg_dump -Fc` created a non-empty archive (`353198` bytes, SHA-256 `6c0869c3e591e9768edceee55feb80cbdf1e61e2e67b162a0b9a8bf6424a1c71`), `pg_restore --exit-on-error --single-transaction` restored into temporary DB `nexuspaas_restore_ops006_20260621150759`, restored public table count matched `81`, selected row counts matched, and temp DB/local dump cleanup passed. OPS-008 MinIO synthetic object drill passed live: object `media/ops008/20260621151838/payload.txt` was uploaded, backed up, deleted, restored, downloaded, SHA-256 matched (`dc4c12603462b5385f6cbb676cff88ba6503e1aba4b42ef10224c0b276c76d5b`), then remote object/local artifacts were cleaned. OPS-009 current-live Kubernetes Secret recovery copy drill passed for 21 selected Secrets without printing values or hashes. OPS-007 Harbor backup/restore now passed live after replatforming Harbor from unsupported Rancher `local-path` hostPath PVCs to Kubernetes static `local` PVs: Harbor chart `harbor-1.19.1` / app `2.15.1` restored ready, Velero chart `velero-12.0.3` / app `1.18.1` used dedicated BackupStorageLocation `ops007-static-20260621161910`, Backup `ops007-harbor-static-20260621161910` completed with `errors=0` / `warnings=0`, non-Redis PVBs completed for `database-data` (`51369080/51369080`), `registry-data` (`862/862`), and `job-logs` (`0/0`), `harbor-system` and exact static PVs were deleted, local PV directories were emptied, exact static PVs and the intentionally excluded empty Redis PVC were recreated, Restore `ops007-harbor-static-restore-20260621161910` completed with `errors=0` / `warnings=1` from Velero nodeOS detection only, matching PVRs completed, restored API ping returned `200`, read-only was unset, ORAS resolved and pulled digest `sha256:c7837e0a80dc7266b26eb197901b3ce8c3b893dc5ecb70208d13aab58dc70c46`, restored payload matched, synthetic Harbor data was cleaned, and final Harbor state was read-write with only the `library` project. Remaining GA gaps: managed/off-cluster secret recovery, Vault/External Secrets/Sealed Secrets/SOPS/KMS recovery, secret rotation/revocation, live `*-dev-*` secret-reference removal, PITR, off-cluster retention, versioned object restore, bucket metadata/IAM restore, encrypted backup storage, HA/off-cluster Harbor storage, and full DR. | `docs/plan/2026-06-21-postgres-backup-restore-drill.md`; `docs/plan/2026-06-21-minio-object-restore-drill.md`; `docs/plan/2026-06-21-kubernetes-secret-recovery-drill.md`; `docs/plan/2026-06-21-harbor-foundation-live-deploy.md`; `docs/plan/2026-06-21-harbor-foundation-credential-rebaseline.md`; `docs/plan/2026-06-21-harbor-velero-backup-restore-drill.md`; `docs/plan/2026-06-21-harbor-static-local-pv-velero-drill.md`; context `default`; namespace `nexuspaas`; Harbor namespace `harbor-system`; Harbor chart `harbor-1.19.1`; Harbor app `2.15.1`; Velero chart `velero-12.0.3`; Velero app `1.18.1`; `postgres:16-alpine`; `minio/minio:RELEASE.2025-04-08T15-41-24Z`; OPS-009 stamp `20260621153156`; selected Postgres counts: `platform_records=387`, `platform_event_outbox=1193`, `users=0`, `org_project_records=0`, `workload_records=0` |
 | Rollback | Partial — current live `nexuspaas` namespace has same-image Kubernetes controller rollback-path evidence for 15 first-party backend deployments: each completed serial `rollout restart`, `rollout status`, `rollout undo --to-revision=<pre_revision>`, final `rollout status`, final image equality, and final ready replicas equal desired replicas. Remaining GA rollback gaps: target 8-unit Production Beta staging rollback, previous-image rollback, schema-change rollback, backup/restore, and full external GA rollback evidence. | `docs/plan/2026-06-21-current-live-rollout-undo-evidence.md`; context `default`; namespace `nexuspaas`; all selected deployments final `1/1` ready |
 | Failure injection | Partial — OPS-011 Redis/event-broker outage is evidenced live: Redis was scaled from `1` to `0`, a direct `storage-service` pod request returned HTTP `201`, exact `GroupStorageCreated` event `33fc697b-2cac-4715-ac04-e46097b0ea99` was durable in Postgres as `pending|0|false` during the outage, Redis was restored to `1/1`, natural relay-lease expiry was respected without deleting the lease, the event reached `published|0|true`, Redis DB1 retained it, and exact Postgres synthetic rows were cleaned. Partial OPS-013 Prometheus/telemetry evidence is also live: `usage-observability-service` image `ci-ga-prometheus-stale-20260621205458` returned telemetry metadata on `/api/v1/cluster/summary` and `/api/v1/projects/{id}/gpu-usage`, `/api/v1/cluster/mps` returned degraded Prometheus adapter status `adapter_not_configured`, and scheduler admission under trace `ga-prometheus-stale-20260621205959` rejected an over-quota synthetic request with HTTP `409` / `GPU quota exceeded` while Prometheus was not configured; all exact synthetic rows were cleaned. Harbor dependency/status API outage is also evidenced live: `HARBOR_URL` was added through 12-factor runtime config, `/api/v1/harbor-status` returned healthy before injection, `harbor-core` was scaled from `1` to `0`, the product API returned retryable degraded Harbor status with `degraded.code="adapter_unavailable"`, `harbor-core` was restored to `1/1`, and `/api/v1/harbor-status` returned healthy again without process refresh. OPS-012 image-registry build/list degraded behavior is now evidenced live: `image-registry-service` image `ci-ga-image-harbor-degraded-20260621211729` kept project image list, project build list, and build submission responses successful with unchanged local data while adding retryable Harbor degraded metadata during `harbor-core=0`; recovery returned no degraded envelope and exact synthetic cleanup left `cleanup_leftovers=0`. Full NexusPaaS image-build/allow-list/SBOM/signing/GUI scan workflow evidence and full OPS-019 still remain open for DB, K8s API, live Prometheus interruption, node usage-agent failure, and other fault domains. | Redis outage: `docs/plan/2026-06-21-redis-event-broker-outage-evidence.md`, trace `ga-redis-outage-20260621202250`, event `33fc697b-2cac-4715-ac04-e46097b0ea99`; Prometheus stale/quota: `docs/plan/2026-06-21-prometheus-stale-quota-evidence.md`, image `ci-ga-prometheus-stale-20260621205458`, trace `ga-prometheus-stale-20260621205959`; Harbor outage: `docs/plan/2026-06-21-harbor-outage-failure-injection.md`, trace `ga-harbor-outage-20260621200008`, configured URL `http://harbor.harbor-system.svc.cluster.local/api/v2.0/ping`; OPS-012 image-registry build/list outage: `docs/plan/2026-06-21-image-registry-harbor-degraded-build-list.md`, trace `ga-image-harbor-degraded-20260621212113`, image `ci-ga-image-harbor-degraded-20260621211729`, digest `sha256:21345ac6ad43db05f489bfa2ee37122b0b79873daca6f04619506c8bcef9d319` |
@@ -127,6 +587,19 @@ Live Playwright submitted streaming Job `e2e-job-mqom1t1b-pa2jbl` and proved
 `stream_credential_password_redacted=true`. The approved WebRPC GUI contract
 remains same-origin REST/OpenAPI for GA v1. This does not close full WebRTC
 media session, real GPU-node streaming, or stream metrics evidence.
+
+2026-06-23 Selkies sidecar redesign: Selkies no longer ships as a baked
+standalone desktop image that users must rebuild into their app. A
+`streaming_session` job now keeps the user's own app image, and workload
+dispatch auto-injects the `selkies` sidecar (from `STREAM_SIDECAR_IMAGE`), the
+shared `/tmp/.X11-unix` + `/dev/shm` volumes, `DISPLAY=:0` on the app
+container(s), and signaling/metrics ports; the existing DRA step then wires app
+and sidecar to one shared MPS claim. Injection is idempotent and submit is
+rejected when `STREAM_SIDECAR_IMAGE` is unset. Unit-evidenced in
+`backend/internal/services/workload/dispatcher_streaming_test.go` and
+`config_test.go`. Remaining gap unchanged: live WebRTC/NVENC/forced-TURN relay
+stays operator-verified on GPU hardware; `stream_resolution`/`stream_fps`/
+`stream_idle_timeout_seconds`/`allow_webrtc` remain target-only.
 
 2026-06-22 RTC credential-safety update: RTC-006/RTC-007 now have focused
 backend test evidence. `stream_credentials_test.go` verifies TTL cap/default
@@ -182,6 +655,31 @@ build/tune pods, and restored host inotify settings. This proves bounded
 non-empty pod-log retrieval, not continuous tailing or a full workload status
 workflow.
 
+2026-06-22 Web UI polling update: WEB-004 continuous log/status polling is now
+strengthened in `frontend/src/App.tsx` with bounded REST polling of the
+selected Job's logs plus the existing active-Project workload list. Focused
+frontend evidence passed with `npm --prefix frontend run test -- src/App.test.tsx`;
+the test covers immediate log fetch, timer polling, job-status refresh,
+failure retry, second-Job cleanup, Project switch cleanup, unmount cleanup, and
+token-safe inline errors. `npm --prefix frontend run build` also passed. This
+is frontend/local evidence only: Docker/live E2E, WebSocket/SSE tailing, full
+workload lifecycle status, full WEB-001..007, Full GA, and first-version
+completion remain unclaimed.
+
+2026-06-22 Web UI usage update: WEB-007 frontend usage workflow is now
+strengthened in `frontend/src/App.tsx` with active-Project-filtered
+`/api/v1/me/usage` and `/api/v1/me/request-usage` tables, the existing
+`/api/v1/projects/{projectID}/gpu-usage` Project GPU pods summary, compact
+visible row/resource totals, and a Usage-local manual refresh button that
+re-runs only those three usage calls. Focused frontend evidence passed with
+`npm --prefix frontend run test -- src/App.test.tsx`; the test covers active
+Project filtering/totals, manual refresh route counts, GPU-route failure
+isolation with non-secret error text, no admin usage fallback, and no
+`localStorage`/`sessionStorage` credential persistence. `npm --prefix frontend
+run build` also passed. This is frontend/local evidence only: Docker/live E2E,
+real per-device GPU utilization, full usage attribution GA, full WEB-001..007,
+Full GA, and first-version completion remain unclaimed.
+
 2026-06-22 performance update: stream credential issuance met the credential
 p95 sub-target with k6: `100` temporary principals, `100` VUs for `30s`,
 `/api/v1/stream/credentials` `3000/3000` 2xx, failure rate `0`, p95
@@ -199,9 +697,13 @@ Cross-referenced with [`problem.md`](problem.md):
 | API-token indexed lookup | Done — token id is parsed from `nexuspaas_<token-id>_<secret>` and verification loads one indexed record; focused/full tests, quick gate, Sonar Quality Gate, reviewer approval, and live RKE2 auth evidence passed |
 | Centralized trusted-IP resolver | Done — identity failure/captcha/API-token audit paths reuse the trusted-proxy resolver; focused/full tests, quick gate, Sonar Quality Gate, reviewer approval, and live spoofed-header evidence passed |
 | Env profiles + PDP fail-closed | Done — explicit `APP_ENV` profiles, conflict validation, staging/production strict startup checks, production manifest profile declarations, focused/full tests, quick gate, Sonar Quality Gate, reviewer approval, and live RKE2 health/readiness evidence passed |
-| Service identity / JWT-JWKS lib / migration-runner maturity | Open |
+| Service identity / JWT-JWKS lib / migration-runner maturity | Scoped internal service identity slice done for v1; JWT/JWKS library-verifier slice done with `github.com/coreos/go-oidc/v3` replacing production custom JWK parsing and RSA/ECDSA JWT signature verification while preserving multi-audience, one-minute skew, `jti`, and role/user mapping behavior; migration runner ledger/checksum/advisory-lock/dirty-state code slice implemented with focused/full backend tests, DB-free `validate-migrations` evidence, and live PostgreSQL integration evidence for temporary-schema isolation plus dirty/checksum/adoption/lock behavior through redacted `platform-gateway-runtime-secret:DATABASE_URL`; service credential rotation/workload identity/mTLS, live staging migration drill, and full schema rollback maturity remain open |
 
 ## 4. Live cutover caveat
+
+The V1 launch gate's "Live staging online" pass refers to this local RKE2 /
+15-deployment / `localhost:5000` evidence only; external production launch
+readiness is OPEN (see the First Version (V1) Status block above).
 
 Recorded "live staging" evidence used a `localhost:5000` registry and rolled
 **15 single deployments** — **not** the GA **8-unit topology** with a real
@@ -224,3 +726,5 @@ external image promotion, rollback, or 8-unit release evidence.
 - IDE dedicated ACs (covered by generic ConfigFile + stream path unless IDE ships).
 - i18n / accessibility (product polish).
 - Billing (explicitly future).
+- Web UI (`WEB-*`) is out of V1 scope (API/CLI-first); not a V1 blocker.
+  Required only before a future Web UI launch.

@@ -2,8 +2,10 @@ package dashboard
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -139,12 +141,129 @@ func TestDashboardProjectionDeletesAndFallsBackWhenCoHosted(t *testing.T) {
 	deleteReadModel(app, req, dashboardUsersResource, map[string]any{"id": "U1", "deleted": false})
 }
 
+func TestDashboardProjectionDriftDetectsMissingOrphanStaleAndSorts(t *testing.T) {
+	app := platform.NewApp(platform.Config{ServiceName: "all", HTTPAddr: ":0"})
+	req := dashboardRequest("ADMIN", "admin", "admin")
+
+	createDashboardTestRecord(t, app, schedulerQueuesResource, map[string]any{"id": "Q-missing", "is_preemptible": true})
+	createDashboardTestRecord(t, app, dashboardUsersResource, map[string]any{"id": "U-orphan", "username": "orphan"})
+	createDashboardTestRecord(t, app, identityUsersResource, map[string]any{"id": "U-stale", "username": "source"})
+	createDashboardTestRecord(t, app, dashboardUsersResource, map[string]any{"id": "U-stale", "username": "local"})
+	createDashboardTestRecord(t, app, dashboardFormsResource, map[string]any{"id": "F-orphan", "user_id": "U1", "status": "Pending"})
+	createDashboardTestRecord(t, app, schedulerLiveQuotasResource, map[string]any{"id": "L-stale", "project_id": "P1", "gpu_limit": 1.0})
+	createDashboardTestRecord(t, app, dashboardLiveQuotasResource, map[string]any{"id": "L-stale", "project_id": "P1", "gpu_limit": 2.0})
+	createDashboardTestRecord(t, app, orgProjectsResource, map[string]any{"id": "P-clean", "name": "same"})
+	createDashboardTestRecord(t, app, dashboardProjectsResource, map[string]any{"id": "P-clean", "name": "same"})
+	createDashboardTestRecord(t, app, orgProjectsResource, map[string]any{"id": "P-missing", "name": "missing"})
+
+	report, err := projectionDrift(app, req)
+	if err != nil {
+		t.Fatalf("projectionDrift error = %v, want nil", err)
+	}
+	assertDashboardDriftFindings(t, "missing", report.Missing, []dashboardProjectionDriftFinding{
+		{SourceResource: orgProjectsResource, LocalResource: dashboardProjectsResource, ID: "P-missing"},
+		{SourceResource: schedulerQueuesResource, LocalResource: dashboardQueuesResource, ID: "Q-missing"},
+	})
+	assertDashboardDriftFindings(t, "orphan", report.Orphan, []dashboardProjectionDriftFinding{
+		{SourceResource: requestFormsResource, LocalResource: dashboardFormsResource, ID: "F-orphan"},
+		{SourceResource: identityUsersResource, LocalResource: dashboardUsersResource, ID: "U-orphan"},
+	})
+	assertDashboardDriftFindings(t, "stale", report.Stale, []dashboardProjectionDriftFinding{
+		{SourceResource: schedulerLiveQuotasResource, LocalResource: dashboardLiveQuotasResource, ID: "L-stale"},
+		{SourceResource: identityUsersResource, LocalResource: dashboardUsersResource, ID: "U-stale"},
+	})
+}
+
+func TestDashboardProjectionDriftNormalizesCanonicalID(t *testing.T) {
+	app := platform.NewApp(platform.Config{ServiceName: "all", HTTPAddr: ":0"})
+	ctx := context.Background()
+	req := dashboardRequest("ADMIN", "admin", "admin")
+
+	source, err := app.Store.Create(ctx, orgProjectMembersResource, map[string]any{
+		"id":         "source-record-id",
+		"project_id": "P1",
+		"user_id":    "U1",
+		"role":       "member",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := app.Store.Update(ctx, orgProjectMembersResource, source.ID, map[string]any{"id": ""}); !ok {
+		t.Fatal("failed to clear source project-member payload id")
+	}
+	createDashboardTestRecord(t, app, dashboardProjectMembersResource, map[string]any{
+		"id":         "P1:U1",
+		"project_id": "P1",
+		"user_id":    "U1",
+		"role":       "member",
+	})
+
+	report, err := projectionDrift(app, req)
+	if err != nil {
+		t.Fatalf("projectionDrift error = %v, want nil", err)
+	}
+	if len(report.Missing) != 0 || len(report.Orphan) != 0 || len(report.Stale) != 0 {
+		t.Fatalf("projectionDrift report = %#v, want no findings", report)
+	}
+}
+
+func TestDashboardProjectionDriftNilAppOrStoreFailsClosed(t *testing.T) {
+	req := dashboardRequest("ADMIN", "admin", "admin")
+
+	if _, err := projectionDrift(nil, req); !errors.Is(err, errDashboardProjectionDriftUnavailable) {
+		t.Fatalf("projectionDrift(nil) error = %v, want %v", err, errDashboardProjectionDriftUnavailable)
+	}
+	if _, err := projectionDrift(&platform.App{}, req); !errors.Is(err, errDashboardProjectionDriftUnavailable) {
+		t.Fatalf("projectionDrift(nil store) error = %v, want %v", err, errDashboardProjectionDriftUnavailable)
+	}
+}
+
+func TestDashboardProjectionDriftPairsCoverExpectedResources(t *testing.T) {
+	expected := []struct {
+		sourceResource string
+		localResource  string
+	}{
+		{sourceResource: identityUsersResource, localResource: dashboardUsersResource},
+		{sourceResource: orgProjectsResource, localResource: dashboardProjectsResource},
+		{sourceResource: orgProjectMembersResource, localResource: dashboardProjectMembersResource},
+		{sourceResource: requestFormsResource, localResource: dashboardFormsResource},
+		{sourceResource: schedulerLiveQuotasResource, localResource: dashboardLiveQuotasResource},
+		{sourceResource: schedulerQueuesResource, localResource: dashboardQueuesResource},
+	}
+	if len(dashboardProjectionDriftPairs) != len(expected) {
+		t.Fatalf("dashboardProjectionDriftPairs length = %d, want %d", len(dashboardProjectionDriftPairs), len(expected))
+	}
+	for i, want := range expected {
+		got := dashboardProjectionDriftPairs[i]
+		if got.sourceResource != want.sourceResource || got.localResource != want.localResource {
+			t.Fatalf("dashboardProjectionDriftPairs[%d] = %s -> %s, want %s -> %s", i, got.sourceResource, got.localResource, want.sourceResource, want.localResource)
+		}
+		if got.idFn == nil {
+			t.Fatalf("dashboardProjectionDriftPairs[%d].idFn is nil", i)
+		}
+	}
+}
+
 func dashboardRequest(userID, username, role string) *http.Request {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/overview", nil)
 	req.Header.Set("X-User-ID", userID)
 	req.Header.Set("X-Username", username)
 	req.Header.Set("X-User-Role", role)
 	return req
+}
+
+func createDashboardTestRecord(t *testing.T, app *platform.App, resource string, data map[string]any) {
+	t.Helper()
+	if _, err := app.Store.Create(context.Background(), resource, data); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertDashboardDriftFindings(t *testing.T, label string, got, want []dashboardProjectionDriftFinding) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s findings = %#v, want %#v", label, got, want)
+	}
 }
 
 func publishTestEvent(t *testing.T, app *platform.App, name string, data map[string]any) {

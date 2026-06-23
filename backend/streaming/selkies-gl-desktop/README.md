@@ -1,8 +1,11 @@
-# Selkies GL Desktop Image
+# Selkies Stream Sidecar Image
 
-Generic browser GPU desktop image for NexusPaas streaming jobs.
+Generic GPU streaming **sidecar** for NexusPaas. It runs the X display server +
+NVENC capture + WebRTC signaling and is auto-injected next to the user's app
+container (the app renders into the shared `DISPLAY :0`). Users never bake
+Selkies into their own image.
 
-Build and publish:
+Build and publish, then point `STREAM_SIDECAR_IMAGE` at the tag:
 
 ```bash
 docker build -t registry.example.com/nexuspaas/selkies-gl-desktop:24.04 backend/streaming/selkies-gl-desktop
@@ -11,11 +14,11 @@ docker push registry.example.com/nexuspaas/selkies-gl-desktop:24.04
 
 Defaults:
 
-- 1920x1080 at 60 FPS.
-- H.264 through NVIDIA NVENC: `SELKIES_ENCODER=nvh264enc`.
-- 12 Mbps cap: `STREAM_MAX_BITRATE_KBPS=12000` and `SELKIES_VIDEO_BITRATE=12000`.
-- Web UI/signaling on `:8080`; Selkies metrics port set to `:9090`.
-- Selkies basic auth disabled because NexusPaas routes the session through gateway/Ingress auth.
+- 1920x1080 @ 60 FPS, H.264 via NVIDIA NVENC (`SELKIES_ENCODER=nvh264enc`).
+- 12 Mbps cap (`STREAM_MAX_BITRATE_KBPS` / `SELKIES_VIDEO_BITRATE`); dispatch
+  overrides these from the job's `stream_max_bitrate_kbps`.
+- Signaling on `:8080`, metrics on `:9090`.
+- Basic auth disabled — sessions are authorized through gateway/Ingress.
 
-App-specific layers such as Isaac Sim or Omniverse Kit should be separate image
-tags when needed. Keep this image as the generic GL desktop baseline.
+This is the generic GL desktop baseline. App-specific runtimes (Isaac Sim,
+Omniverse Kit) stay in the **user's** app image; the sidecar is unchanged.

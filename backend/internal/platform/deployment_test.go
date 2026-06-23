@@ -101,6 +101,8 @@ func TestProductionBetaRuntimeConfigAndSecretContract(t *testing.T) {
 	contract := readTextFile(t, contractPath)
 	requireContains(t, contractPath, contract, "name: production-beta-runtime-secret-contract")
 	requireContains(t, contractPath, contract, "`SERVICE_API_KEY`")
+	requireContains(t, contractPath, contract, "`SERVICE_IDENTITY_KEY`")
+	requireContains(t, contractPath, contract, "`SERVICE_TRUSTED_IDENTITIES`")
 	requireContains(t, contractPath, contract, "`AUTHORIZATION_POLICY_URL`")
 	requireContains(t, contractPath, contract, "`AUTHORIZATION_POLICY_API_KEY`")
 	requireContains(t, contractPath, contract, "`postgres-password`")

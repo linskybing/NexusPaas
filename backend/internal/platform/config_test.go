@@ -442,11 +442,13 @@ func TestConfigStreamEnvDefaultsAndParsing(t *testing.T) {
 	t.Setenv(envStreamMaxBitrateKbps, "9000")
 	t.Setenv(envStreamMaxConcurrentSessions, "10")
 	t.Setenv(envStreamEgressBudgetKbps, "100000")
+	t.Setenv(envStreamSidecarImage, " registry.example.com/nexuspaas/selkies-gl-desktop:24.04 ")
 
 	cfg = ConfigFromEnv()
 	assertStringSlice(t, cfg.StreamTURNURIs, []string{"turn:turn.example.com:3478?transport=udp", "turns:turn.example.com:5349"})
 	if cfg.StreamTURNSharedSecret != "stream-secret" || cfg.StreamTURNCredentialTTL != 2*time.Hour ||
-		cfg.StreamMaxBitrateKbps != 9000 || cfg.StreamMaxConcurrentSessions != 10 || cfg.StreamEgressBudgetKbps != 100000 {
+		cfg.StreamMaxBitrateKbps != 9000 || cfg.StreamMaxConcurrentSessions != 10 || cfg.StreamEgressBudgetKbps != 100000 ||
+		cfg.StreamSidecarImage != "registry.example.com/nexuspaas/selkies-gl-desktop:24.04" {
 		t.Fatalf("stream env parsed incorrectly: %#v", cfg)
 	}
 }
@@ -773,11 +775,14 @@ func TestConfigTracesEndpointTakesPrecedence(t *testing.T) {
 }
 
 func TestConfigBackingServiceEnvParsing(t *testing.T) {
+	t.Setenv("SERVICE_NAME", "compute-api")
 	t.Setenv(envAuthorizationPolicyURL, " "+testPolicyURL+" ")
 	t.Setenv(envAuthorizationPolicyAPIKey, " "+testPolicyKey+" ")
 	t.Setenv(envDexURL, " http://localhost:5556/dex/ ")
 	t.Setenv(envServiceURLs, `{"identity-service":" http://identity-service/ ","":"http://ignored","empty":" "}`)
 	t.Setenv(envServiceAPIKey, " service-key ")
+	t.Setenv(envServiceIdentityKey, " scoped-key ")
+	t.Setenv(envServiceTrustedIdentities, `{"iam-unit":{"key":" iam-key ","audiences":[" compute-api ","compute-api",""]}}`)
 	t.Setenv(envDatabaseURL, " "+testDatabaseURL+" ")
 	t.Setenv(envRedisURL, " "+testRedisURL+" ")
 	t.Setenv(envEventBusURL, " "+testEventBusURL+" ")
@@ -798,6 +803,12 @@ func TestConfigBackingServiceEnvParsing(t *testing.T) {
 	}
 	if cfg.ServiceAPIKey != "service-key" {
 		t.Fatalf("ServiceAPIKey = %q, want trimmed service API key", cfg.ServiceAPIKey)
+	}
+	if cfg.ServiceIdentityName != "compute-api" || cfg.ServiceIdentityKey != "scoped-key" {
+		t.Fatalf("service identity = %q/%q, want defaulted compute-api/scoped-key", cfg.ServiceIdentityName, cfg.ServiceIdentityKey)
+	}
+	if got := cfg.ServiceTrustedIdentities["iam-unit"]; got.Key != "iam-key" || len(got.Audiences) != 1 || got.Audiences[0] != "compute-api" {
+		t.Fatalf("ServiceTrustedIdentities[iam-unit] = %#v, want trimmed key and deduped audience", got)
 	}
 	if cfg.DatabaseURL != testDatabaseURL {
 		t.Fatalf("DatabaseURL = %q, want trimmed postgres URL", cfg.DatabaseURL)
@@ -1034,6 +1045,7 @@ func TestConfigMalformedEnvFailsClosedInProduction(t *testing.T) {
 		{name: "stream max sessions int", envName: envStreamMaxConcurrentSessions, value: "many"},
 		{name: "stream egress budget int", envName: envStreamEgressBudgetKbps, value: "many"},
 		{name: "service urls json", envName: envServiceURLs, value: "{bad-json"},
+		{name: "trusted service identities json", envName: envServiceTrustedIdentities, value: "{bad-json"},
 		{name: "adapter config json", envName: envAdapterConfig, value: `{"pgadmin":{"auth":{"token":"secret-token"`, notContain: "secret-token"},
 		{name: "api key principals json", envName: envAPIKeyUsers, value: `{"key":{"id":"svc:test","token":"secret-token"`, notContain: "secret-token"},
 		{name: "trusted proxy cidrs", envName: envTrustedProxyCIDRs, value: "bad,203.0.113.10"},
@@ -1117,8 +1129,8 @@ func TestConfigValidateProductionGuards(t *testing.T) {
 		{name: "production api key requires principal", cfg: Config{Production: true, RequireAuth: true, APIKeys: map[string]bool{"key": true}}, wantErr: "API_KEY_PRINCIPALS"},
 		{name: "isolated production requires authorization policy url", cfg: isolatedProductionConfigWithout(envAuthorizationPolicyURL), wantErr: envAuthorizationPolicyURL},
 		{name: "isolated production policy url requires api key", cfg: isolatedProductionConfigWithout(envAuthorizationPolicyAPIKey), wantErr: envAuthorizationPolicyAPIKey},
-		{name: "production service urls require service api key", cfg: productionConfigWithServiceURLs(false), wantErr: envServiceAPIKey},
-		{name: "production accepts service urls with service api key", cfg: productionConfigWithServiceURLs(true)},
+		{name: "production service urls reject legacy-only service key", cfg: productionConfigWithServiceURLs(false), wantErr: envServiceIdentityName},
+		{name: "production accepts service urls with scoped service identity", cfg: productionConfigWithServiceURLs(true)},
 		{name: "production requires database url", cfg: productionConfigWithout(envDatabaseURL), wantErr: envDatabaseURL},
 		{name: "production requires redis url", cfg: productionConfigWithout(envRedisURL), wantErr: envRedisURL},
 		{name: "production requires event bus url", cfg: productionConfigWithout(envEventBusURL), wantErr: envEventBusURL},
@@ -1176,6 +1188,9 @@ func setValidProductionEnv(t *testing.T) {
 		envAuthorizationPolicyAPIKey:     "",
 		envServiceURLs:                   "",
 		envServiceAPIKey:                 "",
+		envServiceIdentityName:           "",
+		envServiceIdentityKey:            "",
+		envServiceTrustedIdentities:      "",
 		envDexURL:                        "",
 		envDatabaseURL:                   testDatabaseURL,
 		envRedisURL:                      testRedisURL,
@@ -1251,7 +1266,13 @@ func productionConfigWithServiceURLs(includeKey bool) Config {
 	cfg := validProductionConfig()
 	cfg.ServiceURLs = map[string]string{"identity-service": "http://identity-service"}
 	if includeKey {
-		cfg.ServiceAPIKey = "service-key"
+		cfg.ServiceIdentityName = "compute-api"
+		cfg.ServiceIdentityKey = "scoped-key"
+		cfg.ServiceTrustedIdentities = map[string]ServiceTrustedIdentity{
+			"iam-unit": {Key: "iam-key", Audiences: []string{"compute-api"}},
+		}
+	} else {
+		cfg.ServiceAPIKey = "legacy-key"
 	}
 	return cfg
 }

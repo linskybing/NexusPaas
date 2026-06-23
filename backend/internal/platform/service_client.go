@@ -24,6 +24,7 @@ const internalRecordsPath = "/internal/records"
 const (
 	defaultInternalJSONResponseLimit int64 = 8 << 20
 	serviceKeyHeader                       = "X-Service-Key"
+	serviceNameHeader                      = "X-Service-Name"
 )
 
 // InternalJSONClient calls explicit service-to-service JSON contracts. It keeps
@@ -80,9 +81,7 @@ func (c InternalJSONClient) Do(ctx context.Context, req InternalJSONRequest) (In
 	if req.Body != nil && strings.TrimSpace(headers.Get("Content-Type")) == "" {
 		headers.Set("Content-Type", "application/json")
 	}
-	if serviceKey := strings.TrimSpace(c.app.Config.ServiceAPIKey); serviceKey != "" {
-		headers.Set(serviceKeyHeader, serviceKey)
-	}
+	c.app.Config.applyServiceIdentityHeaders(headers)
 	if c.app.Config.AllowsService(c.owner) {
 		return c.doLocal(ctx, method, req.Path, req.Query, headers, body, req)
 	}
@@ -266,8 +265,7 @@ func (s *crossServiceStore) NextID(resource, prefix string, base, width int) str
 // deliberately refuses resources without a contract instead of using the legacy
 // generic internal-records fallback.
 type RemoteServiceReader struct {
-	urls   map[string]string
-	apiKey string
+	cfg    Config
 	client *http.Client
 }
 
@@ -279,8 +277,7 @@ func NewRemoteServiceReader(cfg Config) *RemoteServiceReader {
 		timeout = 2 * time.Second
 	}
 	return &RemoteServiceReader{
-		urls:   cfg.ServiceURLs,
-		apiKey: cfg.ServiceAPIKey,
+		cfg:    cfg,
 		client: &http.Client{Timeout: timeout, Transport: otelhttp.NewTransport(http.DefaultTransport)},
 	}
 }
@@ -333,7 +330,7 @@ func (rr *RemoteServiceReader) fetch(ctx context.Context, resource, id string) (
 }
 
 func (rr *RemoteServiceReader) fetchPath(ctx context.Context, owner, requestPath, rawQuery string) ([]byte, int, error) {
-	base := rr.urls[owner]
+	base := rr.cfg.ServiceURLs[owner]
 	if base == "" {
 		return nil, 0, fmt.Errorf("no SERVICE_URLS entry for owner %q", owner)
 	}
@@ -345,9 +342,7 @@ func (rr *RemoteServiceReader) fetchPath(ctx context.Context, owner, requestPath
 	if err != nil {
 		return nil, 0, err
 	}
-	if rr.apiKey != "" {
-		req.Header.Set(serviceKeyHeader, rr.apiKey)
-	}
+	rr.cfg.applyServiceIdentityHeaders(req.Header)
 	resp, err := rr.client.Do(req)
 	if err != nil {
 		return nil, 0, err
@@ -388,28 +383,75 @@ func decodeEnvelopeData(raw []byte, dest any) error {
 	return json.Unmarshal(envelope.Data, dest)
 }
 
-// AuthorizeServiceRequest enforces the shared service-to-service API key used by
-// internal read contracts. When no key is configured, internal contracts are not
-// exposed at all.
+// AuthorizeServiceRequest is a compatibility wrapper for raw internal contracts
+// that do not have an owner audience.
 func (a *App) AuthorizeServiceRequest(w http.ResponseWriter, r *http.Request) bool {
-	if a.Config.ServiceAPIKey == "" {
+	return a.AuthorizeServiceRequestForAudience(w, r, "")
+}
+
+// AuthorizeServiceRequestForAudience enforces service-to-service identity for
+// raw internal contracts owned by audience. When no identity is configured,
+// internal contracts are not exposed.
+func (a *App) AuthorizeServiceRequestForAudience(w http.ResponseWriter, r *http.Request, audience string) bool {
+	if !a.Config.acceptsServiceIdentity() {
 		http.NotFound(w, r)
 		return false
 	}
-	if !a.ServiceRequestAuthorized(r) {
+	if !a.serviceRequestAuthorizedForAudience(r, audience) {
 		WriteError(w, r, http.StatusUnauthorized, "unauthorized", "service authentication is required")
 		return false
 	}
 	return true
 }
 
-// ServiceRequestAuthorized reports whether r carries the configured
-// service-to-service key. Custom handlers that return through the standard route
-// envelope use this predicate; raw internal handlers use AuthorizeServiceRequest.
+// ServiceRequestAuthorized reports whether r carries a trusted service identity.
+// Without a route audience it only validates the caller/key pair for legacy
+// custom handlers.
 func (a *App) ServiceRequestAuthorized(r *http.Request) bool {
-	if a.Config.ServiceAPIKey == "" {
+	return a.serviceRequestAuthorizedForAudience(r, "")
+}
+
+func (a *App) serviceRequestAuthorizedForAudience(r *http.Request, audience string) bool {
+	if len(a.Config.ServiceTrustedIdentities) > 0 {
+		return a.scopedServiceRequestAuthorized(r, audience)
+	}
+	if a.Config.StrictRuntimeChecks() || strings.TrimSpace(a.Config.ServiceAPIKey) == "" {
 		return false
 	}
-	key := r.Header.Get(serviceKeyHeader)
-	return subtle.ConstantTimeCompare([]byte(key), []byte(a.Config.ServiceAPIKey)) == 1
+	return subtle.ConstantTimeCompare([]byte(r.Header.Get(serviceKeyHeader)), []byte(a.Config.ServiceAPIKey)) == 1
+}
+
+func (a *App) scopedServiceRequestAuthorized(r *http.Request, audience string) bool {
+	caller := strings.TrimSpace(r.Header.Get(serviceNameHeader))
+	trusted, ok := a.Config.ServiceTrustedIdentities[caller]
+	if !ok || strings.TrimSpace(trusted.Key) == "" {
+		return false
+	}
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get(serviceKeyHeader)), []byte(trusted.Key)) != 1 {
+		return false
+	}
+	if strings.TrimSpace(audience) == "" {
+		return true
+	}
+	return serviceAudienceAllowed(trusted.Audiences, audience)
+}
+
+func serviceAudienceAllowed(audiences []string, target string) bool {
+	target = strings.TrimSpace(target)
+	for _, audience := range audiences {
+		audience = strings.TrimSpace(audience)
+		if audience == target || deployableUnitHosts(audience, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func deployableUnitHosts(unit, service string) bool {
+	for _, hosted := range deployableUnitServices[unit] {
+		if hosted == service {
+			return true
+		}
+	}
+	return false
 }

@@ -133,7 +133,7 @@ func withServiceRuntimeDefaults(cfg Config) Config {
 func defaultPDP(cfg Config) contracts.PolicyDecisionPoint {
 	pdp := contracts.PolicyDecisionPoint(AllowAllPDP{})
 	if cfg.RequireAuth && strings.TrimSpace(cfg.AuthorizationPolicyURL) != "" {
-		pdp = NewRemotePDP(cfg.AuthorizationPolicyURL, cfg.AuthorizationPolicyAPIKey, cfg.AdapterTimeout)
+		pdp = NewRemotePDP(cfg.AuthorizationPolicyURL, cfg.AuthorizationPolicyAPIKey, cfg.AdapterTimeout, cfg)
 	}
 	return pdp
 }

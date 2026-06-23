@@ -22,7 +22,7 @@ func Spec() platform.ServiceSpec {
 		Phase:       "4",
 		Description: "Groups, user groups, project tree, project members, quotas, workspace settings, and GPU claims.",
 		Tables:      []string{"resource_owners", "groups", "user_groups", "projects", "project_members", "user_quotas", "project_workspace_settings", "gpu_claims", "identity_users", "identity_roles", "outbox", "inbox"},
-		Events:      []string{"GroupCreated", "GroupMembershipChanged", "ProjectCreated", "ProjectUpdated", "ProjectDeleted"},
+		Events:      []string{"GroupCreated", "GroupUpdated", "GroupDeleted", "GroupMembershipChanged", "ProjectCreated", "ProjectUpdated", "ProjectDeleted"},
 		Routes: []platform.RouteSpec{
 			route(http.MethodGet, "/api/v1/groups", "groups", "list"),
 			route(http.MethodPost, "/api/v1/groups", "groups", "create", admin()),

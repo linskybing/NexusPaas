@@ -13,18 +13,24 @@ import (
 // exposes identity-owned read contracts authenticated with serviceKey.
 func startOwnerService(t *testing.T, serviceKey string) (*App, string) {
 	t.Helper()
-	owner := NewApp(Config{ServiceName: "identity-service", RequireAuth: false, ServiceAPIKey: serviceKey})
+	owner := NewApp(Config{
+		ServiceName: "identity-service",
+		RequireAuth: false,
+		ServiceTrustedIdentities: map[string]ServiceTrustedIdentity{
+			"consumer-service": {Key: serviceKey, Audiences: []string{"identity-service"}},
+		},
+	})
 	if _, err := owner.Store.Create(context.Background(), "identity-service:users", map[string]any{"id": "US1", "username": "alice"}); err != nil {
 		t.Fatalf("seed owner: %v", err)
 	}
 	owner.Mux.HandleFunc("GET /internal/identity/users", func(w http.ResponseWriter, r *http.Request) {
-		if !owner.AuthorizeServiceRequest(w, r) {
+		if !owner.AuthorizeServiceRequestForAudience(w, r, "identity-service") {
 			return
 		}
 		WriteJSON(w, r, http.StatusOK, owner.Store.List(r.Context(), "identity-service:users"))
 	})
 	owner.Mux.HandleFunc("GET /internal/identity/users/{id}", func(w http.ResponseWriter, r *http.Request) {
-		if !owner.AuthorizeServiceRequest(w, r) {
+		if !owner.AuthorizeServiceRequestForAudience(w, r, "identity-service") {
 			return
 		}
 		record, ok := owner.Store.Get(r.Context(), "identity-service:users", r.PathValue("id"))
@@ -43,8 +49,9 @@ func TestRemoteServiceReaderListAndGet(t *testing.T) {
 	serviceKey := testServiceKey(t)
 	_, ownerURL := startOwnerService(t, serviceKey)
 	reader := NewRemoteServiceReader(Config{
-		ServiceURLs:   map[string]string{"identity-service": ownerURL},
-		ServiceAPIKey: serviceKey,
+		ServiceURLs:         map[string]string{"identity-service": ownerURL},
+		ServiceIdentityName: "consumer-service",
+		ServiceIdentityKey:  serviceKey,
 	})
 	ctx := context.Background()
 
@@ -71,11 +78,34 @@ func TestRemoteServiceReaderRejectsBadKey(t *testing.T) {
 	serviceKey := testServiceKey(t)
 	_, ownerURL := startOwnerService(t, serviceKey)
 	reader := NewRemoteServiceReader(Config{
-		ServiceURLs:   map[string]string{"identity-service": ownerURL},
-		ServiceAPIKey: serviceKey + "-wrong",
+		ServiceURLs:         map[string]string{"identity-service": ownerURL},
+		ServiceIdentityName: "consumer-service",
+		ServiceIdentityKey:  serviceKey + "-wrong",
 	})
 	if _, err := reader.List(context.Background(), "identity-service:users"); err == nil {
 		t.Fatal("expected unauthorized error with wrong service key")
+	}
+}
+
+func TestRemoteServiceReaderStrictRuntimeDoesNotSendLegacyServiceKey(t *testing.T) {
+	var gotName, gotKey string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotName = r.Header.Get(serviceNameHeader)
+		gotKey = r.Header.Get(serviceKeyHeader)
+		WriteError(w, r, http.StatusUnauthorized, "unauthorized", "service authentication is required")
+	}))
+	t.Cleanup(server.Close)
+
+	reader := NewRemoteServiceReader(Config{
+		EnvironmentProfile: runtimeProfileStaging,
+		ServiceURLs:        map[string]string{"identity-service": server.URL},
+		ServiceAPIKey:      "legacy-key",
+	})
+	if _, err := reader.List(context.Background(), "identity-service:users"); err == nil {
+		t.Fatal("expected strict legacy-only remote reader request to fail")
+	}
+	if gotName != "" || gotKey != "" {
+		t.Fatalf("strict legacy-only headers name=%q key=%q, want no service identity headers", gotName, gotKey)
 	}
 }
 
@@ -210,10 +240,11 @@ func TestCrossServiceStoreRoutesRemoteReads(t *testing.T) {
 	// An isolated service with SERVICE_URLS configured resolves contracted owner
 	// resources remotely.
 	consumer := NewApp(Config{
-		ServiceName:   "usage-observability-service",
-		RequireAuth:   false,
-		ServiceURLs:   map[string]string{"identity-service": ownerURL},
-		ServiceAPIKey: serviceKey,
+		ServiceName:         "usage-observability-service",
+		RequireAuth:         false,
+		ServiceURLs:         map[string]string{"identity-service": ownerURL},
+		ServiceIdentityName: "consumer-service",
+		ServiceIdentityKey:  serviceKey,
 	})
 	if _, ok := consumer.Store.(*crossServiceStore); !ok {
 		t.Fatalf("store = %T, want *crossServiceStore", consumer.Store)

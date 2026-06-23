@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"strconv"
@@ -32,6 +33,9 @@ type Config struct {
 	AuthorizationPolicyAPIKey   string
 	ServiceURLs                 map[string]string
 	ServiceAPIKey               string
+	ServiceIdentityName         string
+	ServiceIdentityKey          string
+	ServiceTrustedIdentities    map[string]ServiceTrustedIdentity
 	ServiceFallbackDisabled     bool
 	DexURL                      string
 	LDAPEnabled                 bool
@@ -101,6 +105,7 @@ type Config struct {
 	StreamMaxBitrateKbps        int
 	StreamMaxConcurrentSessions int
 	StreamEgressBudgetKbps      int
+	StreamSidecarImage          string
 	StorageClassOptions         []string
 	GroupStorageClassOptions    []string
 	GroupRegistryProfileOptions []string
@@ -115,6 +120,11 @@ type AdapterConfig struct {
 	StripPrefix string            `json:"strip_prefix"`
 	AddPrefix   string            `json:"add_prefix"`
 	Auth        AdapterAuthConfig `json:"auth"`
+}
+
+type ServiceTrustedIdentity struct {
+	Key       string   `json:"key"`
+	Audiences []string `json:"audiences"`
 }
 
 // AdapterAuthConfig describes the credential to inject toward an upstream. Type is
@@ -158,6 +168,9 @@ const (
 	envObjectStoreBucket           = "OBJECT_STORE_BUCKET"
 	envServiceURLs                 = "SERVICE_URLS"
 	envServiceAPIKey               = "SERVICE_API_KEY"
+	envServiceIdentityName         = "SERVICE_IDENTITY_NAME"
+	envServiceIdentityKey          = "SERVICE_IDENTITY_KEY"
+	envServiceTrustedIdentities    = "SERVICE_TRUSTED_IDENTITIES"
 	envDexURL                      = "DEX_URL"
 	envLDAPEnabled                 = "LDAP_ENABLED"
 	envLDAPHost                    = "LDAP_HOST"
@@ -206,6 +219,7 @@ const (
 	envStreamMaxBitrateKbps        = "STREAM_MAX_BITRATE_KBPS"
 	envStreamMaxConcurrentSessions = "STREAM_MAX_CONCURRENT_SESSIONS"
 	envStreamEgressBudgetKbps      = "STREAM_EGRESS_BUDGET_KBPS"
+	envStreamSidecarImage          = "STREAM_SIDECAR_IMAGE"
 	envStorageClassOptions         = "STORAGE_CLASS_OPTIONS"
 	envGroupStorageClassOptions    = "GROUP_STORAGE_CLASS_OPTIONS"
 	envGroupRegistryProfileOptions = "GROUP_REGISTRY_PROFILE_OPTIONS"
@@ -252,6 +266,7 @@ func ConfigFromEnv() Config {
 	parser := &configEnvParser{}
 	productionRaw, productionSet := os.LookupEnv(envProduction)
 	production := parser.envBool(envProduction, false)
+	serviceName := env("SERVICE_NAME", "all")
 	environmentProfile := normalizeEnvironmentProfile(os.Getenv(envAppEnv))
 	if profileConflictsWithProductionFlag(environmentProfile, production, productionSet, productionRaw) {
 		parser.addDiagnostic(envAppEnv, "profile compatible with PRODUCTION")
@@ -266,7 +281,7 @@ func ConfigFromEnv() Config {
 		parser.addDiagnostic(envTrustedProxyCIDRs, "CIDR/IP list")
 	}
 	cfg := Config{
-		ServiceName:                 env("SERVICE_NAME", "all"),
+		ServiceName:                 serviceName,
 		ProductName:                 env(envProductName, defaultProductName),
 		EnvironmentProfile:          environmentProfile,
 		HTTPAddr:                    env("HTTP_ADDR", ":8080"),
@@ -285,6 +300,9 @@ func ConfigFromEnv() Config {
 		AuthorizationPolicyAPIKey:   strings.TrimSpace(os.Getenv(envAuthorizationPolicyAPIKey)),
 		ServiceURLs:                 parser.parseServiceURLs(os.Getenv(envServiceURLs)),
 		ServiceAPIKey:               strings.TrimSpace(os.Getenv(envServiceAPIKey)),
+		ServiceIdentityName:         defaultServiceIdentityName(serviceName, os.Getenv(envServiceIdentityName)),
+		ServiceIdentityKey:          strings.TrimSpace(os.Getenv(envServiceIdentityKey)),
+		ServiceTrustedIdentities:    parser.parseServiceTrustedIdentities(os.Getenv(envServiceTrustedIdentities)),
 		ServiceFallbackDisabled:     parser.envBool("DISABLE_SERVICE_FALLBACK", false),
 		DexURL:                      strings.TrimRight(strings.TrimSpace(os.Getenv(envDexURL)), "/"),
 		LDAPEnabled:                 parser.envBool(envLDAPEnabled, false),
@@ -354,6 +372,7 @@ func ConfigFromEnv() Config {
 		StreamMaxBitrateKbps:        parser.envInt(envStreamMaxBitrateKbps, 12000),
 		StreamMaxConcurrentSessions: parser.envInt(envStreamMaxConcurrentSessions, 64),
 		StreamEgressBudgetKbps:      parser.envInt(envStreamEgressBudgetKbps, 800000),
+		StreamSidecarImage:          strings.TrimSpace(os.Getenv(envStreamSidecarImage)),
 		StorageClassOptions:         parseList(env(envStorageClassOptions, "standard,fast")),
 		GroupStorageClassOptions:    firstNonEmptyList(parseList(os.Getenv(envGroupStorageClassOptions)), parseList(os.Getenv(envStorageClassOptions))),
 		GroupRegistryProfileOptions: firstNonEmptyList(parseList(os.Getenv(envGroupRegistryProfileOptions)), parseList(os.Getenv(envRegistryProfileOptions))),
@@ -483,9 +502,13 @@ func (c Config) Validate() error {
 		return err
 	}
 	if c.IsProductionProfile() {
-		return c.validateProduction()
+		if err := c.validateProduction(); err != nil {
+			return err
+		}
+	} else if err := c.validateNonProduction(); err != nil {
+		return err
 	}
-	return c.validateNonProduction()
+	return c.validateStrictServiceIdentity()
 }
 
 func (c Config) validateEnvironmentProfile() error {
@@ -511,9 +534,6 @@ func (c Config) validateProduction() error {
 	}
 	if err := c.validateProductionAuth(); err != nil {
 		return err
-	}
-	if len(c.ServiceURLs) > 0 && strings.TrimSpace(c.ServiceAPIKey) == "" {
-		return errors.New("SERVICE_API_KEY is required when SERVICE_URLS is set in production")
 	}
 	return c.validateProductionBackingServices()
 }
@@ -730,6 +750,30 @@ func (c Config) validateProductionAuth() error {
 		return errors.New("AUTHORIZATION_POLICY_API_KEY is required when AUTHORIZATION_POLICY_URL is set in production")
 	}
 	return nil
+}
+
+func (c Config) validateStrictServiceIdentity() error {
+	if !c.StrictRuntimeChecks() || !c.requiresRemoteServiceAuth() {
+		return nil
+	}
+	missing := []string{}
+	if strings.TrimSpace(c.ServiceIdentityName) == "" {
+		missing = append(missing, envServiceIdentityName)
+	}
+	if strings.TrimSpace(c.ServiceIdentityKey) == "" {
+		missing = append(missing, envServiceIdentityKey)
+	}
+	if len(c.ServiceTrustedIdentities) == 0 {
+		missing = append(missing, envServiceTrustedIdentities)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(missing, ", ") + " are required for scoped internal service identity in staging/production")
+}
+
+func (c Config) requiresRemoteServiceAuth() bool {
+	return len(c.ServiceURLs) > 0 || strings.TrimSpace(c.AuthorizationPolicyURL) != ""
 }
 
 func (c Config) validateProductionBackingServices() error {
@@ -1018,6 +1062,99 @@ func parseServiceURLsWithDiagnostics(value string) (map[string]string, error) {
 		}
 	}
 	return urls, nil
+}
+
+func defaultServiceIdentityName(serviceName, configured string) string {
+	if name := strings.TrimSpace(configured); name != "" {
+		return name
+	}
+	serviceName = strings.TrimSpace(serviceName)
+	if serviceName == "" || serviceName == "all" {
+		return ""
+	}
+	return serviceName
+}
+
+func (c Config) applyServiceIdentityHeaders(headers http.Header) bool {
+	name := strings.TrimSpace(c.ServiceIdentityName)
+	key := strings.TrimSpace(c.ServiceIdentityKey)
+	if name != "" && key != "" {
+		headers.Set(serviceNameHeader, name)
+		headers.Set(serviceKeyHeader, key)
+		return true
+	}
+	if c.StrictRuntimeChecks() {
+		headers.Del(serviceNameHeader)
+		headers.Del(serviceKeyHeader)
+		return false
+	}
+	if key := strings.TrimSpace(c.ServiceAPIKey); key != "" {
+		headers.Del(serviceNameHeader)
+		headers.Set(serviceKeyHeader, key)
+		return true
+	}
+	return false
+}
+
+func (c Config) canSendServiceIdentity() bool {
+	return c.canSendScopedServiceIdentity() || strings.TrimSpace(c.ServiceAPIKey) != ""
+}
+
+func (c Config) canSendScopedServiceIdentity() bool {
+	return strings.TrimSpace(c.ServiceIdentityName) != "" && strings.TrimSpace(c.ServiceIdentityKey) != ""
+}
+
+func (c Config) canUseRemoteServiceIdentity() bool {
+	if c.StrictRuntimeChecks() {
+		return c.canSendScopedServiceIdentity()
+	}
+	return c.canSendServiceIdentity()
+}
+
+func (c Config) acceptsServiceIdentity() bool {
+	return len(c.ServiceTrustedIdentities) > 0 || strings.TrimSpace(c.ServiceAPIKey) != ""
+}
+
+func (p *configEnvParser) parseServiceTrustedIdentities(value string) map[string]ServiceTrustedIdentity {
+	identities, err := parseServiceTrustedIdentitiesWithDiagnostics(value)
+	if err != nil {
+		p.addDiagnostic(envServiceTrustedIdentities, configDiagnosticJSONObject)
+	}
+	return identities
+}
+
+func parseServiceTrustedIdentitiesWithDiagnostics(value string) (map[string]ServiceTrustedIdentity, error) {
+	identities := map[string]ServiceTrustedIdentity{}
+	if strings.TrimSpace(value) == "" {
+		return identities, nil
+	}
+	raw := map[string]ServiceTrustedIdentity{}
+	if err := json.Unmarshal([]byte(value), &raw); err != nil {
+		return identities, err
+	}
+	for name, identity := range raw {
+		name = strings.TrimSpace(name)
+		identity = identity.normalized()
+		if name != "" && identity.Key != "" && len(identity.Audiences) > 0 {
+			identities[name] = identity
+		}
+	}
+	return identities, nil
+}
+
+func (i ServiceTrustedIdentity) normalized() ServiceTrustedIdentity {
+	i.Key = strings.TrimSpace(i.Key)
+	audiences := []string{}
+	seen := map[string]bool{}
+	for _, audience := range i.Audiences {
+		audience = strings.TrimSpace(audience)
+		if audience != "" && !seen[audience] {
+			seen[audience] = true
+			audiences = append(audiences, audience)
+		}
+	}
+	i.Audiences = audiences
+	return i
 }
 
 func parseAPIKeyPrincipals(value string) map[string]APIKeyPrincipal {

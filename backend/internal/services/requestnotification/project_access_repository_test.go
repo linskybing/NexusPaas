@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"strings"
@@ -126,6 +127,102 @@ func TestProjectAccessRepositoryConflictFallbackAndNilStore(t *testing.T) {
 	}
 }
 
+func TestProjectAccessRepositoryProjectionDriftDetectsMissingOrphanStaleCleanAndSorts(t *testing.T) {
+	ctx := context.Background()
+	store := platform.NewStore()
+	repo := projectAccessRepoFromStore(store, platform.Config{ServiceName: "all"})
+
+	createProjectAccessRecord(t, store, orgUserGroupsResource, map[string]any{"id": "U-missing-group:G-missing-group", "user_id": "U-missing-group", "group_id": "G-missing-group", "role": "source"})
+	createProjectAccessRecord(t, store, orgProjectsResource, map[string]any{"id": "P-missing-project", "project_id": "P-missing-project", "name": "source only"})
+	createProjectAccessRecord(t, store, orgProjectMembersResource, map[string]any{"id": "P-clean-member:U-clean-member", "project_id": "P-clean-member", "user_id": "U-clean-member", "role": "clean"})
+	createProjectAccessRecord(t, store, orgProjectMembersResource, map[string]any{"id": "P-stale-member:U-stale-member", "project_id": "P-stale-member", "user_id": "U-stale-member", "role": "source"})
+	createProjectAccessRecord(t, store, orgUserGroupsResource, map[string]any{"id": "U-stale-group:G-stale-group", "user_id": "U-stale-group", "group_id": "G-stale-group", "role": "source"})
+	createProjectAccessRecord(t, store, orgProjectMembersResource, map[string]any{"id": "P-missing-member:U-missing-member", "project_id": "P-missing-member", "user_id": "U-missing-member", "role": "source"})
+	createProjectAccessRecord(t, store, orgUserGroupsResource, map[string]any{"id": "U-clean-group:G-clean-group", "user_id": "U-clean-group", "group_id": "G-clean-group", "role": "clean"})
+	createProjectAccessRecord(t, store, orgProjectMembersResource, map[string]any{"id": "skip-source-member"})
+	clearProjectAccessRecordID(t, store, orgProjectMembersResource, "skip-source-member")
+
+	requireNoProjectAccessError(t, repo.UpsertUserGroup(ctx, map[string]any{"user_id": "U-orphan-group", "group_id": "G-orphan-group", "role": "local"}))
+	requireNoProjectAccessError(t, repo.UpsertProjectMember(ctx, map[string]any{"project_id": "P-orphan-member", "user_id": "U-orphan-member", "role": "local"}))
+	requireNoProjectAccessError(t, repo.UpsertUserGroup(ctx, map[string]any{"user_id": "U-clean-group", "group_id": "G-clean-group", "role": "clean"}))
+	requireNoProjectAccessError(t, repo.UpsertProjectMember(ctx, map[string]any{"project_id": "P-stale-member", "user_id": "U-stale-member", "role": "local"}))
+	requireNoProjectAccessError(t, repo.UpsertUserGroup(ctx, map[string]any{"user_id": "U-stale-group", "group_id": "G-stale-group", "role": "local"}))
+	requireNoProjectAccessError(t, repo.UpsertProjectMember(ctx, map[string]any{"project_id": "P-clean-member", "user_id": "U-clean-member", "role": "clean"}))
+	createProjectAccessRecord(t, store, projectAccessMembers, map[string]any{"id": "skip-local-member"})
+	clearProjectAccessRecordID(t, store, projectAccessMembers, "skip-local-member")
+
+	report, err := repo.projectionDrift(ctx)
+	if err != nil {
+		t.Fatalf("projectionDrift: %v", err)
+	}
+	assertProjectAccessProjectionDriftFindings(t, "missing", report.Missing, []projectAccessProjectionDriftFinding{
+		{SourceResource: orgProjectMembersResource, LocalResource: projectAccessMembers, ID: "P-missing-member:U-missing-member"},
+		{SourceResource: orgProjectsResource, LocalResource: projectAccessProjects, ID: "P-missing-project"},
+		{SourceResource: orgUserGroupsResource, LocalResource: projectAccessUserGroups, ID: "U-missing-group:G-missing-group"},
+	})
+	assertProjectAccessProjectionDriftFindings(t, "orphan", report.Orphan, []projectAccessProjectionDriftFinding{
+		{SourceResource: orgProjectMembersResource, LocalResource: projectAccessMembers, ID: "P-orphan-member:U-orphan-member"},
+		{SourceResource: orgUserGroupsResource, LocalResource: projectAccessUserGroups, ID: "U-orphan-group:G-orphan-group"},
+	})
+	assertProjectAccessProjectionDriftFindings(t, "stale", report.Stale, []projectAccessProjectionDriftFinding{
+		{SourceResource: orgProjectMembersResource, LocalResource: projectAccessMembers, ID: "P-stale-member:U-stale-member"},
+		{SourceResource: orgUserGroupsResource, LocalResource: projectAccessUserGroups, ID: "U-stale-group:G-stale-group"},
+	})
+}
+
+func TestProjectAccessRepositoryProjectionDriftNormalizesCanonicalID(t *testing.T) {
+	ctx := context.Background()
+	store := platform.NewStore()
+	repo := projectAccessRepoFromStore(store, platform.Config{ServiceName: "all"})
+
+	createProjectAccessRecord(t, store, orgProjectMembersResource, map[string]any{
+		"id":         "source-member-row",
+		"project_id": "P-normalized",
+		"user_id":    "U-normalized",
+		"role":       "member",
+	})
+	clearProjectAccessRecordID(t, store, orgProjectMembersResource, "source-member-row")
+	requireNoProjectAccessError(t, repo.UpsertProjectMember(ctx, map[string]any{
+		"id":         "P-normalized:U-normalized",
+		"project_id": "P-normalized",
+		"user_id":    "U-normalized",
+		"role":       "member",
+	}))
+
+	report, err := repo.projectionDrift(ctx)
+	if err != nil {
+		t.Fatalf("projectionDrift: %v", err)
+	}
+	assertProjectAccessProjectionDriftFindings(t, "missing", report.Missing, nil)
+	assertProjectAccessProjectionDriftFindings(t, "orphan", report.Orphan, nil)
+	assertProjectAccessProjectionDriftFindings(t, "stale", report.Stale, nil)
+}
+
+func TestProjectAccessRepositoryProjectionDriftNilStoreFailsClosed(t *testing.T) {
+	repo := projectAccessRepoFromStore(nil, platform.Config{ServiceName: serviceName})
+	if _, err := repo.projectionDrift(context.Background()); !errors.Is(err, errProjectAccessRepositoryUnavailable) {
+		t.Fatalf("projectionDrift nil store error = %v, want %v", err, errProjectAccessRepositoryUnavailable)
+	}
+}
+
+func TestProjectAccessRepositoryProjectionDriftPairsCoverExpectedResources(t *testing.T) {
+	want := map[string]string{
+		projectAccessProjects:   orgProjectsResource,
+		projectAccessMembers:    orgProjectMembersResource,
+		projectAccessUserGroups: orgUserGroupsResource,
+	}
+	got := map[string]string{}
+	for _, pair := range projectAccessProjectionDriftPairs {
+		if pair.idFn == nil {
+			t.Fatalf("projection drift pair %s -> %s has nil id function", pair.sourceResource, pair.localResource)
+		}
+		got[pair.localResource] = pair.sourceResource
+	}
+	if len(projectAccessProjectionDriftPairs) != len(want) || !reflect.DeepEqual(got, want) {
+		t.Fatalf("projection drift pairs = %#v, want %#v", got, want)
+	}
+}
+
 func TestProjectAccessRepositorySourceGuard(t *testing.T) {
 	dir := projectAccessRepositoryTestDir(t)
 	guard := newProjectAccessSourceGuard()
@@ -142,6 +239,20 @@ func createProjectAccessRecord(t *testing.T, store platform.RecordStore, resourc
 	t.Helper()
 	if _, err := store.Create(context.Background(), resource, row); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func clearProjectAccessRecordID(t *testing.T, store platform.RecordStore, resource, recordID string) {
+	t.Helper()
+	if _, ok := store.Update(context.Background(), resource, recordID, map[string]any{"id": ""}); !ok {
+		t.Fatalf("clear %s/%s id: record not found", resource, recordID)
+	}
+}
+
+func assertProjectAccessProjectionDriftFindings(t *testing.T, label string, got, want []projectAccessProjectionDriftFinding) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s findings = %#v, want %#v", label, got, want)
 	}
 }
 

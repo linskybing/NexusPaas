@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
@@ -6,6 +6,7 @@ import App from "./App";
 describe("App", () => {
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     window.history.pushState({}, "", "/");
   });
@@ -156,7 +157,11 @@ describe("App", () => {
 
   it("loads active-project workloads, submits ConfigFiles, and requests job cancel", async () => {
     let submittedJob = false;
+    let submittedImageBuild = false;
+    let imageCalls = 0;
+    let imageBuildCalls = 0;
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(String(url)).not.toContain("/admin");
       expect(init?.headers).toMatchObject({ "X-API-Key": "adminkey" });
       switch (`${init?.method ?? "GET"} ${url}`) {
         case "GET /healthz":
@@ -190,6 +195,7 @@ describe("App", () => {
             ],
           });
 	        case "GET /api/v1/projects/proj-a/images":
+            imageCalls += 1;
 	          return json({
 	            success: true,
 	            data: [
@@ -219,9 +225,15 @@ describe("App", () => {
 	            ],
 	          });
         case "GET /api/v1/projects/proj-a/image-builds":
+          imageBuildCalls += 1;
           return json({
             success: true,
-            data: [{ id: "build-a", image_reference: "registry.local/team/app:stable", build_type: "dockerfile", status: "queued" }],
+            data: [
+              { id: "build-a", image_reference: "registry.local/team/app:stable", build_type: "dockerfile", status: "queued" },
+              ...(submittedImageBuild
+                ? [{ id: "build-new", image_reference: "registry.local/team/app:new", build_type: "dockerfile", status: "queued" }]
+                : []),
+            ],
           });
         case "GET /api/v1/me/usage":
           return json({
@@ -256,6 +268,10 @@ describe("App", () => {
           return json({ success: true, data: { id: "job-new", data: { project_id: "proj-a", job_id: "job-new", status: "submitted" } } }, 201);
         case "POST /api/v1/jobs/job-new/cancel":
           return json({ success: true, data: { id: "cmd-a", data: { job_id: "job-new" } } }, 202);
+        case "POST /api/v1/images/build/dockerfile":
+          expect(init?.body).toBe(JSON.stringify({ project_id: "proj-a", image_reference: "registry.local/team/app:new" }));
+          submittedImageBuild = true;
+          return json({ success: true, data: { id: "build-new", image_reference: "registry.local/team/app:new", status: "queued" } }, 202);
         case "GET /api/v1/jobs/job-new/logs":
           return json({ success: true, data: [{ id: "log-a", data: { job_id: "job-new", line: "queued" } }] });
         case "POST /api/v1/stream/credentials": {
@@ -301,9 +317,22 @@ describe("App", () => {
 	    expect(within(imagesTable).getByText("available")).toBeInTheDocument();
 	    expect(within(imagesTable).getByText("deleted")).toBeInTheDocument();
 	    expect(within(imagesTable).getByText("unavailable")).toBeInTheDocument();
-	    expect(within(screen.getByRole("table", { name: "Image builds" })).getByText("queued")).toBeInTheDocument();
-	    const projectGPUSummary = screen.getByText("Project GPU pods").closest("div");
-	    expect(projectGPUSummary).not.toBeNull();
+		expect(within(screen.getByRole("table", { name: "Image builds" })).getByText("queued")).toBeInTheDocument();
+    const initialImageCalls = imageCalls;
+    const initialImageBuildCalls = imageBuildCalls;
+    fireEvent.change(screen.getByLabelText("Image reference"), { target: { value: " registry.local/team/app:new " } });
+    fireEvent.click(screen.getByRole("button", { name: /Submit image build/ }));
+    expect(await screen.findByText("Image build submitted: build-new queued")).toBeInTheDocument();
+    await waitFor(() => expect(imageCalls).toBeGreaterThan(initialImageCalls));
+    expect(imageBuildCalls).toBeGreaterThan(initialImageBuildCalls);
+    expect(screen.getByText("build-new")).toBeInTheDocument();
+    const imageBuildPost = fetchMock.mock.calls.find(
+      ([url, init]) => `${init?.method ?? "GET"} ${url}` === "POST /api/v1/images/build/dockerfile",
+    );
+    expect(imageBuildPost?.[1]?.body).toBe(JSON.stringify({ project_id: "proj-a", image_reference: "registry.local/team/app:new" }));
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/admin"))).toBe(false);
+		const projectGPUSummary = screen.getByText("Project GPU pods").closest("div");
+		expect(projectGPUSummary).not.toBeNull();
 	    expect(within(projectGPUSummary as HTMLElement).getByText("2")).toBeInTheDocument();
     expect(screen.getByRole("table", { name: "GPU usage" })).toBeInTheDocument();
 
@@ -324,6 +353,7 @@ describe("App", () => {
 
     fireEvent.change(screen.getByLabelText("Job ID"), { target: { value: "job-new" } });
     fireEvent.change(screen.getByLabelText("Queue"), { target: { value: "queue-a" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: /Submit Job/ })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: /Submit Job/ }));
     expect(await screen.findByText("Job submitted")).toBeInTheDocument();
     expect(await screen.findByText("job-new")).toBeInTheDocument();
@@ -335,6 +365,233 @@ describe("App", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel job-new" }));
     expect(await screen.findByText("Cancel requested")).toBeInTheDocument();
+  });
+
+  it("shows active-project usage totals and refreshes usage without admin fallback", async () => {
+    let usageCalls = 0;
+    let requestUsageCalls = 0;
+    let gpuCalls = 0;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(String(url)).not.toContain("/admin");
+      expect(init?.headers).toMatchObject({ "X-API-Key": "adminkey" });
+      switch (`${init?.method ?? "GET"} ${url}`) {
+        case "GET /healthz":
+        case "GET /readyz":
+          return json({ success: true, data: { status: "ok" } });
+        case "GET /service-registry":
+          return json({ success: true, data: [{ name: "usage-observability-service", category: "ops-read-model", phase: "3", routes: [] }] });
+        case "GET /outbox":
+        case "GET /projections":
+        case "GET /api/v1/projects/proj-a/config-files":
+        case "GET /api/v1/jobs":
+        case "GET /api/v1/projects/proj-a/images":
+        case "GET /api/v1/projects/proj-a/image-builds":
+          return json({ success: true, data: [] });
+        case "GET /api/v1/projects":
+          return json({
+            success: true,
+            data: [
+              { id: "proj-a", project_name: "Project A", owner_id: "group-a" },
+              { id: "proj-b", project_name: "Project B", owner_id: "group-b" },
+            ],
+          });
+        case "GET /api/v1/me/usage":
+          usageCalls += 1;
+          return json({
+            success: true,
+            data: [
+              { ProjectID: "proj-a", ProjectName: "Project A", JobID: "job-a-usage", CPUHours: 1, GPUHours: 2, MemoryGBHours: 3 },
+              { project_id: "proj-a", project_name: "Project A", job_id: "job-a-snake", cpu_hours: "4", gpu_hours: "5", memory_gb_hours: "6" },
+              { ProjectID: "proj-b", ProjectName: "Project B", JobID: "job-b-usage", CPUHours: 10, GPUHours: 20, MemoryGBHours: 30 },
+            ],
+          });
+        case "GET /api/v1/me/request-usage":
+          requestUsageCalls += 1;
+          return json({
+            success: true,
+            data: [
+              { ProjectID: "proj-a", ProjectName: "Project A", JobID: "job-a-request", CPUHours: 7, GPUHours: 8, MemoryGBHours: 9 },
+              { ProjectID: "proj-b", ProjectName: "Project B", JobID: "job-b-request", CPUHours: 11, GPUHours: 12, MemoryGBHours: 13 },
+            ],
+          });
+        case "GET /api/v1/projects/proj-a/gpu-usage":
+          gpuCalls += 1;
+          if (gpuCalls === 1) {
+            return json({ success: true, data: { used: 2 } });
+          }
+          return json({ success: false, error: { message: "adminkey-token-secret" } }, 503);
+        case "GET /openapi.json":
+          return json({ info: { title: "NexusPaaS", version: "1" }, paths: { "/api/v1/me/usage": { get: {} } } });
+        default:
+          throw new Error(`unexpected fetch ${init?.method ?? "GET"} ${url}`);
+      }
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+    fireEvent.change(screen.getByLabelText("Admin API key"), { target: { value: "adminkey" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Connect$/ }));
+
+    await waitFor(() => expect(within(screen.getByRole("table", { name: "GPU usage" })).getByText("job-a-usage")).toBeInTheDocument());
+    const usageTable = screen.getByRole("table", { name: "GPU usage" });
+    expect(within(usageTable).getByText("job-a-snake")).toBeInTheDocument();
+    expect(within(usageTable).queryByText("job-b-usage")).not.toBeInTheDocument();
+    const requestUsageTable = screen.getByRole("table", { name: "Request usage" });
+    expect(within(requestUsageTable).getByText("job-a-request")).toBeInTheDocument();
+    expect(within(requestUsageTable).queryByText("job-b-request")).not.toBeInTheDocument();
+
+    expect(screen.getByLabelText("GPU usage totals")).toHaveTextContent(/Rows\s*2/);
+    expect(screen.getByLabelText("GPU usage totals")).toHaveTextContent(/CPUh\s*5/);
+    expect(screen.getByLabelText("GPU usage totals")).toHaveTextContent(/GPUh\s*7/);
+    expect(screen.getByLabelText("GPU usage totals")).toHaveTextContent(/Memory GBh\s*9/);
+    expect(screen.getByLabelText("Request usage totals")).toHaveTextContent(/Rows\s*1/);
+    expect(screen.getByLabelText("Request usage totals")).toHaveTextContent(/CPUh\s*7/);
+    expect(screen.getByLabelText("Request usage totals")).toHaveTextContent(/GPUh\s*8/);
+    expect(screen.getByLabelText("Request usage totals")).toHaveTextContent(/Memory GBh\s*9/);
+    const projectGPUSummary = screen.getByText("Project GPU pods").closest("div");
+    expect(projectGPUSummary).not.toBeNull();
+    expect(within(projectGPUSummary as HTMLElement).getByText("2")).toBeInTheDocument();
+    expect(usageCalls).toBe(1);
+    expect(requestUsageCalls).toBe(1);
+    expect(gpuCalls).toBe(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh usage" }));
+    await waitFor(() => expect(gpuCalls).toBe(2));
+    expect(usageCalls).toBe(2);
+    expect(requestUsageCalls).toBe(2);
+    expect(await screen.findByText("Project GPU usage unavailable: GPU usage refresh failed")).toBeInTheDocument();
+    expect(screen.queryByText("adminkey-token-secret")).not.toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "GPU usage" })).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Request usage" })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/admin"))).toBe(false);
+    expect(window.localStorage.length).toBe(0);
+    expect(window.sessionStorage.length).toBe(0);
+  });
+
+  it("polls selected job logs and status without stale intervals", async () => {
+    let jobStatus = "running";
+    const logCalls: Record<string, number> = {};
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      switch (`${init?.method ?? "GET"} ${url}`) {
+        case "GET /healthz":
+        case "GET /readyz":
+          return json({ success: true, data: { status: "ok" } });
+        case "GET /service-registry":
+          return json({ success: true, data: [{ name: "workload-service", category: "compute", phase: "5", routes: [] }] });
+        case "GET /outbox":
+        case "GET /projections":
+        case "GET /api/v1/projects/proj-a/config-files":
+        case "GET /api/v1/projects/proj-b/config-files":
+        case "GET /api/v1/projects/proj-a/images":
+        case "GET /api/v1/projects/proj-a/image-builds":
+        case "GET /api/v1/projects/proj-b/images":
+        case "GET /api/v1/projects/proj-b/image-builds":
+        case "GET /api/v1/me/usage":
+        case "GET /api/v1/me/request-usage":
+          return json({ success: true, data: [] });
+        case "GET /api/v1/projects":
+          return json({
+            success: true,
+            data: [
+              { id: "proj-a", project_name: "Project A", owner_id: "group-a" },
+              { id: "proj-b", project_name: "Project B", owner_id: "group-b" },
+            ],
+          });
+        case "GET /api/v1/jobs":
+          return json({
+            success: true,
+            data: [
+              { id: "job-a", data: { project_id: "proj-a", job_id: "job-a", status: jobStatus } },
+              { id: "job-b", data: { project_id: "proj-a", job_id: "job-b", status: "running" } },
+              { id: "job-c", data: { project_id: "proj-b", job_id: "job-c", status: "running" } },
+            ],
+          });
+        case "GET /api/v1/jobs/job-a/logs": {
+          logCalls["job-a"] = (logCalls["job-a"] ?? 0) + 1;
+          if (logCalls["job-a"] === 2) {
+            return json({ success: false, error: { message: "adminkey-token-secret" } }, 503);
+          }
+          return json({ success: true, data: [{ id: `log-a-${logCalls["job-a"]}`, data: { job_id: "job-a", line: `job-a-${logCalls["job-a"]}` } }] });
+        }
+        case "GET /api/v1/jobs/job-b/logs":
+        case "GET /api/v1/jobs/job-c/logs": {
+          const id = url.includes("job-b") ? "job-b" : "job-c";
+          logCalls[id] = (logCalls[id] ?? 0) + 1;
+          return json({ success: true, data: [{ id: `log-${id}-${logCalls[id]}`, data: { job_id: id, line: `${id}-${logCalls[id]}` } }] });
+        }
+        case "GET /api/v1/projects/proj-a/gpu-usage":
+        case "GET /api/v1/projects/proj-b/gpu-usage":
+          return json({ success: true, data: { used: 0 } });
+        case "GET /openapi.json":
+          return json({ info: { title: "NexusPaaS", version: "1" }, paths: { "/api/v1/jobs": { get: {} } } });
+        default:
+          throw new Error(`unexpected fetch ${init?.method ?? "GET"} ${url}`);
+      }
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { unmount } = render(<App />);
+    fireEvent.change(screen.getByLabelText("Admin API key"), { target: { value: "adminkey" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Connect$/ }));
+    expect(await screen.findByText("job-a")).toBeInTheDocument();
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "View logs job-a" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(within(screen.getByRole("table", { name: "Job logs job-a" })).getByText("job-a-1")).toBeInTheDocument();
+    expect(screen.getByText(/Tailing logs|Refreshing logs/)).toBeInTheDocument();
+
+    jobStatus = "succeeded";
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("Log/status refresh failed");
+    expect(screen.queryByText("adminkey-token-secret")).not.toBeInTheDocument();
+    expect(window.localStorage.length).toBe(0);
+    expect(window.sessionStorage.length).toBe(0);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(within(screen.getByRole("table", { name: "Job logs job-a" })).getByText("job-a-3")).toBeInTheDocument();
+    expect(within(screen.getByRole("table", { name: "Jobs" })).getByText("succeeded")).toBeInTheDocument();
+
+    const jobACalls = logCalls["job-a"];
+    fireEvent.click(screen.getByRole("button", { name: "View logs job-b" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(within(screen.getByRole("table", { name: "Job logs job-b" })).getByText("job-b-1")).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(logCalls["job-a"]).toBe(jobACalls);
+    expect(logCalls["job-b"]).toBe(2);
+
+    const jobBCalls = logCalls["job-b"];
+    fireEvent.change(screen.getByLabelText("Active project"), { target: { value: "proj-b" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.queryByRole("table", { name: "Job logs job-b" })).not.toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(logCalls["job-b"]).toBe(jobBCalls);
+
+    fireEvent.click(screen.getByRole("button", { name: "View logs job-c" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(within(screen.getByRole("table", { name: "Job logs job-c" })).getByText("job-c-1")).toBeInTheDocument();
+    const jobCCalls = logCalls["job-c"];
+    unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(logCalls["job-c"]).toBe(jobCCalls);
   });
 
   it("shows stream credential errors without losing the job list", async () => {
@@ -384,6 +641,7 @@ describe("App", () => {
 
   it("keeps image and usage panels available for empty or forbidden project data", async () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(String(url)).not.toContain("/admin");
       expect(init?.headers).toMatchObject({ "X-API-Key": "adminkey" });
       switch (`${init?.method ?? "GET"} ${url}`) {
         case "GET /healthz":
@@ -404,6 +662,8 @@ describe("App", () => {
           return json({ success: true, data: [{ id: "proj-a", project_name: "Project A", owner_id: "group-a" }] });
         case "GET /api/v1/projects/proj-a/gpu-usage":
           return json({ success: false, error: { message: "project access required" } }, 403);
+        case "POST /api/v1/images/build/dockerfile":
+          return json({ success: false, error: { message: "registry_password=adminkey-token-secret" } }, 503);
         case "GET /openapi.json":
           return json({ info: { title: "NexusPaaS", version: "1" }, paths: { "/api/v1/projects/{id}/gpu-usage": { get: {} } } });
         default:
@@ -418,8 +678,17 @@ describe("App", () => {
 
     expect(await screen.findByText("No Project images")).toBeInTheDocument();
     expect(screen.getByText("No image builds")).toBeInTheDocument();
-    expect(await screen.findByText("Project GPU usage unavailable: project access required")).toBeInTheDocument();
+    expect(await screen.findByText("Project GPU usage unavailable: GPU usage refresh failed")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Image reference"), { target: { value: "registry.local/team/app:secret" } });
+    fireEvent.click(screen.getByRole("button", { name: /Submit image build/ }));
+    expect(await screen.findByText("Image build request failed")).toBeInTheDocument();
+    expect(screen.queryByText("registry_password=adminkey-token-secret")).not.toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "GPU usage" })).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Request usage" })).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalledWith("/api/v1/admin/usage", expect.any(Object));
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/admin"))).toBe(false);
+    expect(window.localStorage.length).toBe(0);
+    expect(window.sessionStorage.length).toBe(0);
   });
 });
 

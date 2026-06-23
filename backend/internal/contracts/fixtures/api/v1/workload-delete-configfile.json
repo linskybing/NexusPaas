@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "contract_name": "workload.delete_configfile",
+  "owner_service": "workload-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "workload-service:configfiles",
+  "action": "delete",
+  "method": "DELETE",
+  "path": "/api/v1/configfiles/{id}",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [
+    "id"
+  ],
+  "required_request_fields": [],
+  "optional_request_fields": [],
+  "request_example": {},
+  "success_statuses": [
+    200
+  ],
+  "error_statuses": [
+    401,
+    403,
+    404,
+    500
+  ],
+  "emits_events": [
+    "ConfigFileChanged"
+  ],
+  "response_example": {
+    "id": "config-ga-001",
+    "deleted": true
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

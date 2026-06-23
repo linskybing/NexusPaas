@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "contract_name": "storage.batch_delete_project_permissions",
+  "owner_service": "storage-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "storage-service:project_storage_permissions",
+  "action": "batch_delete",
+  "method": "DELETE",
+  "path": "/api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/batch",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [
+    "id",
+    "pvcId"
+  ],
+  "required_request_fields": [
+    "items"
+  ],
+  "optional_request_fields": [],
+  "request_example": {
+    "items": [
+      {
+        "user_id": "user-ga-reader"
+      },
+      {
+        "user_id": "user-ga-viewer"
+      }
+    ]
+  },
+  "success_statuses": [
+    200
+  ],
+  "error_statuses": [
+    400,
+    401,
+    403,
+    404,
+    500
+  ],
+  "emits_events": [
+    "ProjectStoragePermissionChanged"
+  ],
+  "response_example": {
+    "succeeded": 2,
+    "failed": 0,
+    "errors": []
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

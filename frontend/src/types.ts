@@ -192,6 +192,11 @@ export type ProjectImageBuildRecord = {
   [key: string]: unknown;
 };
 
+export type ImageBuildPayload = {
+  project_id: string;
+  image_reference: string;
+};
+
 export type UsageRecord = {
   UserID?: string;
   Username?: string;

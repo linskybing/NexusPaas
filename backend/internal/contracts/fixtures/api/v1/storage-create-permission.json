@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "contract_name": "storage.create_permission",
+  "owner_service": "storage-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "storage-service:storage_permissions",
+  "action": "create",
+  "method": "POST",
+  "path": "/api/v1/storage/permissions",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [],
+  "required_request_fields": [
+    "group_id",
+    "pvc_id",
+    "user_id",
+    "permission"
+  ],
+  "optional_request_fields": [],
+  "request_example": {
+    "group_id": "group-ga-001",
+    "pvc_id": "datasets",
+    "user_id": "user-ga-reader",
+    "permission": "read_write"
+  },
+  "success_statuses": [
+    200
+  ],
+  "error_statuses": [
+    400,
+    401,
+    403,
+    409,
+    500
+  ],
+  "emits_events": [
+    "StoragePermissionChanged"
+  ],
+  "response_example": {
+    "id": "group-ga-001:datasets:user-ga-reader",
+    "group_id": "group-ga-001",
+    "pvc_id": "datasets",
+    "user_id": "user-ga-reader",
+    "permission": "read_write",
+    "updated_at": "2026-06-23T00:00:00Z"
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

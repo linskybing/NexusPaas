@@ -26,6 +26,20 @@ func getReadContract(t *testing.T, app *App, target, key string) *httptest.Respo
 	return rec
 }
 
+func getScopedReadContract(t *testing.T, app *App, target, caller, key string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	if caller != "" {
+		req.Header.Set(serviceNameHeader, caller)
+	}
+	if key != "" {
+		req.Header.Set(serviceKeyHeader, key)
+	}
+	app.ServeHTTP(rec, req)
+	return rec
+}
+
 func TestRegisterReadContractRequiresServiceAuth(t *testing.T) {
 	app := readContractTestApp(t)
 	if rec := getReadContract(t, app, "/internal/test/items", ""); rec.Code != http.StatusUnauthorized {
@@ -41,6 +55,27 @@ func TestRegisterReadContractRequiresServiceAuth(t *testing.T) {
 	closed.RegisterReadContract("test-service:items", "/internal/test/items", "/internal/test/items/{id...}")
 	if rec := getReadContract(t, closed, "/internal/test/items", "anything"); rec.Code != http.StatusNotFound {
 		t.Fatalf("no server key configured: got %d, want 404", rec.Code)
+	}
+}
+
+func TestRegisterReadContractValidatesScopedCallerAudience(t *testing.T) {
+	app := NewApp(Config{
+		ServiceName: "all",
+		HTTPAddr:    ":0",
+		ServiceTrustedIdentities: map[string]ServiceTrustedIdentity{
+			"allowed-caller": {Key: "allowed-key", Audiences: []string{"test-service"}},
+			"wrong-caller":   {Key: "wrong-key", Audiences: []string{"other-service"}},
+		},
+	})
+	app.RegisterReadContract("test-service:items", "/internal/test/items", "/internal/test/items/{id...}")
+
+	for _, path := range []string{"/internal/test/items", "/internal/test/items/missing"} {
+		if rec := getScopedReadContract(t, app, path, "wrong-caller", "wrong-key"); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s wrong audience status = %d, want 401: %s", path, rec.Code, rec.Body.String())
+		}
+	}
+	if rec := getScopedReadContract(t, app, "/internal/test/items", "allowed-caller", "allowed-key"); rec.Code != http.StatusOK {
+		t.Fatalf("allowed scoped caller status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 }
 

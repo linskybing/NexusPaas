@@ -1,9 +1,12 @@
 package storage
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -12,6 +15,175 @@ import (
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
 	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
+
+var errStorageProjectionDriftUnavailable = errors.New("storage projection drift unavailable")
+
+type storageProjectionDriftReport struct {
+	Missing []storageProjectionDriftFinding
+	Orphan  []storageProjectionDriftFinding
+	Stale   []storageProjectionDriftFinding
+}
+
+type storageProjectionDriftFinding struct {
+	SourceResource string
+	LocalResource  string
+	ID             string
+}
+
+type storageProjectionDriftPair struct {
+	sourceResource string
+	localResource  string
+	idFn           func(map[string]any) string
+}
+
+var storageProjectionDriftPairs = []storageProjectionDriftPair{
+	{sourceResource: identityUsersResource, localResource: storageIdentityUsersResource, idFn: func(row map[string]any) string {
+		return storageProjectionDriftIdentityUsersID(storageIdentityUsersResource, row)
+	}},
+	{sourceResource: identityRolesResource, localResource: storageIdentityRolesResource, idFn: func(row map[string]any) string {
+		return storageProjectionDriftIdentityRolesID(storageIdentityRolesResource, row)
+	}},
+	{sourceResource: orgProjectsResource, localResource: storageProjectsResource, idFn: func(row map[string]any) string {
+		return storageProjectionDriftProjectID(storageProjectsResource, row)
+	}},
+	{sourceResource: orgProjectMembersResource, localResource: storageProjectMembersResource, idFn: func(row map[string]any) string {
+		return storageProjectionDriftProjectMembersID(storageProjectMembersResource, row)
+	}},
+	{sourceResource: orgUserGroupsResource, localResource: storageUserGroupsResource, idFn: func(row map[string]any) string {
+		return storageProjectionDriftUserGroupsID(storageUserGroupsResource, row)
+	}},
+}
+
+func storageProjectionDrift(ctx context.Context, app *platform.App) (storageProjectionDriftReport, error) {
+	var report storageProjectionDriftReport
+	if app == nil || app.Store == nil {
+		return report, errStorageProjectionDriftUnavailable
+	}
+	for _, pair := range storageProjectionDriftPairs {
+		sourceRows := storageProjectionDriftIndex(storageProjectionDriftRecordMaps(ctx, app, pair.sourceResource), pair.idFn)
+		localRows := storageProjectionDriftIndex(storageProjectionDriftRecordMaps(ctx, app, pair.localResource), pair.idFn)
+		report.addStorageProjectionPairDrift(pair, sourceRows, localRows)
+	}
+	report.sort()
+	return report, nil
+}
+
+func (r *storageProjectionDriftReport) addStorageProjectionPairDrift(pair storageProjectionDriftPair, sourceRows, localRows map[string]map[string]any) {
+	r.addStorageProjectionMissingAndStale(pair, sourceRows, localRows)
+	r.addStorageProjectionOrphans(pair, sourceRows, localRows)
+}
+
+func (r *storageProjectionDriftReport) addStorageProjectionMissingAndStale(pair storageProjectionDriftPair, sourceRows, localRows map[string]map[string]any) {
+	for id, sourceRow := range sourceRows {
+		localRow, ok := localRows[id]
+		finding := storageProjectionDriftFinding{SourceResource: pair.sourceResource, LocalResource: pair.localResource, ID: id}
+		if !ok {
+			r.Missing = append(r.Missing, finding)
+			continue
+		}
+		if !reflect.DeepEqual(sourceRow, localRow) {
+			r.Stale = append(r.Stale, finding)
+		}
+	}
+}
+
+func (r *storageProjectionDriftReport) addStorageProjectionOrphans(pair storageProjectionDriftPair, sourceRows, localRows map[string]map[string]any) {
+	for id := range localRows {
+		if _, ok := sourceRows[id]; ok {
+			continue
+		}
+		r.Orphan = append(r.Orphan, storageProjectionDriftFinding{
+			SourceResource: pair.sourceResource,
+			LocalResource:  pair.localResource,
+			ID:             id,
+		})
+	}
+}
+
+func (r *storageProjectionDriftReport) sort() {
+	sortStorageProjectionDriftFindings(r.Missing)
+	sortStorageProjectionDriftFindings(r.Orphan)
+	sortStorageProjectionDriftFindings(r.Stale)
+}
+
+func sortStorageProjectionDriftFindings(findings []storageProjectionDriftFinding) {
+	sort.Slice(findings, func(i, j int) bool {
+		if findings[i].LocalResource != findings[j].LocalResource {
+			return findings[i].LocalResource < findings[j].LocalResource
+		}
+		if findings[i].ID != findings[j].ID {
+			return findings[i].ID < findings[j].ID
+		}
+		return findings[i].SourceResource < findings[j].SourceResource
+	})
+}
+
+func storageProjectionDriftRecordMaps(ctx context.Context, app *platform.App, resource string) []map[string]any {
+	if app == nil || app.Store == nil {
+		return nil
+	}
+	records := app.Store.List(ctx, resource)
+	out := make([]map[string]any, 0, len(records))
+	for _, record := range records {
+		out = append(out, shared.CloneMap(record.Data))
+	}
+	return out
+}
+
+func storageProjectionDriftIndex(rows []map[string]any, idFn func(map[string]any) string) map[string]map[string]any {
+	out := map[string]map[string]any{}
+	if idFn == nil {
+		return out
+	}
+	for _, row := range rows {
+		id, normalized := storageProjectionDriftNormalize(row, idFn)
+		if id == "" {
+			continue
+		}
+		out[id] = normalized
+	}
+	return out
+}
+
+func storageProjectionDriftNormalize(row map[string]any, idFn func(map[string]any) string) (string, map[string]any) {
+	normalized := shared.CloneMap(row)
+	id := idFn(normalized)
+	if id == "" {
+		return "", nil
+	}
+	normalized["id"] = id
+	return id, normalized
+}
+
+func storageProjectionDriftProjectID(_ string, data map[string]any) string {
+	return shared.FirstNonBlank(text(data, "id", "project_id"))
+}
+
+func storageProjectionDriftProjectMembersID(_ string, data map[string]any) string {
+	projectID := text(data, "project_id")
+	userID := text(data, "user_id")
+	if projectID == "" || userID == "" {
+		return ""
+	}
+	return projectID + ":" + userID
+}
+
+func storageProjectionDriftUserGroupsID(_ string, data map[string]any) string {
+	userID := text(data, "user_id")
+	groupID := text(data, "group_id")
+	if userID == "" || groupID == "" {
+		return ""
+	}
+	return userID + ":" + groupID
+}
+
+func storageProjectionDriftIdentityUsersID(_ string, data map[string]any) string {
+	return shared.FirstNonBlank(text(data, "id"), text(data, "user_id"), text(data, "name"))
+}
+
+func storageProjectionDriftIdentityRolesID(_ string, data map[string]any) string {
+	return shared.FirstNonBlank(text(data, "id"), text(data, "role_id"), text(data, "name"))
+}
 
 func storageEvent(r *http.Request, name string, data map[string]any) contracts.Event {
 	return contracts.Event{

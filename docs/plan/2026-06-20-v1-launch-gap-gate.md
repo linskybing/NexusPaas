@@ -245,7 +245,10 @@ risk.
 ## 20. Status
 
 Status: Implemented and reviewer-verified for this slice and rolled into the
-V1 local RKE2 staging release evidence.
+V1 local RKE2 staging release evidence. V1 external production launch (real
+registry, 8-unit topology, previous-image rollback, production secrets, remote
+CI/Sonar) remains OPEN; see the First Version (V1) Status block in `problem.md`
+/ `gap.md`.
 
 Reviewer Agent: Approved and verified. The implementation directly addresses a
 launch-blocking abuse-control gap, keeps the diff small, reuses existing
@@ -266,4 +269,4 @@ V1 checklist below.
 | `PLANADMIN-*` | RC/Live Pass | Plan/Queue routes are admin-only in service spec; Plan/Queue events now include actor plus old/new values, and Project plan binding stays owner-mediated through org-project. Included in final `beta-rc` and live RC rollout. |
 | `WEB-*` | Not Applicable for V1 | V1 scope is API/CLI-first and does not advertise a NexusPaaS management Web UI. `WEB-001..007` remain required before any future Web UI launch; browser WebRTC sessions stay covered by RTC acceptance. |
 | Accepted GA families | RC Pass | Final `beta-rc` passed with production-beta manifest rehearsal, integration coverage, focused E2E, 8-unit collaboration smoke, govulncheck, OSV, Trivy, and Sonar Quality Gate. |
-| Live staging online | Live Pass | Local RKE2 namespace `nexuspaas` is running the RC image on all 15 existing backend deployments. Gateway is reachable at `http://127.0.0.1:18081` while the port-forward is active. Registry-union smoke covers all 15 logical services; gateway rollback/re-deploy passed. External beta still needs replacing the local `localhost:5000` registry with the real image registry and any planned 8-unit topology cutover window. |
+| Live staging online | Local Live Pass — External launch OPEN | Local RKE2 namespace `nexuspaas` is running the RC image on all 15 existing backend deployments. Gateway is reachable at `http://127.0.0.1:18081` while the port-forward is active. Registry-union smoke covers all 15 logical services; gateway rollback/re-deploy passed. External beta still needs replacing the local `localhost:5000` registry with the real image registry and any planned 8-unit topology cutover window. |

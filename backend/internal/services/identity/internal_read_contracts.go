@@ -28,7 +28,7 @@ func registerInternalReadContracts(app *platform.App) {
 
 func internalReadUsersList(app *platform.App) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !app.AuthorizeServiceRequest(w, r) {
+		if !app.AuthorizeServiceRequestForAudience(w, r, serviceName) {
 			return
 		}
 		platform.WriteJSON(w, r, http.StatusOK, sanitizeInternalReadRecords(principalRepository(app).ListUsers(r.Context())))
@@ -37,7 +37,7 @@ func internalReadUsersList(app *platform.App) http.HandlerFunc {
 
 func internalReadUserGet(app *platform.App) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !app.AuthorizeServiceRequest(w, r) {
+		if !app.AuthorizeServiceRequestForAudience(w, r, serviceName) {
 			return
 		}
 		id := r.PathValue("id")
@@ -53,7 +53,7 @@ func internalReadUserGet(app *platform.App) http.HandlerFunc {
 
 func internalReadRolesList(app *platform.App) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !app.AuthorizeServiceRequest(w, r) {
+		if !app.AuthorizeServiceRequestForAudience(w, r, serviceName) {
 			return
 		}
 		platform.WriteJSON(w, r, http.StatusOK, principalRepository(app).ListRoles(r.Context()))
@@ -62,7 +62,7 @@ func internalReadRolesList(app *platform.App) http.HandlerFunc {
 
 func internalReadRoleGet(app *platform.App) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !app.AuthorizeServiceRequest(w, r) {
+		if !app.AuthorizeServiceRequestForAudience(w, r, serviceName) {
 			return
 		}
 		id := r.PathValue("id")
@@ -91,7 +91,7 @@ func sanitizeInternalReadRecord(record contracts.Record[map[string]any]) contrac
 
 func internalAuthorizeSession(app *platform.App) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !app.AuthorizeServiceRequest(w, r) {
+		if !app.AuthorizeServiceRequestForAudience(w, r, serviceName) {
 			return
 		}
 		token := internalAuthToken(r)
@@ -116,7 +116,7 @@ func internalAuthorizeSession(app *platform.App) http.HandlerFunc {
 
 func internalAuthorizeAPIToken(app *platform.App) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !app.AuthorizeServiceRequest(w, r) {
+		if !app.AuthorizeServiceRequestForAudience(w, r, serviceName) {
 			return
 		}
 		token := internalAuthToken(r)

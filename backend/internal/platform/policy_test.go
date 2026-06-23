@@ -44,22 +44,7 @@ func TestNewAppInstallsRemotePDPWhenConfigured(t *testing.T) {
 
 func TestRemotePDPEnforceUsesServiceAPIKeyAndEnvelope(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != remotePDPEnforcePath {
-			t.Fatalf("remote PDP request = %s %s, want POST %s", r.Method, r.URL.Path, remotePDPEnforcePath)
-		}
-		if got := r.Header.Get("X-Service-Key"); got != "secret" {
-			t.Fatalf("X-Service-Key = %q, want service API key", got)
-		}
-		if got := r.Header.Get("X-API-Key"); got != "secret" {
-			t.Fatalf("X-API-Key = %q, want rolling-upgrade compatibility API key", got)
-		}
-		var payload map[string]string
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatal(err)
-		}
-		if payload["sub"] != "alice" || payload["dom"] != "proj" || payload["obj"] != "model" || payload["act"] != "read" {
-			t.Fatalf("payload = %#v", payload)
-		}
+		assertRemotePDPRequest(t, r)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"success": true,
 			"data":    contracts.Decision{Allowed: true, Reason: "matched", Version: 7},
@@ -67,12 +52,60 @@ func TestRemotePDPEnforceUsesServiceAPIKeyAndEnvelope(t *testing.T) {
 	}))
 	defer server.Close()
 
-	decision, err := NewRemotePDP(server.URL, "secret", 0).Enforce(t.Context(), "alice", "proj", "model", "read")
+	decision, err := NewRemotePDP(server.URL, "secret", 0, Config{
+		ServiceIdentityName: "compute-api",
+		ServiceIdentityKey:  "scoped-secret",
+	}).Enforce(t.Context(), "alice", "proj", "model", "read")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !decision.Allowed || decision.Version != 7 || decision.Reason != "matched" {
 		t.Fatalf("decision = %#v, want allowed envelope decision", decision)
+	}
+}
+
+func TestRemotePDPStrictRuntimeDoesNotSendLegacyServiceKey(t *testing.T) {
+	var gotName, gotServiceKey, gotAPIKey string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotName = r.Header.Get(serviceNameHeader)
+		gotServiceKey = r.Header.Get(serviceKeyHeader)
+		gotAPIKey = r.Header.Get("X-API-Key")
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	_, _ = NewRemotePDP(server.URL, "policy-key", 0, Config{
+		EnvironmentProfile: runtimeProfileStaging,
+		ServiceAPIKey:      "legacy-key",
+	}).Enforce(t.Context(), "alice", "proj", "model", "read")
+	if gotName != "" || gotServiceKey != "" {
+		t.Fatalf("strict legacy-only PDP service headers name=%q key=%q, want none", gotName, gotServiceKey)
+	}
+	if gotAPIKey != "policy-key" {
+		t.Fatalf("X-API-Key = %q, want policy compatibility key", gotAPIKey)
+	}
+}
+
+func assertRemotePDPRequest(t *testing.T, r *http.Request) {
+	t.Helper()
+	if r.Method != http.MethodPost || r.URL.Path != remotePDPEnforcePath {
+		t.Fatalf("remote PDP request = %s %s, want POST %s", r.Method, r.URL.Path, remotePDPEnforcePath)
+	}
+	if got := r.Header.Get("X-Service-Name"); got != "compute-api" {
+		t.Fatalf("X-Service-Name = %q, want scoped service identity", got)
+	}
+	if got := r.Header.Get("X-Service-Key"); got != "scoped-secret" {
+		t.Fatalf("X-Service-Key = %q, want scoped service identity key", got)
+	}
+	if got := r.Header.Get("X-API-Key"); got != "secret" {
+		t.Fatalf("X-API-Key = %q, want rolling-upgrade compatibility API key", got)
+	}
+	var payload map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["sub"] != "alice" || payload["dom"] != "proj" || payload["obj"] != "model" || payload["act"] != "read" {
+		t.Fatalf("payload = %#v", payload)
 	}
 }
 
