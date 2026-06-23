@@ -283,7 +283,7 @@ jobs:
         working-directory: backend
         run: |
           for attempt in 1 2 3; do
-            if go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}; then
+            if go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"; then
               break
             fi
             if [ "${attempt}" -eq 3 ]; then

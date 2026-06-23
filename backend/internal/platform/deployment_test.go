@@ -360,7 +360,7 @@ func TestProductionBetaReleaseCandidateGateIsDocumented(t *testing.T) {
 	requireContains(t, workflowPath, workflow, "-Dsonar.qualitygate.wait=true")
 	requireContains(t, workflowPath, workflow, "github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository")
 	requireContains(t, workflowPath, workflow, "FOCUSED_E2E_SKIP_PATTERN: '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]'")
-	requireContains(t, workflowPath, workflow, "go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}")
+	requireContains(t, workflowPath, workflow, "go install \"golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}\"")
 	requireNotContains(t, workflowPath, workflow, "golang/govulncheck-action@v1")
 	requireNotContains(t, workflowPath, workflow, "grep -Eiq 'SKIP|skipping'")
 	requireNotContains(t, workflowPath, workflow, "Sonar skipped")
