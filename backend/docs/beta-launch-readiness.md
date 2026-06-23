@@ -50,17 +50,19 @@ The gate must pass these phases:
      `collaboration-smoke-summary.json`, and
      `collaboration-smoke-summary.md` under `${ARTIFACT_DIR}`
 6. govulncheck, OSV source scan, backend image build, and Trivy image scan.
-7. SonarScanner Quality Gate when `SONAR_TOKEN` and `SONAR_HOST_URL` are
-   configured, or fail-closed when CI policy requires Sonar.
+7. Local SonarScanner Quality Gate when `SONAR_TOKEN` and `SONAR_HOST_URL` are
+   configured for `bash backend/scripts/ci-security-gate.sh sonar`, or
+   fail-closed when local/CI policy requires Sonar.
 8. generated RC evidence report at `${ARTIFACT_DIR}/beta-rc-report.md`.
    The report links `${ARTIFACT_DIR}/production-beta-deployable-units.md`,
    which maps the 8 physical backend units to the 15 logical services they
    host.
 
-Remote CI must run SonarScanner Quality Gate for push, workflow dispatch, and
-same-repository pull requests. Missing `SONAR_TOKEN` or `SONAR_HOST_URL` fails
-those trusted events. Fork pull requests may skip Sonar only because GitHub does
-not expose trusted repository secrets to forked workflows.
+GitHub Actions does not run SonarScanner. SonarCloud/SonarQube must publish an
+external required PR check and branch protection gate before merge. The backend
+workflow does not require `SONAR_TOKEN` or `SONAR_HOST_URL`; the local `sonar`
+script subcommand remains available for manual or release-candidate validation
+with configured credentials.
 
 The default artifact directory is under `/tmp/nexuspaas-quality-gate/<run-id>`.
 Override it with `CI_GATE_ARTIFACT_DIR` when a CI job needs to upload artifacts.
@@ -104,7 +106,7 @@ The following issue classes remain blocking for external Beta traffic unless
 explicitly accepted:
 
 - live staging deploy, smoke, rollback, and re-deploy not rehearsed,
-- security scan or Sonar Quality Gate failure,
+- security scan or external SonarCloud/SonarQube Quality Gate failure,
 - focused E2E skip/failure,
 - integration coverage below 80%,
 - missing production secrets or default/dev credentials in the deployment path,

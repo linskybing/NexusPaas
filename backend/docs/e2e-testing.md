@@ -461,18 +461,19 @@ The Docker-backed gate uses isolated ports by default:
 
 The gate writes `backend/coverage.out` and fails when integration coverage is
 below `CI_GATE_COVERAGE_THRESHOLD`, which defaults to `80.0`. SonarScanner
-reuses that coverage file when its Quality Gate runs. Focused E2E must emit the
-required `PASS` lines and cannot pass by skipping. Full non-live E2E runs after
-the focused gate. The Docker-backed gate then starts `SERVICE_NAME=all` on
-`TEST_RUNTIME_PORT` (default `18080`) and checks `/healthz`, `/readyz`,
-`/metrics`, `/openapi.json`, `/service-registry`, and one read-only endpoint
-for each of the 15 registered services with no 5xx. Live cluster tests remain
-guarded by their explicit opt-in environment variables.
+reuses that coverage file when the local `sonar` script subcommand runs.
+Focused E2E must emit the required `PASS` lines and cannot pass by skipping.
+Full non-live E2E runs after the focused gate. The Docker-backed gate then
+starts `SERVICE_NAME=all` on `TEST_RUNTIME_PORT` (default `18080`) and checks
+`/healthz`, `/readyz`, `/metrics`, `/openapi.json`, `/service-registry`, and
+one read-only endpoint for each of the 15 registered services with no 5xx. Live
+cluster tests remain guarded by their explicit opt-in environment variables.
 
-GitHub Actions runs SonarScanner Quality Gate for push, workflow dispatch, and
-same-repository pull requests. Missing `SONAR_TOKEN` or `SONAR_HOST_URL` fails
-those trusted events. Fork pull requests may skip Sonar only because GitHub does
-not expose trusted repository secrets to forked workflows.
+GitHub Actions does not run SonarScanner. SonarCloud/SonarQube must publish an
+external required PR check and branch protection gate before merge. The backend
+workflow does not require `SONAR_TOKEN` or `SONAR_HOST_URL`; the local `sonar`
+script subcommand remains available for manual or release-candidate validation
+with configured credentials.
 
 Run the non-live Production Beta release-candidate rehearsal when preparing a
 Beta RC:
@@ -486,7 +487,7 @@ the production-beta render contains the 8 physical backend units that host the
 15 logical services and no all-in-one `platform` deployment, rejects `-dev-`
 secret references, runs client-side deploy dry-run, writes rollback commands
 for every backend unit deployment, runs re-deploy dry-run, then executes
-Docker-backed E2E, runtime smoke, security, and Sonar gates. It writes
+Docker-backed E2E, runtime smoke, security, and local Sonar gates. It writes
 `${ARTIFACT_DIR}/beta-rc-report.md` plus render, dry-run, rollback, E2E, and
 runtime-smoke artifacts.
 

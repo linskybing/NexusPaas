@@ -353,14 +353,20 @@ func TestProductionBetaReleaseCandidateGateIsDocumented(t *testing.T) {
 
 	workflowPath := "../../../.github/workflows/backend-quality-gate.yml"
 	workflow := readTextFile(t, workflowPath)
-	requireContains(t, workflowPath, workflow, "Sonar Quality Gate")
-	requireContains(t, workflowPath, workflow, "Require Sonar secrets")
-	requireContains(t, workflowPath, workflow, "SONAR_TOKEN and SONAR_HOST_URL are required for push, workflow_dispatch, and same-repository pull requests.")
-	requireContains(t, workflowPath, workflow, "SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602")
-	requireContains(t, workflowPath, workflow, "-Dsonar.qualitygate.wait=true")
 	requireContains(t, workflowPath, workflow, "github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository")
 	requireContains(t, workflowPath, workflow, "FOCUSED_E2E_SKIP_PATTERN: '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]'")
 	requireContains(t, workflowPath, workflow, "go install \"golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}\"")
+	requireNotContains(t, workflowPath, workflow, "\n  sonar:\n")
+	requireNotContains(t, workflowPath, workflow, "Sonar Quality Gate")
+	requireNotContains(t, workflowPath, workflow, "Require Sonar secrets")
+	requireNotContains(t, workflowPath, workflow, "SONAR_TOKEN")
+	requireNotContains(t, workflowPath, workflow, "SONAR_HOST_URL")
+	requireNotContains(t, workflowPath, workflow, "needs.detect-changes.outputs.sonar")
+	requireNotContains(t, workflowPath, workflow, "SonarSource/sonarqube-scan-action")
+	requireNotContains(t, workflowPath, workflow, "-Dsonar.qualitygate.wait=true")
+	requireNotContains(t, workflowPath, workflow, "\n      - sonar\n")
+	requireNotContains(t, workflowPath, workflow, "echo \"sonar:")
+	requireNotContains(t, workflowPath, workflow, "sonar_config")
 	requireNotContains(t, workflowPath, workflow, "golang/govulncheck-action@v1")
 	requireNotContains(t, workflowPath, workflow, "grep -Eiq 'SKIP|skipping'")
 	requireNotContains(t, workflowPath, workflow, "Sonar skipped")
@@ -376,8 +382,10 @@ func TestProductionBetaReleaseCandidateGateIsDocumented(t *testing.T) {
 	requireContains(t, readinessPath, readiness, "re-deploy client dry-run")
 	requireContains(t, readinessPath, readiness, "Live Staging Rehearsal")
 	requireContains(t, readinessPath, readiness, "All 8 backend units become ready.")
-	requireContains(t, readinessPath, readiness, "Remote CI must run SonarScanner Quality Gate")
-	requireContains(t, readinessPath, readiness, "Missing `SONAR_TOKEN` or `SONAR_HOST_URL` fails")
+	requireContains(t, readinessPath, readiness, "GitHub Actions does not run SonarScanner")
+	requireContains(t, readinessPath, readiness, "external required PR check")
+	requireContains(t, readinessPath, readiness, "branch protection gate")
+	requireContains(t, readinessPath, readiness, "workflow does not require `SONAR_TOKEN` or `SONAR_HOST_URL`")
 	requireContains(t, readinessPath, readiness, "no unaccepted launch blockers")
 
 	e2eDocsPath := "../../docs/e2e-testing.md"
@@ -387,8 +395,12 @@ func TestProductionBetaReleaseCandidateGateIsDocumented(t *testing.T) {
 	requireContains(t, e2eDocsPath, e2eDocs, "for every backend unit deployment")
 	requireContains(t, e2eDocsPath, e2eDocs, "runtime smoke")
 	requireContains(t, e2eDocsPath, e2eDocs, "re-deploy evidence")
-	requireContains(t, e2eDocsPath, e2eDocs, "GitHub Actions runs SonarScanner Quality Gate")
-	requireContains(t, e2eDocsPath, e2eDocs, "Fork pull requests may skip Sonar")
+	requireContains(t, e2eDocsPath, e2eDocs, "GitHub Actions does not run SonarScanner")
+	requireContains(t, e2eDocsPath, e2eDocs, "external required PR check")
+	requireContains(t, e2eDocsPath, e2eDocs, "branch protection gate")
+	requireContains(t, e2eDocsPath, e2eDocs, "workflow does not require `SONAR_TOKEN` or `SONAR_HOST_URL`")
+	requireContains(t, e2eDocsPath, e2eDocs, "local `sonar`")
+	requireContains(t, e2eDocsPath, e2eDocs, "script subcommand remains available")
 }
 
 func requireProductionDeploymentManifest(t *testing.T, path string) {

@@ -54,7 +54,6 @@ jobs:
       osv: ${{ steps.filter.outputs.backend_deps == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
       trivy_fs: ${{ steps.filter.outputs.workflow == 'true' || steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_docker == 'true' || steps.filter.outputs.backend_deploy == 'true' || steps.filter.outputs.backend_scripts == 'true' || steps.filter.outputs.frontend == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
       image_scan: ${{ steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_migrations == 'true' || steps.filter.outputs.backend_docker == 'true' || steps.filter.outputs.backend_deploy == 'true' || steps.filter.outputs.frontend == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
-      sonar: ${{ steps.filter.outputs.workflow == 'true' || steps.filter.outputs.backend_go == 'true' || steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_migrations == 'true' || steps.filter.outputs.backend_deploy == 'true' || steps.filter.outputs.backend_scripts == 'true' || steps.filter.outputs.sonar_config == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
 
     steps:
       - name: Checkout
@@ -92,8 +91,6 @@ jobs:
               - 'backend/docker-compose*.yml'
             backend_scripts:
               - 'backend/scripts/**'
-            sonar_config:
-              - 'sonar-project.properties'
 
   workflow-lint:
     name: Workflow Lint
@@ -366,49 +363,6 @@ jobs:
           severity: HIGH,CRITICAL
           timeout: ${{ env.TRIVY_TIMEOUT }}
 
-  sonar:
-    name: Sonar Quality Gate
-    needs: detect-changes
-    if: needs.detect-changes.outputs.sonar == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: backend/go.sum
-
-      - name: Generate coverage
-        working-directory: backend
-        run: go test ./... -coverprofile=coverage.out -count=1
-
-      - name: Require Sonar secrets
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-        run: |
-          if [ -z "${SONAR_TOKEN}" ] || [ -z "${SONAR_HOST_URL}" ]; then
-            echo "SONAR_TOKEN and SONAR_HOST_URL are required for push, workflow_dispatch, and same-repository pull requests."
-            exit 1
-          fi
-
-      - name: Run SonarScanner
-        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-        with:
-          args: >
-            -Dsonar.qualitygate.wait=true
-
   quality-gate:
     name: Quality Gate
     needs:
@@ -420,7 +374,6 @@ jobs:
       - osv-scan
       - trivy-fs
       - image-scan
-      - sonar
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -436,7 +389,6 @@ jobs:
           echo "osv-scan: ${{ needs.osv-scan.result }}"
           echo "trivy-fs: ${{ needs.trivy-fs.result }}"
           echo "image-scan: ${{ needs.image-scan.result }}"
-          echo "sonar: ${{ needs.sonar.result }}"
 
       - name: Fail on unsuccessful required jobs
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
