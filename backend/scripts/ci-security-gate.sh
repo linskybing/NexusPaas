@@ -869,7 +869,7 @@ install_go_tool() {
       if GOBIN="${TOOLS_BIN}" run_backend go install "${module}@${version}"; then
         break
       fi
-      [ "${attempt}" -lt 3 ] || die "failed to install ${binary} ${version}"
+      [[ "${attempt}" -lt 3 ]] || die "failed to install ${binary} ${version}"
       sleep $((attempt * 10))
     done
     mv "${TOOLS_BIN}/${binary}" "${target}" \
@@ -935,7 +935,7 @@ install_sonar_scanner() {
   platform="$(tool_platform)"
   target_dir="${TOOLS_DIR}/sonar-scanner-${SONAR_SCANNER_VERSION}-${platform}"
   target="${target_dir}/bin/sonar-scanner"
-  if [ -e "${target_dir}" ] && ! sonar_scanner_install_complete "${target_dir}"; then
+  if [[ -e "${target_dir}" ]] && ! sonar_scanner_install_complete "${target_dir}"; then
     log "Discarding incomplete SonarScanner ${SONAR_SCANNER_VERSION} install"
     rm -rf "${target_dir}"
   fi
@@ -956,8 +956,8 @@ install_sonar_scanner() {
 
 sonar_scanner_install_complete() {
   local install_dir="$1"
-  [ -x "${install_dir}/bin/sonar-scanner" ] || return 1
-  [ -d "${install_dir}/lib" ] || return 1
+  [[ -x "${install_dir}/bin/sonar-scanner" ]] || return 1
+  [[ -d "${install_dir}/lib" ]] || return 1
   find "${install_dir}/lib" -maxdepth 1 -type f -name '*.jar' -print -quit | grep -q .
 }
 

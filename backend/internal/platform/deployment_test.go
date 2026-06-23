@@ -356,7 +356,7 @@ func TestProductionBetaReleaseCandidateGateIsDocumented(t *testing.T) {
 	requireContains(t, workflowPath, workflow, "Sonar Quality Gate")
 	requireContains(t, workflowPath, workflow, "Require Sonar secrets")
 	requireContains(t, workflowPath, workflow, "SONAR_TOKEN and SONAR_HOST_URL are required for push, workflow_dispatch, and same-repository pull requests.")
-	requireContains(t, workflowPath, workflow, "sonarqube-scan-action")
+	requireContains(t, workflowPath, workflow, "SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602")
 	requireContains(t, workflowPath, workflow, "-Dsonar.qualitygate.wait=true")
 	requireContains(t, workflowPath, workflow, "github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository")
 	requireContains(t, workflowPath, workflow, "FOCUSED_E2E_SKIP_PATTERN: '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]'")
