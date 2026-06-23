@@ -102,7 +102,7 @@ ports and point `TEST_OBJECT_STORE_URL` at it:
 docker start nexuspaas-minio-e2e || docker run -d --name nexuspaas-minio-e2e \
   -p 19000:9000 -p 19001:9001 \
   -e MINIO_ROOT_USER=nexuspaas \
-  -e MINIO_ROOT_PASSWORD=nexuspaas-secret \
+  -e MINIO_ROOT_PASSWORD='<local minio root password>' \
   minio/minio:RELEASE.2025-04-08T15-41-24Z \
   server /data --console-address :9001
 
@@ -118,7 +118,7 @@ export TEST_REDIS_URL='redis://localhost:6379/0'
 export TEST_EVENT_BUS_URL="$TEST_REDIS_URL"
 export TEST_OBJECT_STORE_URL='http://localhost:9000' # or http://localhost:19000 when using the fallback container
 export TEST_OBJECT_STORE_ACCESS_KEY='nexuspaas'
-export TEST_OBJECT_STORE_SECRET_KEY='nexuspaas-secret'
+export TEST_OBJECT_STORE_SECRET_KEY='<local object store secret>'
 export TEST_OBJECT_STORE_BUCKET='media-e2e'
 ```
 
@@ -459,20 +459,20 @@ The Docker-backed gate uses isolated ports by default:
 - Redis: `localhost:16379`
 - MinIO API/console: `localhost:19000` / `localhost:19001`
 
-The gate writes `backend/coverage.out` for Sonar and fails when integration
-coverage is below `CI_GATE_COVERAGE_THRESHOLD`, which defaults to `80.0`.
-Focused E2E must emit the required `PASS` lines and cannot pass by skipping.
-Full non-live E2E runs after the focused gate. The Docker-backed gate then
-starts `SERVICE_NAME=all` on `TEST_RUNTIME_PORT` (default `18080`) and checks
-`/healthz`, `/readyz`, `/metrics`, `/openapi.json`, `/service-registry`, and
-one read-only endpoint for each of the 15 registered services with no 5xx.
-Live cluster tests remain guarded by their explicit opt-in environment
-variables.
+The gate writes `backend/coverage.out` and fails when integration coverage is
+below `CI_GATE_COVERAGE_THRESHOLD`, which defaults to `80.0`. SonarScanner
+reuses that coverage file when its Quality Gate runs. Focused E2E must emit the
+required `PASS` lines and cannot pass by skipping. Full non-live E2E runs after
+the focused gate. The Docker-backed gate then starts `SERVICE_NAME=all` on
+`TEST_RUNTIME_PORT` (default `18080`) and checks `/healthz`, `/readyz`,
+`/metrics`, `/openapi.json`, `/service-registry`, and one read-only endpoint
+for each of the 15 registered services with no 5xx. Live cluster tests remain
+guarded by their explicit opt-in environment variables.
 
-In GitHub Actions, SonarScanner is required for pushes, workflow dispatches, and
-non-fork pull requests. Fork pull requests skip Sonar when secrets are
-unavailable; branch protection should require the non-fork/default-branch gate
-before merge.
+GitHub Actions runs SonarScanner Quality Gate for push, workflow dispatch, and
+same-repository pull requests. Missing `SONAR_TOKEN` or `SONAR_HOST_URL` fails
+those trusted events. Fork pull requests may skip Sonar only because GitHub does
+not expose trusted repository secrets to forked workflows.
 
 Run the non-live Production Beta release-candidate rehearsal when preparing a
 Beta RC:
@@ -492,8 +492,10 @@ runtime-smoke artifacts.
 
 The `beta-rc` gate is non-live by default. External Production Beta traffic
 still requires a live staging rehearsal with real staging secrets, ready pods,
-8-unit health/ready/metrics smoke, critical journey E2E, rollback, and
-re-deploy evidence. See `docs/beta-launch-readiness.md`.
+external registry promotion by immutable digest, staging migration
+apply/validate evidence, 8-unit health/ready/metrics smoke, critical journey
+E2E, previous-image rollback, and re-deploy evidence. See
+`docs/beta-launch-readiness.md`.
 
 Existing manual gates remain:
 

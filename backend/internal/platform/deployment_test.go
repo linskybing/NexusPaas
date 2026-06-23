@@ -93,6 +93,10 @@ func TestProductionBetaRuntimeConfigAndSecretContract(t *testing.T) {
 	requireContains(t, configPath, config, "name: production-beta-runtime-config")
 	requireContains(t, configPath, config, `REDIS_URL: "redis://redis:6379/0"`)
 	requireContains(t, configPath, config, `EVENT_BUS_URL: "redis://redis:6379/1"`)
+	requireContains(t, configPath, config, `DEX_URL: ""`)
+	requireContains(t, configPath, config, `HARBOR_URL: ""`)
+	requireNotContains(t, configPath, config, `DEX_URL: "http://`)
+	requireNotContains(t, configPath, config, `HARBOR_URL: "http://`)
 	requireContains(t, configPath, config, `EVENT_RELAY_BATCH_SIZE: "100"`)
 	requireContains(t, configPath, config, `JWT_AUDIENCE: "platform"`)
 	serviceURLs := extractServiceURLs(t, configPath, config)
@@ -317,7 +321,9 @@ func TestProductionBetaObservabilityManifestsAreProvisioned(t *testing.T) {
 func TestProductionBetaReleaseCandidateGateIsDocumented(t *testing.T) {
 	scriptPath := "../../scripts/ci-security-gate.sh"
 	script := readTextFile(t, scriptPath)
-	requireContains(t, scriptPath, script, "beta-rc   quick, production-beta render/dry-run/rollback rehearsal, docker/routing/collaboration smoke, security, sonar, RC report")
+	requireContains(t, scriptPath, script, "sonar     SonarScanner Quality Gate")
+	requireContains(t, scriptPath, script, "beta-rc   quick, production-beta render/dry-run/rollback rehearsal, docker/routing/collaboration smoke, security, Sonar, RC report")
+	requireContains(t, scriptPath, script, "all       quick, docker, security, Sonar")
 	requireContains(t, scriptPath, script, "beta-rc) run_beta_rc_gate")
 	requireContains(t, scriptPath, script, "run_production_beta_manifest_rehearsal")
 	requireContains(t, scriptPath, script, "run_runtime_smoke")
@@ -335,8 +341,23 @@ func TestProductionBetaReleaseCandidateGateIsDocumented(t *testing.T) {
 	requireContains(t, scriptPath, script, "run_quick")
 	requireContains(t, scriptPath, script, "run_docker_gate")
 	requireContains(t, scriptPath, script, "run_security_gate")
-	requireContains(t, scriptPath, script, "run_sonar_gate")
+	requireContains(t, scriptPath, script, "sonar) run_sonar_gate")
+	requireContains(t, scriptPath, script, "sonar_scanner_install_complete")
+	requireContains(t, scriptPath, script, "Discarding incomplete SonarScanner")
+	requireContains(t, scriptPath, script, "CI_GATE_SONAR_REQUIRED")
+	requireContains(t, scriptPath, script, "SONAR_TOKEN and SONAR_HOST_URL are required for this CI event")
+	requireContains(t, scriptPath, script, "- Sonar Quality Gate: %s")
 	requireContains(t, scriptPath, script, "External Production Beta traffic still requires a live staging rehearsal")
+
+	workflowPath := "../../../.github/workflows/backend-quality-gate.yml"
+	workflow := readTextFile(t, workflowPath)
+	requireContains(t, workflowPath, workflow, "Sonar Quality Gate")
+	requireContains(t, workflowPath, workflow, "Require Sonar secrets")
+	requireContains(t, workflowPath, workflow, "SONAR_TOKEN and SONAR_HOST_URL are required for push, workflow_dispatch, and same-repository pull requests.")
+	requireContains(t, workflowPath, workflow, "sonarqube-scan-action")
+	requireContains(t, workflowPath, workflow, "-Dsonar.qualitygate.wait=true")
+	requireContains(t, workflowPath, workflow, "github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository")
+	requireNotContains(t, workflowPath, workflow, "Sonar skipped")
 
 	readinessPath := "../../docs/beta-launch-readiness.md"
 	readiness := readTextFile(t, readinessPath)
@@ -349,6 +370,8 @@ func TestProductionBetaReleaseCandidateGateIsDocumented(t *testing.T) {
 	requireContains(t, readinessPath, readiness, "re-deploy client dry-run")
 	requireContains(t, readinessPath, readiness, "Live Staging Rehearsal")
 	requireContains(t, readinessPath, readiness, "All 8 backend units become ready.")
+	requireContains(t, readinessPath, readiness, "Remote CI must run SonarScanner Quality Gate")
+	requireContains(t, readinessPath, readiness, "Missing `SONAR_TOKEN` or `SONAR_HOST_URL` fails")
 	requireContains(t, readinessPath, readiness, "no unaccepted launch blockers")
 
 	e2eDocsPath := "../../docs/e2e-testing.md"
@@ -358,6 +381,8 @@ func TestProductionBetaReleaseCandidateGateIsDocumented(t *testing.T) {
 	requireContains(t, e2eDocsPath, e2eDocs, "for every backend unit deployment")
 	requireContains(t, e2eDocsPath, e2eDocs, "runtime smoke")
 	requireContains(t, e2eDocsPath, e2eDocs, "re-deploy evidence")
+	requireContains(t, e2eDocsPath, e2eDocs, "GitHub Actions runs SonarScanner Quality Gate")
+	requireContains(t, e2eDocsPath, e2eDocs, "Fork pull requests may skip Sonar")
 }
 
 func requireProductionDeploymentManifest(t *testing.T, path string) {

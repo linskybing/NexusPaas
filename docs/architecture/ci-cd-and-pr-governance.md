@@ -38,9 +38,10 @@ Depending on scope, the PR should also run:
 - govulncheck, OSV, Trivy, and image build scans;
 - SonarScanner Quality Gate.
 
-GitHub-hosted Sonar should move from "skip when unconfigured" to "required when
-repository secrets are configured." Until then, missing remote Sonar credentials
-remain a tracked GA blocker.
+GitHub-hosted Sonar fails closed for push, workflow dispatch, and
+same-repository pull requests when `SONAR_TOKEN` or `SONAR_HOST_URL` is missing.
+Fork pull requests may skip Sonar because GitHub does not expose trusted
+repository secrets to forked workflows.
 
 ## Staging Promotion
 

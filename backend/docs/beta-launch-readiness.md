@@ -50,11 +50,17 @@ The gate must pass these phases:
      `collaboration-smoke-summary.json`, and
      `collaboration-smoke-summary.md` under `${ARTIFACT_DIR}`
 6. govulncheck, OSV source scan, backend image build, and Trivy image scan.
-7. SonarScanner Quality Gate when configured or required.
+7. SonarScanner Quality Gate when `SONAR_TOKEN` and `SONAR_HOST_URL` are
+   configured, or fail-closed when CI policy requires Sonar.
 8. generated RC evidence report at `${ARTIFACT_DIR}/beta-rc-report.md`.
    The report links `${ARTIFACT_DIR}/production-beta-deployable-units.md`,
    which maps the 8 physical backend units to the 15 logical services they
    host.
+
+Remote CI must run SonarScanner Quality Gate for push, workflow dispatch, and
+same-repository pull requests. Missing `SONAR_TOKEN` or `SONAR_HOST_URL` fails
+those trusted events. Fork pull requests may skip Sonar only because GitHub does
+not expose trusted repository secrets to forked workflows.
 
 The default artifact directory is under `/tmp/nexuspaas-quality-gate/<run-id>`.
 Override it with `CI_GATE_ARTIFACT_DIR` when a CI job needs to upload artifacts.
@@ -69,6 +75,8 @@ The live rehearsal must prove:
 
 - Production-beta manifests apply successfully through the chosen GitOps or
   kubectl workflow.
+- The same candidate image is promoted through a non-`localhost:5000` external
+  registry with tag, digest, and scan evidence.
 - Required Kubernetes Secrets or ExternalSecret-managed values exist before
   workloads start.
 - Database migrations apply and validate against the staging database.

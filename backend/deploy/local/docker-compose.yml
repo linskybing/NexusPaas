@@ -7,7 +7,7 @@
 #   export TEST_DATABASE_URL=postgres://nexuspaas:${TEST_POSTGRES_PASSWORD}@localhost:5432/nexuspaas?sslmode=disable
 #   export TEST_REDIS_URL=redis://localhost:6379/0
 #   export TEST_OBJECT_STORE_URL=http://localhost:9000
-#   export TEST_OBJECT_STORE_ACCESS_KEY=nexuspaas TEST_OBJECT_STORE_SECRET_KEY=nexuspaas-secret
+#   export TEST_OBJECT_STORE_ACCESS_KEY=nexuspaas TEST_OBJECT_STORE_SECRET_KEY=nexuspaas-local-only
 #   export DEX_URL=http://localhost:5556/dex
 #   export DEX_STATIC_PASSWORD_HASH=<bcrypt hash for your dev Dex password>
 #   export DEX_TEST_USERNAME=<Dex dev user email>
@@ -49,7 +49,7 @@ services:
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
       MINIO_ROOT_USER: ${TEST_OBJECT_STORE_ACCESS_KEY:-nexuspaas}
-      MINIO_ROOT_PASSWORD: ${TEST_OBJECT_STORE_SECRET_KEY:-nexuspaas-secret}
+      MINIO_ROOT_PASSWORD: ${TEST_OBJECT_STORE_SECRET_KEY:-nexuspaas-local-only}
     ports:
       - "9000:9000"
       - "9001:9001"

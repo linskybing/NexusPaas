@@ -19,7 +19,7 @@ TEST_MINIO_CONSOLE_PORT="${TEST_MINIO_CONSOLE_PORT:-19001}"
 TEST_RUNTIME_PORT="${TEST_RUNTIME_PORT:-18080}"
 TEST_POSTGRES_PASSWORD="${TEST_POSTGRES_PASSWORD:-nexuspaas}"
 TEST_OBJECT_STORE_ACCESS_KEY="${TEST_OBJECT_STORE_ACCESS_KEY:-nexuspaas}"
-TEST_OBJECT_STORE_SECRET_KEY="${TEST_OBJECT_STORE_SECRET_KEY:-nexuspaas-secret}"
+TEST_OBJECT_STORE_SECRET_KEY="${TEST_OBJECT_STORE_SECRET_KEY:-nexuspaas-local-only}"
 TEST_OBJECT_STORE_BUCKET="${TEST_OBJECT_STORE_BUCKET:-media-e2e}"
 TEST_RUNTIME_API_KEY="${TEST_RUNTIME_API_KEY:-smoke-api-key}"
 TEST_RUNTIME_SERVICE_KEY="${TEST_RUNTIME_SERVICE_KEY:-smoke-service-key}"
@@ -124,9 +124,9 @@ Subcommands:
   quick     gofmt check, go vet, go test, go build from backend/
   docker    Docker-backed migrations, integration coverage, focused E2E, full non-live E2E, routing smoke, 8-unit collaboration smoke
   security  govulncheck, OSV source scan, backend image build, Trivy image scan
-  sonar     SonarScanner with Quality Gate wait when configured or required
-  beta-rc   quick, production-beta render/dry-run/rollback rehearsal, docker/routing/collaboration smoke, security, sonar, RC report
-  all       quick, docker, security, sonar
+  sonar     SonarScanner Quality Gate
+  beta-rc   quick, production-beta render/dry-run/rollback rehearsal, docker/routing/collaboration smoke, security, Sonar, RC report
+  all       quick, docker, security, Sonar
 USAGE
 }
 
@@ -922,12 +922,17 @@ install_trivy() {
 
 install_sonar_scanner() {
   need_cmd curl
+  need_cmd find
   need_cmd unzip
   local platform target_dir target zip_url tmp extracted
   platform="$(tool_platform)"
   target_dir="${TOOLS_DIR}/sonar-scanner-${SONAR_SCANNER_VERSION}-${platform}"
   target="${target_dir}/bin/sonar-scanner"
-  if [ ! -x "${target}" ]; then
+  if [ -e "${target_dir}" ] && ! sonar_scanner_install_complete "${target_dir}"; then
+    log "Discarding incomplete SonarScanner ${SONAR_SCANNER_VERSION} install"
+    rm -rf "${target_dir}"
+  fi
+  if ! sonar_scanner_install_complete "${target_dir}"; then
     log "Installing SonarScanner ${SONAR_SCANNER_VERSION}"
     tmp="${ARTIFACT_DIR}/sonar-scanner.zip"
     zip_url="https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SONAR_SCANNER_VERSION}-${platform}.zip"
@@ -936,9 +941,17 @@ install_sonar_scanner() {
     unzip -q "${tmp}" -d "${TOOLS_DIR}" \
       || die "failed to extract SonarScanner ${SONAR_SCANNER_VERSION}"
     extracted="${TOOLS_DIR}/sonar-scanner-${SONAR_SCANNER_VERSION}-${platform}"
-    [ -x "${extracted}/bin/sonar-scanner" ] || die "SonarScanner archive did not contain expected binary"
+    sonar_scanner_install_complete "${extracted}" \
+      || die "SonarScanner archive did not contain expected binary and libraries"
   fi
   printf '%s\n' "${target}"
+}
+
+sonar_scanner_install_complete() {
+  local install_dir="$1"
+  [ -x "${install_dir}/bin/sonar-scanner" ] || return 1
+  [ -d "${install_dir}/lib" ] || return 1
+  find "${install_dir}/lib" -maxdepth 1 -type f -name '*.jar' -print -quit | grep -q .
 }
 
 run_security_gate() {
@@ -995,9 +1008,10 @@ write_beta_rc_report() {
   local report="${ARTIFACT_DIR}/beta-rc-report.md"
   local revision sonar_status
   revision="$(run_repo git rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
-  sonar_status="passed"
   if [ -f "${ARTIFACT_DIR}/sonar-skipped.txt" ]; then
     sonar_status="skipped: missing SONAR_TOKEN or SONAR_HOST_URL under current policy"
+  else
+    sonar_status="passed"
   fi
 
   {
@@ -1013,7 +1027,7 @@ write_beta_rc_report() {
     printf -- '- 8 deployable-unit evidence: passed\n'
     printf -- '- Docker-backed migrations, integration coverage, focused E2E, full non-live E2E, routing smoke, and 8-unit collaboration smoke: passed\n'
     printf -- '- Security gate: passed\n'
-    printf -- '- Sonar gate: %s\n\n' "${sonar_status}"
+    printf -- '- Sonar Quality Gate: %s\n\n' "${sonar_status}"
     printf '## Key Artifacts\n\n'
     printf -- '- Manifest rehearsal: `%s`\n' "${ARTIFACT_DIR}/production-beta-manifest-rehearsal.md"
     printf -- '- Rendered manifest: `%s`\n' "${ARTIFACT_DIR}/production-beta-render.yaml"

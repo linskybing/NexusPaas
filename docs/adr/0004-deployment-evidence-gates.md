@@ -89,7 +89,9 @@ open `problem.md` blocker.
 - Add staging runtime configuration for the 8 deployable units.
 - Capture per-unit deploy, smoke, rollback, redeploy, and post-redeploy smoke
   artifacts.
-- Make remote Sonar required when credentials are configured.
+- Make remote Sonar required for push, workflow dispatch, and same-repository
+  pull requests; fork pull requests may skip only because trusted repository
+  secrets are unavailable.
 - Add SBOM and image signing gates after staging promotion becomes stable.
 
 ## Reversal

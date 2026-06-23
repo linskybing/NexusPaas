@@ -30,7 +30,7 @@ env:
   TEST_REDIS_URL: redis://127.0.0.1:16379/0
   TEST_EVENT_BUS_URL: redis://127.0.0.1:16379/0
   TEST_OBJECT_STORE_ACCESS_KEY: nexuspaas
-  TEST_OBJECT_STORE_SECRET_KEY: nexuspaas-secret
+  TEST_OBJECT_STORE_SECRET_KEY: nexuspaas-local-only
   TEST_OBJECT_STORE_BUCKET: media-e2e
   TEST_OBJECT_STORE_URL: http://127.0.0.1:19000
   TEST_DATABASE_URL: postgres://nexuspaas:nexuspaas@127.0.0.1:15432/nexuspaas?sslmode=disable
@@ -51,9 +51,9 @@ jobs:
       integration: ${{ steps.filter.outputs.backend_go == 'true' || steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_migrations == 'true' || steps.filter.outputs.backend_docker == 'true' || steps.filter.outputs.backend_deploy == 'true' || steps.filter.outputs.backend_compose == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
       govulncheck: ${{ steps.filter.outputs.backend_go == 'true' || steps.filter.outputs.backend_deps == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
       osv: ${{ steps.filter.outputs.backend_deps == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
-      trivy_fs: ${{ steps.filter.outputs.workflow == 'true' || steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_docker == 'true' || steps.filter.outputs.backend_deploy == 'true' || steps.filter.outputs.backend_scripts == 'true' || steps.filter.outputs.frontend == 'true' || steps.filter.outputs.sonar_config == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
+      trivy_fs: ${{ steps.filter.outputs.workflow == 'true' || steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_docker == 'true' || steps.filter.outputs.backend_deploy == 'true' || steps.filter.outputs.backend_scripts == 'true' || steps.filter.outputs.frontend == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
       image_scan: ${{ steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_migrations == 'true' || steps.filter.outputs.backend_docker == 'true' || steps.filter.outputs.backend_deploy == 'true' || steps.filter.outputs.frontend == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
-      sonar: ${{ steps.filter.outputs.backend_go == 'true' || steps.filter.outputs.backend_deps == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
+      sonar: ${{ steps.filter.outputs.workflow == 'true' || steps.filter.outputs.backend_go == 'true' || steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_migrations == 'true' || steps.filter.outputs.backend_deploy == 'true' || steps.filter.outputs.backend_scripts == 'true' || steps.filter.outputs.sonar_config == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
 
     steps:
       - name: Checkout
@@ -351,48 +351,46 @@ jobs:
 
   sonar:
     name: Sonar Quality Gate
-    needs:
-      - detect-changes
-      - integration-e2e
+    needs: detect-changes
     if: needs.detect-changes.outputs.sonar == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
       contents: read
-    env:
-      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Download coverage
-        uses: actions/download-artifact@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          name: backend-test-artifacts
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: backend/go.sum
 
-      - name: Restore coverage path
+      - name: Generate coverage
+        working-directory: backend
+        run: go test ./... -coverprofile=coverage.out -count=1
+
+      - name: Require Sonar secrets
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
         run: |
-          if [ -f coverage.out ]; then
-            mkdir -p backend
-            mv coverage.out backend/coverage.out
+          if [ -z "${SONAR_TOKEN}" ] || [ -z "${SONAR_HOST_URL}" ]; then
+            echo "SONAR_TOKEN and SONAR_HOST_URL are required for push, workflow_dispatch, and same-repository pull requests."
+            exit 1
           fi
 
-      - name: SonarQube scan
-        if: env.SONAR_TOKEN != '' && env.SONAR_HOST_URL != ''
-        uses: SonarSource/sonarqube-scan-action@v5
+      - name: Run SonarScanner
+        uses: SonarSource/sonarqube-scan-action@v6
         env:
-          SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
         with:
           args: >
             -Dsonar.qualitygate.wait=true
-
-      - name: Sonar skipped
-        if: env.SONAR_TOKEN == '' || env.SONAR_HOST_URL == ''
-        run: echo "Sonar skipped because SONAR_TOKEN or SONAR_HOST_URL is not configured."
 
   quality-gate:
     name: Quality Gate

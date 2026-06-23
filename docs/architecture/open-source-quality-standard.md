@@ -58,8 +58,9 @@ unreviewed security exceptions make microservices unsafe to operate.
   boundaries.
 - Live tests are opt-in and must use unique resources with cleanup.
 - Staging evidence is required before claiming deployable-unit readiness.
-- Sonar Quality Gate should pass locally and be enforced remotely when
-  credentials are configured.
+- Sonar Quality Gate must pass locally and in GitHub Actions for trusted
+  events; fork pull requests may skip only because trusted repository secrets
+  are unavailable.
 
 ## Contribution Standard
 
