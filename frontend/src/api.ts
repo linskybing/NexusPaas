@@ -3,6 +3,7 @@ import type {
   ConfigFileRecord,
   DashboardData,
   HealthStatus,
+  ImageBuildPayload,
   JobLogRecord,
   JobRecord,
   JobSubmitPayload,
@@ -75,6 +76,8 @@ export function createAPIClient(config: APIClientConfig) {
       get<ProjectImageRecord[]>(`/api/v1/projects/${encodeURIComponent(projectID)}/images`, signal),
     projectImageBuilds: (projectID: string, signal?: AbortSignal) =>
       get<ProjectImageBuildRecord[]>(`/api/v1/projects/${encodeURIComponent(projectID)}/image-builds`, signal),
+    submitDockerfileImageBuild: (payload: ImageBuildPayload, signal?: AbortSignal) =>
+      post<ProjectImageBuildRecord>("/api/v1/images/build/dockerfile", payload, signal),
     myUsage: (signal?: AbortSignal) => get<UsageRecord[]>("/api/v1/me/usage", signal),
     myRequestUsage: (signal?: AbortSignal) => get<UsageRecord[]>("/api/v1/me/request-usage", signal),
     projectGPUUsage: (projectID: string, signal?: AbortSignal) =>

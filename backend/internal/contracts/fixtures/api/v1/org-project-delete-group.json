@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "contract_name": "org-project.delete_group",
+  "owner_service": "org-project-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "org-project-service:groups",
+  "action": "delete",
+  "method": "DELETE",
+  "path": "/api/v1/groups/{id}",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [
+    "id"
+  ],
+  "required_request_fields": [],
+  "optional_request_fields": [],
+  "request_example": {},
+  "success_statuses": [
+    200
+  ],
+  "error_statuses": [
+    401,
+    403,
+    404,
+    500
+  ],
+  "emits_events": [
+    "GroupDeleted"
+  ],
+  "response_example": {},
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

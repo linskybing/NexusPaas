@@ -19,8 +19,7 @@ The backend is one Go module with 15 logical services selected at runtime by
 - operational readiness, non-functional requirements, and event-contract docs;
 - quality gates for tests, build, security scans, and Sonar when configured;
 - opt-in live E2E coverage for LDAP, Kubernetes deploy, runtime expiry, and
-  preemption;
-- a current backend function inventory in `function.md`.
+  preemption.
 
 This is a sound modular-monolith baseline. It is not yet GA-complete
 microservices because shared physical PostgreSQL and transition owner-read

@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "contract_name": "workload.cancel_job",
+  "owner_service": "workload-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "workload-service:jobs",
+  "action": "command",
+  "method": "POST",
+  "path": "/api/v1/jobs/{id}/cancel",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [
+    "id"
+  ],
+  "required_request_fields": [],
+  "optional_request_fields": [],
+  "request_example": {},
+  "success_statuses": [
+    202
+  ],
+  "error_statuses": [
+    400,
+    401,
+    403,
+    404,
+    409,
+    500
+  ],
+  "emits_events": [
+    "JobCancelRequested"
+  ],
+  "response_example": {
+    "id": "job-command-cancel-ga-001",
+    "version": 1,
+    "data": {
+      "job_id": "job-ga-001",
+      "status": "accepted",
+      "operation": "workload_job_cancel",
+      "idempotency_key": "cancel-job-ga-001",
+      "requested_at": "2026-06-23T00:00:00Z"
+    }
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

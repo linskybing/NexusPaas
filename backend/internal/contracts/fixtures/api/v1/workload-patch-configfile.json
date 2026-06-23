@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "contract_name": "workload.patch_configfile",
+  "owner_service": "workload-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "workload-service:configfiles",
+  "action": "update",
+  "method": "PATCH",
+  "path": "/api/v1/configfiles/{id}",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [
+    "id"
+  ],
+  "required_request_fields": [
+    "content"
+  ],
+  "optional_request_fields": [
+    "name",
+    "filename",
+    "path",
+    "manifest",
+    "yaml",
+    "config",
+    "projectId",
+    "project_id"
+  ],
+  "request_example": {
+    "content": "batch_size: 64\nlearning_rate: 0.0005\n",
+    "name": "training-config.yaml",
+    "path": "configs/training-config.yaml",
+    "manifest": {
+      "kind": "TrainingConfig",
+      "version": "v1"
+    }
+  },
+  "success_statuses": [
+    200
+  ],
+  "error_statuses": [
+    400,
+    401,
+    403,
+    404,
+    413,
+    422,
+    500
+  ],
+  "emits_events": [
+    "ConfigFileChanged"
+  ],
+  "response_example": {
+    "id": "config-ga-001",
+    "version": 2,
+    "data": {
+      "id": "config-ga-001",
+      "project_id": "project-ga-001",
+      "name": "training-config.yaml",
+      "content": "batch_size: 64\nlearning_rate: 0.0005\n",
+      "updated_at": "2026-06-23T00:00:00Z"
+    }
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

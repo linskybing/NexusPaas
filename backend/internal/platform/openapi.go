@@ -25,29 +25,27 @@ func (g openAPIGenerator) generate() map[string]any {
 		}
 		operationID := uniqueOpenAPIOperationID(route, seenOperationIDs)
 		operation := map[string]any{
-			"tags":            []string{routeServiceName(route)},
-			"summary":         routeSummary(route),
-			"operationId":     operationID,
-			"parameters":      pathParameters(route.Pattern),
-			"responses":       routeResponses(),
-			"x-service":       routeServiceName(route),
-			"x-auth":          route.AuthRequired,
-			"x-admin":         route.Admin,
-			"x-stateful":      route.StateChanging,
-			"x-policy-bypass": route.PolicyBypass,
-			"x-resource":      route.Resource,
-			"x-adapter":       route.ExternalAdapter,
-			"x-idempotent":    route.Method == http.MethodGet || route.Action == "quota_commit" || route.Action == "quota_release",
+			"tags":                    []string{routeServiceName(route)},
+			"summary":                 routeSummary(route),
+			"operationId":             operationID,
+			"parameters":              pathParameters(route.Pattern),
+			"responses":               routeResponses(),
+			"x-service":               routeServiceName(route),
+			"x-auth":                  route.AuthRequired,
+			"x-admin":                 route.Admin,
+			"x-stateful":              route.StateChanging,
+			"x-policy-bypass":         route.PolicyBypass,
+			"x-service-auth-required": route.ServiceAuthRequired,
+			"x-resource":              route.Resource,
+			"x-adapter":               route.ExternalAdapter,
+			"x-idempotent":            route.Method == http.MethodGet || route.Action == "quota_commit" || route.Action == "quota_release",
 		}
 		if catchAll {
 			operation["x-runtime-pattern"] = route.Pattern
 			operation["x-catch-all"] = true
 		}
-		if route.AuthRequired {
-			operation["security"] = []map[string][]string{
-				{"BearerAuth": {}},
-				{"ApiKeyAuth": {}},
-			}
+		if security := routeSecurity(route); len(security) > 0 {
+			operation["security"] = security
 		}
 		paths[path][strings.ToLower(route.Method)] = operation
 	}
@@ -175,6 +173,27 @@ func routeResponses() map[string]any {
 	}
 }
 
+func routeSecurity(route RouteSpec) []map[string][]string {
+	switch {
+	case route.AuthRequired && route.ServiceAuthRequired:
+		return []map[string][]string{
+			{"BearerAuth": {}, "ServiceNameAuth": {}, "ServiceKeyAuth": {}},
+			{"ApiKeyAuth": {}, "ServiceNameAuth": {}, "ServiceKeyAuth": {}},
+		}
+	case route.AuthRequired:
+		return []map[string][]string{
+			{"BearerAuth": {}},
+			{"ApiKeyAuth": {}},
+		}
+	case route.ServiceAuthRequired:
+		return []map[string][]string{
+			{"ServiceNameAuth": {}, "ServiceKeyAuth": {}},
+		}
+	default:
+		return nil
+	}
+}
+
 func openAPIComponents() map[string]any {
 	return map[string]any{
 		"securitySchemes": map[string]any{
@@ -187,6 +206,16 @@ func openAPIComponents() map[string]any {
 				"type": "apiKey",
 				"in":   "header",
 				"name": "X-API-Key",
+			},
+			"ServiceNameAuth": map[string]any{
+				"type": "apiKey",
+				"in":   "header",
+				"name": "X-Service-Name",
+			},
+			"ServiceKeyAuth": map[string]any{
+				"type": "apiKey",
+				"in":   "header",
+				"name": "X-Service-Key",
 			},
 		},
 		"schemas": map[string]any{

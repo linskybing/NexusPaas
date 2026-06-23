@@ -75,7 +75,7 @@ func (a *App) dependencyGaps(dependencies map[string]map[string]bool, kind strin
 			// A configured domain read contract plus service authentication means
 			// the read is resolved through an owner API (finding 5). Generic
 			// internal-records fallback is intentionally not accepted here.
-			if hasDomainReadContract(resource) && a.Config.ServiceURLs[resourceOwner(resource)] != "" && a.Config.ServiceAPIKey != "" {
+			if hasDomainReadContract(resource) && a.Config.ServiceURLs[resourceOwner(resource)] != "" && a.Config.canUseRemoteServiceIdentity() {
 				continue
 			}
 			gaps = append(gaps, service+" -> "+resource+" ("+kind+")")

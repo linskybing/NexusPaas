@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "contract_name": "storage.delete_project_permission",
+  "owner_service": "storage-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "storage-service:project_storage_permissions",
+  "action": "delete",
+  "method": "DELETE",
+  "path": "/api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/{userId}",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [
+    "id",
+    "pvcId",
+    "userId"
+  ],
+  "required_request_fields": [],
+  "optional_request_fields": [],
+  "request_example": {},
+  "success_statuses": [
+    200
+  ],
+  "error_statuses": [
+    401,
+    403,
+    404,
+    500
+  ],
+  "emits_events": [
+    "ProjectStoragePermissionChanged"
+  ],
+  "response_example": {},
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

@@ -36,6 +36,84 @@ func TestDiscoverServiceMigrationsInRootsIsDeterministicScopedAndSorted(t *testi
 	}
 }
 
+func TestParseMigrationVersion(t *testing.T) {
+	tests := []struct {
+		name    string
+		want    int
+		wantErr string
+	}{
+		{name: "0001_init.sql", want: 1},
+		{name: "42.sql", want: 42},
+		{name: "init.sql", wantErr: "must start"},
+		{name: "0001init.sql", wantErr: "followed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseMigrationVersion(tt.name)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("parseMigrationVersion(%q) error = %v, want %q", tt.name, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil || got != tt.want {
+				t.Fatalf("parseMigrationVersion(%q) = %d, %v; want %d, nil", tt.name, got, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateServiceMigrationsInRootsRejectsBadVersions(t *testing.T) {
+	t.Run("missing numeric prefix", func(t *testing.T) {
+		root := t.TempDir()
+		writeServiceMigration(t, root, "identity-service", "init.sql")
+		if _, err := validateServiceMigrationsInRoots([]string{root}); err == nil || !strings.Contains(err.Error(), "invalid migration filename") {
+			t.Fatalf("validation error = %v, want invalid filename", err)
+		}
+	})
+	t.Run("duplicate service version", func(t *testing.T) {
+		root := t.TempDir()
+		writeServiceMigration(t, root, "identity-service", "0001_init.sql")
+		writeServiceMigration(t, root, "identity-service", "0001_again.sql")
+		if _, err := validateServiceMigrationsInRoots([]string{root}); err == nil || !strings.Contains(err.Error(), "duplicate migration version 1 for identity-service") {
+			t.Fatalf("validation error = %v, want duplicate version", err)
+		}
+	})
+}
+
+func TestMigrationUnitsInRootsIncludesPlatformFirstThenServiceVersions(t *testing.T) {
+	root := t.TempDir()
+	writeAllServiceMigrations(t, root)
+	writeServiceMigration(t, root, "identity-service", "0002_extra.sql")
+
+	units, err := migrationUnitsInRoots([]string{root})
+	if err != nil {
+		t.Fatalf("migration units: %v", err)
+	}
+	if len(units) != len(serviceMigrationDirs)+2 {
+		t.Fatalf("units = %d, want platform + all service migrations + identity extra", len(units))
+	}
+	if units[0].service != "platform" || units[0].version != 0 || units[0].filename != "schema.sql" {
+		t.Fatalf("first unit = %#v, want platform schema v0", units[0])
+	}
+	if len(units[0].checksum) != 64 {
+		t.Fatalf("platform checksum length = %d, want sha256 hex", len(units[0].checksum))
+	}
+	for i := 2; i < len(units); i++ {
+		prev := units[i-1]
+		got := units[i]
+		if prev.service > got.service || (prev.service == got.service && prev.version > got.version) {
+			t.Fatalf("units not ordered by service/version at %d: %#v before %#v", i, prev, got)
+		}
+	}
+}
+
+func TestMigrationChecksumChangesWithSQL(t *testing.T) {
+	if migrationChecksum("SELECT 1;") == migrationChecksum("SELECT 2;") {
+		t.Fatal("different SQL produced matching checksum")
+	}
+}
+
 func TestDiscoverServiceMigrationsInRootsDeduplicatesRoots(t *testing.T) {
 	root := t.TempDir()
 	writeServiceMigration(t, root, "identity-service", "0001_init.sql")

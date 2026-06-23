@@ -9,7 +9,7 @@ import (
 )
 
 func TestInternalJSONClientLocalDispatchPreservesHeaders(t *testing.T) {
-	app := NewApp(Config{ServiceName: "all", ServiceAPIKey: "svc-key"})
+	app := NewApp(Config{ServiceName: "all", ServiceIdentityName: "caller-service", ServiceIdentityKey: "scoped-key"})
 	app.RegisterService(ServiceSpec{Name: "owner-service", Routes: []RouteSpec{{
 		Method:       http.MethodPost,
 		Pattern:      "/internal/owner/{id}",
@@ -18,8 +18,8 @@ func TestInternalJSONClientLocalDispatchPreservesHeaders(t *testing.T) {
 		PolicyBypass: true,
 	}}})
 	app.RegisterCustomHandler(http.MethodPost, "/internal/owner/{id}", func(_ *App, r *http.Request, _ RouteSpec) (int, any, *Degraded) {
-		if r.Header.Get("X-Service-Key") != "svc-key" {
-			return http.StatusUnauthorized, map[string]any{"message": "missing service key"}, nil
+		if r.Header.Get("X-Service-Name") != "caller-service" || r.Header.Get("X-Service-Key") != "scoped-key" {
+			return http.StatusUnauthorized, map[string]any{"message": "missing service identity"}, nil
 		}
 		return http.StatusOK, map[string]any{
 			"id":           r.PathValue("id"),
@@ -49,19 +49,21 @@ func TestInternalJSONClientLocalDispatchPreservesHeaders(t *testing.T) {
 }
 
 func TestInternalJSONClientRemoteJoinQueryAndEnvelopeError(t *testing.T) {
-	var gotPath, gotQuery, gotKey string
+	var gotPath, gotQuery, gotName, gotKey string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotQuery = r.URL.RawQuery
+		gotName = r.Header.Get("X-Service-Name")
 		gotKey = r.Header.Get("X-Service-Key")
 		WriteError(w, r, http.StatusConflict, "conflict", "already exists")
 	}))
 	defer server.Close()
 
 	app := NewApp(Config{
-		ServiceName:   "consumer-service",
-		ServiceAPIKey: "svc-key",
-		ServiceURLs:   map[string]string{"owner-service": server.URL + "/base"},
+		ServiceName:         "consumer-service",
+		ServiceIdentityName: "consumer-service",
+		ServiceIdentityKey:  "scoped-key",
+		ServiceURLs:         map[string]string{"owner-service": server.URL + "/base"},
 	})
 	resp, err := NewInternalJSONClient(app, "owner-service").Do(context.Background(), InternalJSONRequest{
 		Method: http.MethodGet,
@@ -74,7 +76,7 @@ func TestInternalJSONClientRemoteJoinQueryAndEnvelopeError(t *testing.T) {
 	if resp.StatusCode != http.StatusConflict || resp.EnvelopeError == nil || resp.EnvelopeError.Message != "already exists" {
 		t.Fatalf("resp=%+v, want exposed envelope error", resp)
 	}
-	if gotPath != "/base/internal/owner/o-1" || gotQuery != "filter=a+b" || gotKey != "svc-key" {
-		t.Fatalf("path=%q query=%q key=%q, want joined remote request", gotPath, gotQuery, gotKey)
+	if gotPath != "/base/internal/owner/o-1" || gotQuery != "filter=a+b" || gotName != "consumer-service" || gotKey != "scoped-key" {
+		t.Fatalf("path=%q query=%q name=%q key=%q, want joined remote request", gotPath, gotQuery, gotName, gotKey)
 	}
 }

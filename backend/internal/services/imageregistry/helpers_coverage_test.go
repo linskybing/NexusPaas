@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/linskybing/nexuspaas/backend/internal/contracts"
@@ -96,6 +97,183 @@ func TestImageRegistryProjectionMergeAndReadModelIDs(t *testing.T) {
 	resource, data, deleted, ok := imageProjection(contracts.Event{Name: "GroupMembershipChanged", Data: map[string]any{"user_id": "U1", "group_id": "G1", "action": "deleted"}})
 	if !ok || !deleted || resource != imageUserGroupsResource || data["user_id"] != "U1" {
 		t.Fatalf("group membership projection resource=%s data=%#v deleted=%v ok=%v", resource, data, deleted, ok)
+	}
+}
+
+func TestImageRegistryProjectionDriftDetectsMissingOrphanStaleCleanAndSorts(t *testing.T) {
+	ctx := context.Background()
+	app := platform.NewApp(platform.Config{ServiceName: "all"})
+
+	seedImageProjectionDriftRecord(t, ctx, app, orgProjectsResource, map[string]any{"id": "project-orphan-check", "project_name": "source-only"})
+	seedImageProjectionDriftRecord(t, ctx, app, imageProjectsResource, map[string]any{"id": "project-orphan", "project_name": "local-only"})
+	seedImageProjectionDriftRecord(t, ctx, app, orgProjectsResource, map[string]any{"id": "project-stale", "project_name": "source"})
+	seedImageProjectionDriftRecord(t, ctx, app, imageProjectsResource, map[string]any{"id": "project-stale", "project_name": "local"})
+	seedImageProjectionDriftRecord(t, ctx, app, orgProjectsResource, map[string]any{"id": "project-clean", "project_name": "clean"})
+	seedImageProjectionDriftRecord(t, ctx, app, imageProjectsResource, map[string]any{"id": "project-clean", "project_name": "clean"})
+
+	seedImageProjectionDriftRecord(t, ctx, app, identityRolesResource, map[string]any{"id": "role-clean", "role_id": "role-clean", "name": "viewer"})
+	seedImageProjectionDriftRecord(t, ctx, app, imageIdentityRolesResource, map[string]any{"id": "role-clean", "role_id": "role-clean", "name": "viewer"})
+	seedImageProjectionDriftRecord(t, ctx, app, imageIdentityRolesResource, map[string]any{"id": "role-orphan", "role_id": "role-orphan", "name": "orphan"})
+
+	seedImageProjectionDriftRecord(t, ctx, app, orgProjectMembersResource, map[string]any{"project_id": "project-missing", "user_id": "user-missing", "role": "user"})
+	seedImageProjectionDriftRecord(t, ctx, app, orgUserGroupsResource, map[string]any{"user_id": "user-stale", "group_id": "group-stale", "role": "source"})
+	seedImageProjectionDriftRecord(t, ctx, app, imageUserGroupsResource, map[string]any{"id": "user-stale:group-stale", "user_id": "user-stale", "group_id": "group-stale", "role": "local"})
+
+	seedImageProjectionDriftRecord(t, ctx, app, identityUsersResource, map[string]any{"id": "user-missing", "user_id": "user-missing", "username": "missing"})
+
+	report, err := imageProjectionDrift(ctx, app)
+	if err != nil {
+		t.Fatalf("imageProjectionDrift returned error: %v", err)
+	}
+
+	wantMissing := []imageProjectionDriftFinding{
+		{SourceResource: identityUsersResource, LocalResource: imageIdentityUsersResource, ID: "user-missing"},
+		{SourceResource: orgProjectMembersResource, LocalResource: imageProjectMembersResource, ID: "project-missing:user-missing"},
+		{SourceResource: orgProjectsResource, LocalResource: imageProjectsResource, ID: "project-orphan-check"},
+	}
+	if !reflect.DeepEqual(report.Missing, wantMissing) {
+		t.Fatalf("missing findings = %#v, want %#v", report.Missing, wantMissing)
+	}
+
+	wantOrphan := []imageProjectionDriftFinding{
+		{SourceResource: identityRolesResource, LocalResource: imageIdentityRolesResource, ID: "role-orphan"},
+		{SourceResource: orgProjectsResource, LocalResource: imageProjectsResource, ID: "project-orphan"},
+	}
+	if !reflect.DeepEqual(report.Orphan, wantOrphan) {
+		t.Fatalf("orphan findings = %#v, want %#v", report.Orphan, wantOrphan)
+	}
+
+	wantStale := []imageProjectionDriftFinding{
+		{SourceResource: orgProjectsResource, LocalResource: imageProjectsResource, ID: "project-stale"},
+		{SourceResource: orgUserGroupsResource, LocalResource: imageUserGroupsResource, ID: "user-stale:group-stale"},
+	}
+	if !reflect.DeepEqual(report.Stale, wantStale) {
+		t.Fatalf("stale findings = %#v, want %#v", report.Stale, wantStale)
+	}
+}
+
+func TestImageRegistryProjectionDriftNormalizesCanonicalID(t *testing.T) {
+	ctx := context.Background()
+	app := platform.NewApp(platform.Config{})
+
+	sourceProjectRecordID := seedImageProjectionDriftRecord(t, ctx, app, orgProjectsResource, map[string]any{
+		"id":           "source-record-project",
+		"project_id":   "project-normalized",
+		"project_name": "Normalized",
+	})
+	updateImageProjectionDriftRecord(t, ctx, app, orgProjectsResource, sourceProjectRecordID, map[string]any{
+		"id":           "",
+		"project_id":   "project-normalized",
+		"project_name": "Normalized",
+	})
+	seedImageProjectionDriftRecord(t, ctx, app, imageProjectsResource, map[string]any{
+		"id":           "project-normalized",
+		"project_id":   "project-normalized",
+		"project_name": "Normalized",
+	})
+
+	sourceMemberRecordID := seedImageProjectionDriftRecord(t, ctx, app, orgProjectMembersResource, map[string]any{
+		"id":         "source-record-member",
+		"project_id": "project-normalized",
+		"user_id":    "user-normalized",
+		"role":       "manager",
+	})
+	updateImageProjectionDriftRecord(t, ctx, app, orgProjectMembersResource, sourceMemberRecordID, map[string]any{
+		"id":         "",
+		"project_id": "project-normalized",
+		"user_id":    "user-normalized",
+		"role":       "manager",
+	})
+	seedImageProjectionDriftRecord(t, ctx, app, imageProjectMembersResource, map[string]any{
+		"id":         "project-normalized:user-normalized",
+		"project_id": "project-normalized",
+		"user_id":    "user-normalized",
+		"role":       "manager",
+	})
+
+	report, err := imageProjectionDrift(ctx, app)
+	if err != nil {
+		t.Fatalf("imageProjectionDrift returned error: %v", err)
+	}
+	if len(report.Missing) != 0 || len(report.Orphan) != 0 || len(report.Stale) != 0 {
+		t.Fatalf("imageProjectionDrift with canonical ids = %#v, want no findings", report)
+	}
+}
+
+func TestImageRegistryProjectionDriftSkipsBlankCanonicalIDs(t *testing.T) {
+	ctx := context.Background()
+	app := platform.NewApp(platform.Config{})
+
+	sourceRecordID := seedImageProjectionDriftRecord(t, ctx, app, identityRolesResource, map[string]any{"id": "blank-source-record", "description": "ignored"})
+	updateImageProjectionDriftRecord(t, ctx, app, identityRolesResource, sourceRecordID, map[string]any{"id": "", "description": "ignored"})
+	localRecordID := seedImageProjectionDriftRecord(t, ctx, app, imageIdentityRolesResource, map[string]any{"id": "blank-local-record", "description": "ignored"})
+	updateImageProjectionDriftRecord(t, ctx, app, imageIdentityRolesResource, localRecordID, map[string]any{"id": "", "description": "ignored"})
+
+	report, err := imageProjectionDrift(ctx, app)
+	if err != nil {
+		t.Fatalf("imageProjectionDrift returned error: %v", err)
+	}
+	if len(report.Missing) != 0 || len(report.Orphan) != 0 || len(report.Stale) != 0 {
+		t.Fatalf("imageProjectionDrift with blank canonical ids = %#v, want no findings", report)
+	}
+}
+
+func TestImageRegistryProjectionDriftNilAppOrStoreFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	for _, app := range []*platform.App{nil, {}} {
+		if _, err := imageProjectionDrift(ctx, app); !errors.Is(err, errImageProjectionDriftUnavailable) {
+			t.Fatalf("imageProjectionDrift(%#v) error = %v, want %v", app, err, errImageProjectionDriftUnavailable)
+		}
+	}
+}
+
+func TestImageRegistryProjectionDriftPairsCoverExpectedResources(t *testing.T) {
+	want := map[string]string{
+		identityUsersResource:     imageIdentityUsersResource,
+		identityRolesResource:     imageIdentityRolesResource,
+		orgProjectsResource:       imageProjectsResource,
+		orgProjectMembersResource: imageProjectMembersResource,
+		orgUserGroupsResource:     imageUserGroupsResource,
+	}
+	if len(imageProjectionDriftPairs) != len(want) {
+		t.Fatalf("imageProjectionDriftPairs length = %d, want %d", len(imageProjectionDriftPairs), len(want))
+	}
+
+	excluded := map[string]bool{
+		projectImagesResource: true,
+		imageRequestsResource: true,
+		imageCatalogResource:  true,
+		imageBuildsResource:   true,
+		imageSyncResource:     true,
+	}
+	got := map[string]string{}
+	for _, pair := range imageProjectionDriftPairs {
+		if pair.idFn == nil {
+			t.Fatalf("imageProjectionDriftPairs contains nil idFn for %s -> %s", pair.sourceResource, pair.localResource)
+		}
+		if excluded[pair.sourceResource] || excluded[pair.localResource] {
+			t.Fatalf("imageProjectionDriftPairs includes out-of-scope resource: %#v", pair)
+		}
+		got[pair.sourceResource] = pair.localResource
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("imageProjectionDriftPairs = %#v, want %#v", got, want)
+	}
+}
+
+func seedImageProjectionDriftRecord(t *testing.T, ctx context.Context, app *platform.App, resource string, data map[string]any) string {
+	t.Helper()
+	record, err := app.Store.Create(ctx, resource, data)
+	if err != nil {
+		t.Fatalf("create %s record: %v", resource, err)
+	}
+	return record.ID
+}
+
+func updateImageProjectionDriftRecord(t *testing.T, ctx context.Context, app *platform.App, resource, id string, data map[string]any) {
+	t.Helper()
+	if _, ok := app.Store.Update(ctx, resource, id, data); !ok {
+		t.Fatalf("update %s/%s missed", resource, id)
 	}
 }
 

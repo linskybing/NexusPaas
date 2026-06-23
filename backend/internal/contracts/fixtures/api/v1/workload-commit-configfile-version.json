@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "contract_name": "workload.commit_configfile_version",
+  "owner_service": "workload-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "workload-service:configfiles",
+  "action": "config_commit",
+  "method": "POST",
+  "path": "/api/v1/configfiles/{id}/versions",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [
+    "id"
+  ],
+  "required_request_fields": [
+    "content"
+  ],
+  "optional_request_fields": [
+    "message",
+    "manifest",
+    "yaml",
+    "config"
+  ],
+  "request_example": {
+    "content": "kind: Job\nmetadata:\n  name: train\n",
+    "message": "manual",
+    "manifest": {
+      "kind": "Job",
+      "version": "v1"
+    }
+  },
+  "success_statuses": [
+    201
+  ],
+  "error_statuses": [
+    400,
+    401,
+    403,
+    404,
+    413,
+    422,
+    500
+  ],
+  "emits_events": [
+    "ConfigCommitted"
+  ],
+  "response_example": {
+    "id": "config-version-ga-001",
+    "version": 1,
+    "data": {
+      "config_id": "config-ga-001",
+      "content": "kind: Job\nmetadata:\n  name: train\n",
+      "message": "manual",
+      "sha256": "89a3cd4d85b48d3e8dceeeefbdca7ab06f6233b82a0387c7c57198413c38f47c",
+      "immutable": true,
+      "committed_at": "2026-06-23T00:00:00Z"
+    }
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

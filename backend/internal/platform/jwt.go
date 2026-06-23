@@ -2,29 +2,18 @@ package platform
 
 import (
 	"context"
-	"crypto"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rsa"
-	"crypto/sha256"
-	"crypto/sha512"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
-	"math/big"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
+
+	"github.com/coreos/go-oidc/v3/oidc"
 )
 
 const (
-	jwtCacheTTL       = 5 * time.Minute
 	jwtClockSkew      = time.Minute
 	jwtHTTPTimeout    = 3 * time.Second
-	jwtMaxJWKSBytes   = 1 << 20
 	jwtClaimAudience  = "aud"
 	jwtClaimEmail     = "email"
 	jwtClaimExpiry    = "exp"
@@ -38,103 +27,56 @@ const (
 
 var errJWTInvalid = errors.New("invalid jwt")
 
+var jwtSupportedSigningAlgs = []string{
+	oidc.RS256,
+	oidc.RS384,
+	oidc.RS512,
+	oidc.ES256,
+	oidc.ES384,
+	oidc.ES512,
+}
+
 type jwtVerifier struct {
-	jwksURL   string
 	issuer    string
 	audiences map[string]bool
-	client    *http.Client
+	verifier  *oidc.IDTokenVerifier
 	now       func() time.Time
-	ttl       time.Duration
-
-	mu        sync.Mutex
-	keys      map[string]jwtPublicKey
-	fetchedAt time.Time
-}
-
-type jwtHeader struct {
-	Algorithm string `json:"alg"`
-	KeyID     string `json:"kid"`
-}
-
-type jwksDocument struct {
-	Keys []jwkDocumentKey `json:"keys"`
-}
-
-type jwkDocumentKey struct {
-	KeyType   string `json:"kty"`
-	KeyID     string `json:"kid"`
-	Algorithm string `json:"alg"`
-	Use       string `json:"use"`
-	Modulus   string `json:"n"`
-	Exponent  string `json:"e"`
-	Curve     string `json:"crv"`
-	X         string `json:"x"`
-	Y         string `json:"y"`
-}
-
-type jwtPublicKey struct {
-	algorithm string
-	value     any
 }
 
 func newJWTVerifier(cfg Config) *jwtVerifier {
-	if strings.TrimSpace(cfg.JWKSURL) == "" {
+	jwksURL := strings.TrimSpace(cfg.JWKSURL)
+	if jwksURL == "" {
 		return nil
 	}
+	issuer := strings.TrimSpace(cfg.JWTIssuer)
+	client := &http.Client{Timeout: jwtHTTPTimeout}
+	keySet := oidc.NewRemoteKeySet(oidc.ClientContext(context.Background(), client), jwksURL)
+	config := &oidc.Config{
+		SupportedSigningAlgs: append([]string(nil), jwtSupportedSigningAlgs...),
+		SkipClientIDCheck:    true,
+		SkipExpiryCheck:      true,
+	}
 	return &jwtVerifier{
-		jwksURL:   strings.TrimSpace(cfg.JWKSURL),
-		issuer:    strings.TrimSpace(cfg.JWTIssuer),
+		issuer:    issuer,
 		audiences: cloneBoolMap(cfg.JWTAudiences),
-		client:    &http.Client{Timeout: jwtHTTPTimeout},
+		verifier:  oidc.NewVerifier(issuer, keySet, config),
 		now:       func() time.Time { return time.Now().UTC() },
-		ttl:       jwtCacheTTL,
-		keys:      map[string]jwtPublicKey{},
 	}
 }
 
 func (v *jwtVerifier) Verify(ctx context.Context, token string) (map[string]any, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
+	idToken, err := v.verifier.Verify(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	claims := map[string]any{}
+	if err := idToken.Claims(&claims); err != nil {
 		return nil, errJWTInvalid
-	}
-	header, claims, err := parseJWT(parts)
-	if err != nil {
-		return nil, err
-	}
-	key, err := v.publicKey(ctx, header.KeyID, header.Algorithm)
-	if err != nil {
-		return nil, err
-	}
-	if err := verifyJWTSignature(header.Algorithm, key, parts[0]+"."+parts[1], parts[2]); err != nil {
-		return nil, err
 	}
 	if err := v.validateClaims(claims); err != nil {
 		return nil, err
 	}
 	return claims, nil
-}
-
-func parseJWT(parts []string) (jwtHeader, map[string]any, error) {
-	headerBytes, err := decodeBase64URL(parts[0])
-	if err != nil {
-		return jwtHeader{}, nil, errJWTInvalid
-	}
-	claimBytes, err := decodeBase64URL(parts[1])
-	if err != nil {
-		return jwtHeader{}, nil, errJWTInvalid
-	}
-	var header jwtHeader
-	if err := json.Unmarshal(headerBytes, &header); err != nil {
-		return jwtHeader{}, nil, errJWTInvalid
-	}
-	claims := map[string]any{}
-	if err := json.Unmarshal(claimBytes, &claims); err != nil {
-		return jwtHeader{}, nil, errJWTInvalid
-	}
-	if !jwtAlgorithmSupported(header.Algorithm) || strings.TrimSpace(header.KeyID) == "" {
-		return jwtHeader{}, nil, errJWTInvalid
-	}
-	return header, claims, nil
 }
 
 func (v *jwtVerifier) validateClaims(claims map[string]any) error {
@@ -169,212 +111,6 @@ func (v *jwtVerifier) validateClaimTimes(claims map[string]any) error {
 		return errors.New("jwt was issued in the future")
 	}
 	return nil
-}
-
-func (v *jwtVerifier) publicKey(ctx context.Context, keyID, algorithm string) (jwtPublicKey, error) {
-	if key, ok := v.cachedKey(keyID, algorithm); ok {
-		return key, nil
-	}
-	if err := v.refreshKeys(ctx); err != nil {
-		return jwtPublicKey{}, err
-	}
-	if key, ok := v.cachedKey(keyID, algorithm); ok {
-		return key, nil
-	}
-	return jwtPublicKey{}, fmt.Errorf("jwt signing key %q was not found", keyID)
-}
-
-func (v *jwtVerifier) cachedKey(keyID, algorithm string) (jwtPublicKey, bool) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	key, ok := v.keys[keyID]
-	if !ok || v.now().Sub(v.fetchedAt) >= v.ttl {
-		return jwtPublicKey{}, false
-	}
-	return key, key.algorithm == "" || key.algorithm == algorithm
-}
-
-func (v *jwtVerifier) refreshKeys(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.jwksURL, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := v.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("jwks endpoint returned %d", resp.StatusCode)
-	}
-	keys, err := parseJWKS(io.LimitReader(resp.Body, jwtMaxJWKSBytes))
-	if err != nil {
-		return err
-	}
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	v.keys = keys
-	v.fetchedAt = v.now()
-	return nil
-}
-
-func parseJWKS(body io.Reader) (map[string]jwtPublicKey, error) {
-	var doc jwksDocument
-	if err := json.NewDecoder(body).Decode(&doc); err != nil {
-		return nil, err
-	}
-	keys := map[string]jwtPublicKey{}
-	for _, item := range doc.Keys {
-		if key, ok := parseJWK(item); ok {
-			keys[item.KeyID] = key
-		}
-	}
-	if len(keys) == 0 {
-		return nil, errors.New("jwks endpoint returned no signing keys")
-	}
-	return keys, nil
-}
-
-func parseJWK(item jwkDocumentKey) (jwtPublicKey, bool) {
-	if item.KeyID == "" || (item.Use != "" && item.Use != "sig") {
-		return jwtPublicKey{}, false
-	}
-	key, err := jwkValue(item)
-	if err != nil {
-		return jwtPublicKey{}, false
-	}
-	return jwtPublicKey{algorithm: item.Algorithm, value: key}, true
-}
-
-func jwkValue(item jwkDocumentKey) (any, error) {
-	switch item.KeyType {
-	case "RSA":
-		return rsaPublicKeyFromJWK(item)
-	case "EC":
-		return ecdsaPublicKeyFromJWK(item)
-	default:
-		return nil, fmt.Errorf("unsupported jwk key type %q", item.KeyType)
-	}
-}
-
-func rsaPublicKeyFromJWK(item jwkDocumentKey) (*rsa.PublicKey, error) {
-	modulus, err := decodeBase64URL(item.Modulus)
-	if err != nil {
-		return nil, err
-	}
-	exponentBytes, err := decodeBase64URL(item.Exponent)
-	if err != nil {
-		return nil, err
-	}
-	exponent := 0
-	for _, b := range exponentBytes {
-		exponent = exponent<<8 + int(b)
-	}
-	if exponent == 0 || len(modulus) == 0 {
-		return nil, errJWTInvalid
-	}
-	return &rsa.PublicKey{N: new(big.Int).SetBytes(modulus), E: exponent}, nil
-}
-
-func ecdsaPublicKeyFromJWK(item jwkDocumentKey) (*ecdsa.PublicKey, error) {
-	curve := jwtCurve(item.Curve)
-	if curve == nil {
-		return nil, errJWTInvalid
-	}
-	x, err := decodeBase64URL(item.X)
-	if err != nil {
-		return nil, err
-	}
-	y, err := decodeBase64URL(item.Y)
-	if err != nil {
-		return nil, err
-	}
-	pub := &ecdsa.PublicKey{Curve: curve, X: new(big.Int).SetBytes(x), Y: new(big.Int).SetBytes(y)}
-	if !curve.IsOnCurve(pub.X, pub.Y) {
-		return nil, errJWTInvalid
-	}
-	return pub, nil
-}
-
-func verifyJWTSignature(algorithm string, key jwtPublicKey, signingInput, encodedSignature string) error {
-	signature, err := decodeBase64URL(encodedSignature)
-	if err != nil {
-		return errJWTInvalid
-	}
-	digest, hashID, err := jwtDigest(algorithm, signingInput)
-	if err != nil {
-		return err
-	}
-	switch pub := key.value.(type) {
-	case *rsa.PublicKey:
-		return verifyRSASignature(algorithm, pub, hashID, digest, signature)
-	case *ecdsa.PublicKey:
-		return verifyECDSASignature(algorithm, pub, digest, signature)
-	default:
-		return errJWTInvalid
-	}
-}
-
-func verifyRSASignature(algorithm string, pub *rsa.PublicKey, hashID crypto.Hash, digest, signature []byte) error {
-	if !strings.HasPrefix(algorithm, "RS") {
-		return errJWTInvalid
-	}
-	return rsa.VerifyPKCS1v15(pub, hashID, digest, signature)
-}
-
-func verifyECDSASignature(algorithm string, pub *ecdsa.PublicKey, digest, signature []byte) error {
-	if !strings.HasPrefix(algorithm, "ES") {
-		return errJWTInvalid
-	}
-	byteLen := (pub.Curve.Params().BitSize + 7) / 8
-	if len(signature) != 2*byteLen {
-		return errJWTInvalid
-	}
-	r := new(big.Int).SetBytes(signature[:byteLen])
-	s := new(big.Int).SetBytes(signature[byteLen:])
-	if !ecdsa.Verify(pub, digest, r, s) {
-		return errJWTInvalid
-	}
-	return nil
-}
-
-func jwtDigest(algorithm, signingInput string) ([]byte, crypto.Hash, error) {
-	input := []byte(signingInput)
-	switch algorithm {
-	case "RS256", "ES256":
-		sum := sha256.Sum256(input)
-		return sum[:], crypto.SHA256, nil
-	case "RS384", "ES384":
-		sum := sha512.Sum384(input)
-		return sum[:], crypto.SHA384, nil
-	case "RS512", "ES512":
-		sum := sha512.Sum512(input)
-		return sum[:], crypto.SHA512, nil
-	default:
-		return nil, 0, errJWTInvalid
-	}
-}
-
-func jwtAlgorithmSupported(algorithm string) bool {
-	switch algorithm {
-	case "RS256", "RS384", "RS512", "ES256", "ES384", "ES512":
-		return true
-	default:
-		return false
-	}
-}
-
-func jwtCurve(name string) elliptic.Curve {
-	switch name {
-	case "P-256":
-		return elliptic.P256()
-	case "P-384":
-		return elliptic.P384()
-	case "P-521":
-		return elliptic.P521()
-	default:
-		return nil
-	}
 }
 
 func jwtNumericDate(value any) (time.Time, bool, error) {
@@ -488,14 +224,6 @@ func jwtStringsFromAny(values []any) []string {
 func jwtString(value any) string {
 	text, _ := value.(string)
 	return strings.TrimSpace(text)
-}
-
-func decodeBase64URL(value string) ([]byte, error) {
-	data, err := base64.RawURLEncoding.DecodeString(value)
-	if err == nil {
-		return data, nil
-	}
-	return base64.URLEncoding.DecodeString(value)
 }
 
 func cloneBoolMap(in map[string]bool) map[string]bool {

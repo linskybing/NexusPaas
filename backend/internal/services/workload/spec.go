@@ -17,7 +17,7 @@ func Spec() platform.ServiceSpec {
 		RequiresCluster: true,
 		Description:     "Immutable ConfigFiles, job submission, job state machine, job logs, templates, and workload saga orchestration.",
 		Tables:          []string{"config_files", "config_blobs", "config_commits", "jobs", "job_logs", "job_templates", "outbox", "inbox"},
-		Events:          []string{"ConfigCommitted", "JobSubmitted", "JobQueued", "JobRunning", "JobSucceeded", "JobFailed", "JobCancelled"},
+		Events:          []string{"ConfigCommitted", "ConfigFileChanged", "JobSubmitted", "JobQueued", "JobRunning", "JobSucceeded", "JobFailed", "JobCancelRequested", "JobCancelled"},
 		Routes: []platform.RouteSpec{
 			route(http.MethodGet, "/api/v1/configfiles", "configfiles", "list"),
 			route(http.MethodPost, "/api/v1/configfiles", "configfiles", "create"),

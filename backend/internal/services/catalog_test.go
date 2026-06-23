@@ -153,10 +153,108 @@ func TestOpenAPICoversAllRegisteredServiceRoutes(t *testing.T) {
 		if !ok {
 			t.Fatalf("openapi missing path for registered route %s %s (expected %s)", route.Method, route.Pattern, pattern)
 		}
-		if _, ok := operations[strings.ToLower(route.Method)]; !ok {
+		operation, ok := operations[strings.ToLower(route.Method)].(map[string]any)
+		if !ok {
 			t.Fatalf("openapi missing method for registered route %s %s", route.Method, route.Pattern)
 		}
+		assertOpenAPIAuthMetadata(t, route, operation)
 	}
+}
+
+func assertOpenAPIAuthMetadata(t *testing.T, route platform.RouteSpec, operation map[string]any) {
+	t.Helper()
+	assertOpenAPIBool(t, route, operation, "x-auth", route.AuthRequired)
+	assertOpenAPIBool(t, route, operation, "x-admin", route.Admin)
+	assertOpenAPIBool(t, route, operation, "x-policy-bypass", route.PolicyBypass)
+	assertOpenAPIBool(t, route, operation, "x-service-auth-required", route.ServiceAuthRequired)
+
+	security, hasSecurity := operation["security"]
+	if !routeRequiresOpenAPISecurity(route) {
+		assertNoOpenAPISecurity(t, route, security, hasSecurity)
+		return
+	}
+	requirements, ok := security.([]map[string][]string)
+	if !ok {
+		t.Fatalf("%s %s security type = %T, want []map[string][]string", route.Method, route.Pattern, security)
+	}
+	assertOpenAPISecurityCategories(t, route, requirements)
+}
+
+func routeRequiresOpenAPISecurity(route platform.RouteSpec) bool {
+	return route.AuthRequired || route.ServiceAuthRequired
+}
+
+func assertNoOpenAPISecurity(t *testing.T, route platform.RouteSpec, security any, hasSecurity bool) {
+	t.Helper()
+	if hasSecurity {
+		t.Fatalf("%s %s public route declares security: %#v", route.Method, route.Pattern, security)
+	}
+}
+
+func assertOpenAPISecurityCategories(t *testing.T, route platform.RouteSpec, requirements []map[string][]string) {
+	t.Helper()
+	if route.AuthRequired && !openAPISecurityHasUserAuth(requirements) {
+		t.Fatalf("%s %s missing user auth security: %#v", route.Method, route.Pattern, requirements)
+	}
+	if route.ServiceAuthRequired && !openAPISecurityHasServiceAuth(requirements) {
+		t.Fatalf("%s %s missing service auth security: %#v", route.Method, route.Pattern, requirements)
+	}
+	for _, requirement := range requirements {
+		assertOpenAPIRequirementMatchesRoute(t, route, requirement, requirements)
+	}
+}
+
+func assertOpenAPIRequirementMatchesRoute(t *testing.T, route platform.RouteSpec, requirement map[string][]string, requirements []map[string][]string) {
+	t.Helper()
+	hasUserAuth := openAPIRequirementHasUserAuth(requirement)
+	hasServiceAuth := openAPIRequirementHasServiceAuth(requirement)
+	if !route.AuthRequired && hasUserAuth {
+		t.Fatalf("%s %s declares unexpected user auth security: %#v", route.Method, route.Pattern, requirements)
+	}
+	if !route.ServiceAuthRequired && hasServiceAuth {
+		t.Fatalf("%s %s declares unexpected service auth security: %#v", route.Method, route.Pattern, requirements)
+	}
+	if route.AuthRequired && route.ServiceAuthRequired && (!hasUserAuth || !hasServiceAuth) {
+		t.Fatalf("%s %s combined auth must require user and service auth together: %#v", route.Method, route.Pattern, requirements)
+	}
+}
+
+func assertOpenAPIBool(t *testing.T, route platform.RouteSpec, operation map[string]any, key string, want bool) {
+	t.Helper()
+	got, ok := operation[key].(bool)
+	if !ok || got != want {
+		t.Fatalf("%s %s %s = %v, want %v", route.Method, route.Pattern, key, operation[key], want)
+	}
+}
+
+func openAPISecurityHasUserAuth(requirements []map[string][]string) bool {
+	for _, requirement := range requirements {
+		if openAPIRequirementHasUserAuth(requirement) {
+			return true
+		}
+	}
+	return false
+}
+
+func openAPISecurityHasServiceAuth(requirements []map[string][]string) bool {
+	for _, requirement := range requirements {
+		if openAPIRequirementHasServiceAuth(requirement) {
+			return true
+		}
+	}
+	return false
+}
+
+func openAPIRequirementHasUserAuth(requirement map[string][]string) bool {
+	_, bearer := requirement["BearerAuth"]
+	_, apiKey := requirement["ApiKeyAuth"]
+	return bearer || apiKey
+}
+
+func openAPIRequirementHasServiceAuth(requirement map[string][]string) bool {
+	_, serviceName := requirement["ServiceNameAuth"]
+	_, serviceKey := requirement["ServiceKeyAuth"]
+	return serviceName && serviceKey
 }
 
 func openAPIRoutePattern(pattern string) string {
@@ -414,6 +512,92 @@ func newAuthCommonEndpointTestApp(t *testing.T) *platform.App {
 	allowRawPolicy(t, app, "ADMIN", "", "platform-runtime:service-registry", "platform_runtime_service_registry")
 	allowRawPolicy(t, app, "ADMIN", "", "platform-runtime:outbox", "platform_runtime_outbox")
 	return app
+}
+
+func TestRBACPublicAPIRoutesRequireAuthUnlessExplicitlyAllowed(t *testing.T) {
+	app := platform.NewApp(platform.Config{ServiceName: "all", HTTPAddr: ":0", RequireAuth: true, ExternalURLs: map[string]string{}})
+	RegisterAll(app)
+
+	allowedPublic := publicAPIRouteAllowlist()
+	seenAllowed := map[string]bool{}
+	for _, route := range app.Routes {
+		if isExternalPublicAPIRoute(route) {
+			assertRBACPublicAPIRoute(t, app, route, allowedPublic, seenAllowed)
+		}
+	}
+	assertPublicAPIAllowlistSeen(t, allowedPublic, seenAllowed)
+}
+
+func assertRBACPublicAPIRoute(t *testing.T, app *platform.App, route platform.RouteSpec, allowedPublic map[string]string, seenAllowed map[string]bool) {
+	t.Helper()
+	key := routeKey(route)
+	if reason, ok := allowedPublic[key]; ok {
+		seenAllowed[key] = true
+		assertAllowedPublicAPIRoute(t, route, reason)
+		return
+	}
+	if !route.AuthRequired {
+		t.Fatalf("external public API route %s %s resource=%s AuthRequired=false without allowlist", route.Method, route.Pattern, route.Resource)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(route.Method, sampleRoutePath(route.Pattern), nil)
+	app.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated %s %s resource=%s returned %d, want %d: %s", route.Method, route.Pattern, route.Resource, rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+}
+
+func assertAllowedPublicAPIRoute(t *testing.T, route platform.RouteSpec, reason string) {
+	t.Helper()
+	if strings.TrimSpace(reason) == "" {
+		t.Fatalf("allowlisted public route %s %s resource=%s has empty reason", route.Method, route.Pattern, route.Resource)
+	}
+	if route.AuthRequired {
+		t.Fatalf("allowlisted public route %s %s resource=%s reason=%q AuthRequired=true, want false", route.Method, route.Pattern, route.Resource, reason)
+	}
+}
+
+func assertPublicAPIAllowlistSeen(t *testing.T, allowedPublic map[string]string, seenAllowed map[string]bool) {
+	t.Helper()
+	for key, reason := range allowedPublic {
+		if strings.TrimSpace(reason) == "" {
+			t.Fatalf("allowlisted public route %s has empty reason", key)
+		}
+		if !seenAllowed[key] {
+			t.Fatalf("allowlisted public route %s was not registered", key)
+		}
+	}
+}
+
+func publicAPIRouteAllowlist() map[string]string {
+	return map[string]string{
+		"POST /api/v1/login":                                "session login entry point",
+		"POST /api/v1/logout":                               "session logout entry point",
+		"POST /api/v1/register":                             "self-service account registration entry point",
+		"POST /api/v1/refresh":                              "refresh-token exchange entry point",
+		"GET /api/v1/captcha":                               "captcha challenge entry point",
+		"POST /api/v1/cli/login":                            "CLI login bootstrap entry point",
+		"GET /api/v1/oidc/start":                            "OIDC browser authorization start",
+		"GET /api/v1/oidc/login":                            "OIDC login form entry point",
+		"POST /api/v1/oidc/login":                           "OIDC login submission entry point",
+		"GET /api/v1/oidc/.well-known/openid-configuration": "OIDC discovery metadata",
+		"GET /api/v1/oidc/jwks":                             "OIDC public signing keys",
+		"GET /api/v1/oidc/authorize":                        "OIDC authorization endpoint",
+		"POST /api/v1/oidc/token":                           "OIDC token endpoint",
+		"GET /api/v1/oidc/callback":                         "OIDC browser callback endpoint",
+		"POST /api/v1/oidc/callback":                        "OIDC form-post callback endpoint",
+	}
+}
+
+func routeKey(route platform.RouteSpec) string {
+	return route.Method + " " + route.Pattern
+}
+
+func isExternalPublicAPIRoute(route platform.RouteSpec) bool {
+	return strings.HasPrefix(route.Pattern, "/api/v1/") &&
+		!strings.HasPrefix(route.Pattern, "/api/v1/internal/") &&
+		!route.ServiceAuthRequired
 }
 
 func TestAuthRequiredWhenConfigured(t *testing.T) {

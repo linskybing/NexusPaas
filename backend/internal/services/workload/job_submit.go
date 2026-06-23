@@ -126,6 +126,13 @@ func buildSubmittedJob(app *platform.App, r *http.Request, payload map[string]an
 	if jobCtx.configCommitID != "" {
 		job["config_commit_id"] = jobCtx.configCommitID
 	}
+	if shared.BoolValue(job, "streaming_session", "streamingSession", "StreamingSession") {
+		image := strings.TrimSpace(app.Config.StreamSidecarImage)
+		if image == "" {
+			return nil, nil, jobSubmitError{status: http.StatusBadRequest, message: "streaming sessions require STREAM_SIDECAR_IMAGE to be configured"}
+		}
+		job["stream_sidecar_image"] = image
+	}
 	return job, jobAdmissionPayload(job, payload), nil
 }
 

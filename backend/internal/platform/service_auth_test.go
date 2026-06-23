@@ -47,6 +47,46 @@ func TestServiceAuthRequiredRouteAllowsConfiguredKey(t *testing.T) {
 	}
 }
 
+func TestServiceAuthRequiredRouteValidatesScopedCallerAudience(t *testing.T) {
+	app := NewApp(Config{
+		ServiceName: "all",
+		HTTPAddr:    ":0",
+		ServiceTrustedIdentities: map[string]ServiceTrustedIdentity{
+			"caller-service": {Key: "scoped-key", Audiences: []string{"test-service"}},
+			"other-service":  {Key: "other-key", Audiences: []string{"other-service"}},
+		},
+	})
+	registerServiceAuthRoute(app)
+
+	cases := []struct {
+		name   string
+		caller string
+		key    string
+		want   int
+	}{
+		{name: "missing caller", key: "scoped-key", want: http.StatusUnauthorized},
+		{name: "wrong key", caller: "caller-service", key: "wrong", want: http.StatusUnauthorized},
+		{name: "wrong audience", caller: "other-service", key: "other-key", want: http.StatusUnauthorized},
+		{name: "allowed", caller: "caller-service", key: "scoped-key", want: http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/internal/owner/o-1", nil)
+			if tc.caller != "" {
+				req.Header.Set(serviceNameHeader, tc.caller)
+			}
+			if tc.key != "" {
+				req.Header.Set(serviceKeyHeader, tc.key)
+			}
+			rec := httptest.NewRecorder()
+			app.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.want, rec.Body.String())
+			}
+		})
+	}
+}
+
 func registerServiceAuthRoute(app *App) {
 	app.RegisterService(ServiceSpec{
 		Name: "test-service",

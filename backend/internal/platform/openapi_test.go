@@ -12,6 +12,8 @@ func TestOpenAPIGeneratorGenerate(t *testing.T) {
 		{Method: http.MethodGet, Pattern: "/api/v1/public", OperationID: "public_probe", Resource: "widget-service:public"},
 		{Method: http.MethodPost, Pattern: "/api/v1/public", OperationID: "public_probe", Resource: "widget-service:public"},
 		{Method: http.MethodGet, Pattern: "/api/v1/proxy/{path...}", OperationID: "proxy_widget", Resource: "widget-service:proxy", AuthRequired: true, Action: "proxy"},
+		{Method: http.MethodGet, Pattern: "/api/v1/internal/status", OperationID: "internal_status", Resource: "widget-service:internal", PolicyBypass: true, ServiceAuthRequired: true},
+		{Method: http.MethodPost, Pattern: "/api/v1/combined", OperationID: "combined_widget", Resource: "widget-service:combined", AuthRequired: true, ServiceAuthRequired: true},
 	}}
 
 	doc := gen.generate()
@@ -25,6 +27,8 @@ func TestOpenAPIGeneratorGenerate(t *testing.T) {
 	assertWidgetPath(t, paths)
 	assertPublicPath(t, paths)
 	assertProxyPath(t, paths)
+	assertServiceInternalPath(t, paths)
+	assertCombinedPath(t, paths)
 	assertComponents(t, doc)
 }
 
@@ -47,8 +51,9 @@ func assertWidgetPath(t *testing.T, paths map[string]map[string]any) {
 	if get["x-idempotent"] != true {
 		t.Errorf("GET x-idempotent = %v, want true", get["x-idempotent"])
 	}
+	assertAuthExtensions(t, get, true, false, false, false)
 	assertOperationResponses(t, get)
-	assertOperationSecurity(t, get)
+	assertUserSecurity(t, get)
 	assertPathParameter(t, get, "id", false)
 	post, ok := widgets["post"].(map[string]any)
 	if !ok {
@@ -60,8 +65,9 @@ func assertWidgetPath(t *testing.T, paths map[string]map[string]any) {
 	if post["x-idempotent"] != false {
 		t.Errorf("POST x-idempotent = %v, want false", post["x-idempotent"])
 	}
+	assertAuthExtensions(t, post, true, true, false, false)
 	assertOperationResponses(t, post)
-	assertOperationSecurity(t, post)
+	assertUserSecurity(t, post)
 }
 
 func assertPublicPath(t *testing.T, paths map[string]map[string]any) {
@@ -74,10 +80,12 @@ func assertPublicPath(t *testing.T, paths map[string]map[string]any) {
 	if _, ok := publicGet["security"]; ok {
 		t.Fatalf("public route unexpectedly declares security: %#v", publicGet["security"])
 	}
+	assertAuthExtensions(t, publicGet, false, false, false, false)
 	publicPost := publicPath["post"].(map[string]any)
 	if publicPost["operationId"] != "public_probe_2" {
 		t.Fatalf("duplicate operationId = %v, want public_probe_2", publicPost["operationId"])
 	}
+	assertAuthExtensions(t, publicPost, false, false, false, false)
 }
 
 func assertProxyPath(t *testing.T, paths map[string]map[string]any) {
@@ -93,7 +101,46 @@ func assertProxyPath(t *testing.T, paths map[string]map[string]any) {
 	if proxyGet["x-catch-all"] != true {
 		t.Fatalf("x-catch-all = %v, want true", proxyGet["x-catch-all"])
 	}
+	assertAuthExtensions(t, proxyGet, true, false, false, false)
 	assertPathParameter(t, proxyGet, "path", true)
+}
+
+func assertServiceInternalPath(t *testing.T, paths map[string]map[string]any) {
+	t.Helper()
+	internalPath, ok := paths["/api/v1/internal/status"]
+	if !ok {
+		t.Fatalf("missing internal service path: %#v", paths)
+	}
+	internalGet := internalPath["get"].(map[string]any)
+	assertAuthExtensions(t, internalGet, false, false, true, true)
+	assertServiceSecurity(t, internalGet)
+}
+
+func assertCombinedPath(t *testing.T, paths map[string]map[string]any) {
+	t.Helper()
+	combinedPath, ok := paths["/api/v1/combined"]
+	if !ok {
+		t.Fatalf("missing combined auth path: %#v", paths)
+	}
+	combinedPost := combinedPath["post"].(map[string]any)
+	assertAuthExtensions(t, combinedPost, true, false, false, true)
+	assertCombinedSecurity(t, combinedPost)
+}
+
+func assertAuthExtensions(t *testing.T, operation map[string]any, auth, admin, policyBypass, serviceAuth bool) {
+	t.Helper()
+	if operation["x-auth"] != auth {
+		t.Fatalf("x-auth = %v, want %v", operation["x-auth"], auth)
+	}
+	if operation["x-admin"] != admin {
+		t.Fatalf("x-admin = %v, want %v", operation["x-admin"], admin)
+	}
+	if operation["x-policy-bypass"] != policyBypass {
+		t.Fatalf("x-policy-bypass = %v, want %v", operation["x-policy-bypass"], policyBypass)
+	}
+	if operation["x-service-auth-required"] != serviceAuth {
+		t.Fatalf("x-service-auth-required = %v, want %v", operation["x-service-auth-required"], serviceAuth)
+	}
 }
 
 func assertOperationResponses(t *testing.T, operation map[string]any) {
@@ -110,12 +157,9 @@ func assertOperationResponses(t *testing.T, operation map[string]any) {
 	}
 }
 
-func assertOperationSecurity(t *testing.T, operation map[string]any) {
+func assertUserSecurity(t *testing.T, operation map[string]any) {
 	t.Helper()
-	security, ok := operation["security"].([]map[string][]string)
-	if !ok {
-		t.Fatalf("security type = %T, want []map[string][]string", operation["security"])
-	}
+	security := operationSecurity(t, operation)
 	if len(security) != 2 {
 		t.Fatalf("security entries = %d, want 2", len(security))
 	}
@@ -125,6 +169,65 @@ func assertOperationSecurity(t *testing.T, operation map[string]any) {
 	if _, ok := security[1]["ApiKeyAuth"]; !ok {
 		t.Fatalf("missing ApiKeyAuth security: %#v", security)
 	}
+	for _, requirement := range security {
+		if requirementHasServiceAuth(requirement) {
+			t.Fatalf("user-only route declares service auth: %#v", security)
+		}
+	}
+}
+
+func assertServiceSecurity(t *testing.T, operation map[string]any) {
+	t.Helper()
+	security := operationSecurity(t, operation)
+	if len(security) != 1 {
+		t.Fatalf("security entries = %d, want 1", len(security))
+	}
+	if !requirementHasServiceAuth(security[0]) {
+		t.Fatalf("missing service auth security: %#v", security)
+	}
+	if requirementHasUserAuth(security[0]) {
+		t.Fatalf("service-only route declares user auth: %#v", security)
+	}
+}
+
+func assertCombinedSecurity(t *testing.T, operation map[string]any) {
+	t.Helper()
+	security := operationSecurity(t, operation)
+	if len(security) != 2 {
+		t.Fatalf("security entries = %d, want 2", len(security))
+	}
+	if _, ok := security[0]["BearerAuth"]; !ok {
+		t.Fatalf("missing BearerAuth combined security: %#v", security)
+	}
+	if _, ok := security[1]["ApiKeyAuth"]; !ok {
+		t.Fatalf("missing ApiKeyAuth combined security: %#v", security)
+	}
+	for _, requirement := range security {
+		if !requirementHasUserAuth(requirement) || !requirementHasServiceAuth(requirement) {
+			t.Fatalf("combined route must require user and service auth in each alternative: %#v", security)
+		}
+	}
+}
+
+func operationSecurity(t *testing.T, operation map[string]any) []map[string][]string {
+	t.Helper()
+	security, ok := operation["security"].([]map[string][]string)
+	if !ok {
+		t.Fatalf("security type = %T, want []map[string][]string", operation["security"])
+	}
+	return security
+}
+
+func requirementHasUserAuth(requirement map[string][]string) bool {
+	_, bearer := requirement["BearerAuth"]
+	_, apiKey := requirement["ApiKeyAuth"]
+	return bearer || apiKey
+}
+
+func requirementHasServiceAuth(requirement map[string][]string) bool {
+	_, serviceName := requirement["ServiceNameAuth"]
+	_, serviceKey := requirement["ServiceKeyAuth"]
+	return serviceName && serviceKey
 }
 
 func assertPathParameter(t *testing.T, operation map[string]any, name string, catchAll bool) {
@@ -170,9 +273,22 @@ func assertComponents(t *testing.T, doc map[string]any) {
 	if !ok {
 		t.Fatalf("securitySchemes type = %T, want map[string]any", components["securitySchemes"])
 	}
-	for _, name := range []string{"BearerAuth", "ApiKeyAuth"} {
+	for _, name := range []string{"BearerAuth", "ApiKeyAuth", "ServiceNameAuth", "ServiceKeyAuth"} {
 		if _, ok := securitySchemes[name]; !ok {
 			t.Fatalf("missing security scheme %s in %#v", name, securitySchemes)
 		}
+	}
+	assertAPIKeyHeaderScheme(t, securitySchemes, "ServiceNameAuth", "X-Service-Name")
+	assertAPIKeyHeaderScheme(t, securitySchemes, "ServiceKeyAuth", "X-Service-Key")
+}
+
+func assertAPIKeyHeaderScheme(t *testing.T, schemes map[string]any, name, header string) {
+	t.Helper()
+	scheme, ok := schemes[name].(map[string]any)
+	if !ok {
+		t.Fatalf("security scheme %s type = %T, want map[string]any", name, schemes[name])
+	}
+	if scheme["type"] != "apiKey" || scheme["in"] != "header" || scheme["name"] != header {
+		t.Fatalf("security scheme %s = %#v, want apiKey header %s", name, scheme, header)
 	}
 }

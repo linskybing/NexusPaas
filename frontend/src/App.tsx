@@ -22,6 +22,7 @@ import type {
   ConfigFilePayload,
   ConfigFileRecord,
   DashboardData,
+  ImageBuildPayload,
   JobData,
   JobLogData,
   JobLogRecord,
@@ -268,8 +269,12 @@ type WorkloadState = {
 
 type LogState = {
   jobID?: string;
+  projectID?: string;
   logs: JobLogRecord[];
   loading: boolean;
+  refreshing?: boolean;
+  tailing?: boolean;
+  lastRefreshedAt?: string;
   error?: string;
 };
 
@@ -280,6 +285,8 @@ type StreamState = {
   loading: boolean;
   error?: string;
 };
+
+const jobLogPollMs = 5_000;
 
 type ImageState = {
   images: ProjectImageRecord[];
@@ -334,6 +341,105 @@ function WorkloadsPanel({
     setLogState({ logs: [], loading: false });
     setStreamState({ loading: false });
   }, [activeProjectID]);
+
+  useEffect(() => {
+    const selectedJobID = logState.jobID;
+    if (!selectedJobID || logState.projectID !== activeProjectID || !logState.tailing) {
+      return;
+    }
+    if (disabled || !authEnabled) {
+      setLogState({ logs: [], loading: false });
+      return;
+    }
+
+    let stopped = false;
+    let inFlight = false;
+    let controller: AbortController | undefined;
+
+    const refresh = async () => {
+      if (inFlight) {
+        return;
+      }
+      inFlight = true;
+      const requestController = new AbortController();
+      controller = requestController;
+      setLogState((current) =>
+        current.jobID === selectedJobID
+          ? { ...current, loading: current.logs.length === 0, refreshing: current.logs.length > 0, error: undefined }
+          : current,
+      );
+      try {
+        const [logsResult, dataResult] = await Promise.allSettled([
+          client.jobLogs(selectedJobID, requestController.signal),
+          client.workloads(activeProjectID, requestController.signal),
+        ]);
+        if (stopped || requestController.signal.aborted) {
+          return;
+        }
+        if (dataResult.status === "fulfilled") {
+          const data = dataResult.value;
+          setState((current) => ({ data, loading: false, message: current.message }));
+          if (!filterJobsForProject(data.jobs, activeProjectID).some((job) => jobID(job) === selectedJobID)) {
+            setLogState((current) =>
+              current.jobID === selectedJobID
+                ? {
+                    jobID: selectedJobID,
+                    projectID: activeProjectID,
+                    logs: logsResult.status === "fulfilled" ? logsResult.value : current.logs,
+                    loading: false,
+                    refreshing: false,
+                    tailing: false,
+                    error: "Selected job is no longer available",
+                  }
+                : current,
+            );
+            return;
+          }
+        }
+        if (logsResult.status === "fulfilled") {
+          setLogState((current) =>
+            current.jobID === selectedJobID
+              ? {
+                  jobID: selectedJobID,
+                  projectID: activeProjectID,
+                  logs: logsResult.value,
+                  loading: false,
+                  refreshing: false,
+                  tailing: true,
+                  lastRefreshedAt: new Date().toISOString(),
+                  error: dataResult.status === "rejected" ? "Log/status refresh failed" : undefined,
+                }
+              : current,
+          );
+          return;
+        }
+        setLogState((current) =>
+          current.jobID === selectedJobID
+            ? { ...current, loading: false, refreshing: false, tailing: true, error: "Log/status refresh failed" }
+            : current,
+        );
+      } catch {
+        if (!stopped && !requestController.signal.aborted) {
+          setLogState((current) =>
+            current.jobID === selectedJobID
+              ? { ...current, loading: false, refreshing: false, tailing: true, error: "Log/status refresh failed" }
+              : current,
+          );
+        }
+      } finally {
+        inFlight = false;
+        controller = undefined;
+      }
+    };
+
+    void refresh();
+    const timer = window.setInterval(refresh, jobLogPollMs);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      controller?.abort();
+    };
+  }, [activeProjectID, authEnabled, client, disabled, logState.jobID, logState.projectID, logState.tailing]);
 
   useEffect(() => {
     if (disabled || !authEnabled) {
@@ -470,13 +576,7 @@ function WorkloadsPanel({
     if (!id) {
       return;
     }
-    setLogState({ jobID: id, logs: [], loading: true });
-    try {
-      const logs = await client.jobLogs(id);
-      setLogState({ jobID: id, logs, loading: false });
-    } catch (error) {
-      setLogState({ jobID: id, logs: [], loading: false, error: error instanceof Error ? error.message : "Job logs request failed" });
-    }
+    setLogState({ jobID: id, projectID: activeProjectID, logs: [], loading: true, tailing: true });
   }
 
   async function openStream(job: JobRecord) {
@@ -674,6 +774,11 @@ function ImagesPanel({
 }) {
   const client = useMemo(() => createAPIClient({ baseURL, apiKey }), [baseURL, apiKey]);
   const [state, setState] = useState<ImageState>({ images: [], builds: [], loading: false });
+  const [imageReference, setImageReference] = useState("");
+  const [submitMessage, setSubmitMessage] = useState("");
+  const [submitError, setSubmitError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [localRefreshKey, setLocalRefreshKey] = useState(0);
   const disabled = unavailable || !activeProjectID;
 
   useEffect(() => {
@@ -696,13 +801,38 @@ function ImagesPanel({
           setState((current) => ({
             ...current,
             loading: false,
-            error: error instanceof Error ? error.message : "Image request failed",
+            error: "Image refresh failed",
           }));
         }
       });
 
     return () => controller.abort();
-  }, [activeProjectID, authEnabled, client, disabled, refreshKey]);
+  }, [activeProjectID, authEnabled, client, disabled, localRefreshKey, refreshKey]);
+
+  const canSubmitImageBuild = Boolean(activeProjectID && authEnabled && imageReference.trim() && !submitting);
+
+  async function submitImageBuild(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const reference = imageReference.trim();
+    if (!canSubmitImageBuild || !reference) {
+      return;
+    }
+
+    const payload: ImageBuildPayload = { project_id: activeProjectID, image_reference: reference };
+    setSubmitting(true);
+    setSubmitMessage("");
+    setSubmitError("");
+    try {
+      const build = await client.submitDockerfileImageBuild(payload);
+      setImageReference("");
+      setSubmitMessage(imageBuildSubmitMessage(build));
+      setLocalRefreshKey((value) => value + 1);
+    } catch {
+      setSubmitError("Image build request failed");
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   return (
     <section className="panel images-panel">
@@ -714,8 +844,29 @@ function ImagesPanel({
           <div className="workload-meta">
             <span className="mono">{activeProjectID}</span>
             {state.loading ? <span>Refreshing</span> : null}
+            {submitMessage ? <span className="success-text">{submitMessage}</span> : null}
           </div>
+          <form className="config-form" aria-label="Submit image build" onSubmit={submitImageBuild}>
+            <label>
+              Image reference
+              <input
+                value={imageReference}
+                onChange={(event) => setImageReference(event.target.value)}
+                placeholder="registry.local/team/app:tag"
+                spellCheck={false}
+              />
+            </label>
+            <label>
+              Build type
+              <input value="Dockerfile" readOnly disabled />
+            </label>
+            <button className="button primary" type="submit" disabled={!canSubmitImageBuild}>
+              <Send size={16} />
+              Submit image build
+            </button>
+          </form>
           {state.error ? <div className="inline-error" role="alert">{state.error}</div> : null}
+          {submitError ? <div className="inline-error" role="alert">{submitError}</div> : null}
           <ImageTable records={state.images} />
           <ImageBuildTable records={state.builds} />
         </div>
@@ -741,6 +892,7 @@ function UsagePanel({
 }) {
   const client = useMemo(() => createAPIClient({ baseURL, apiKey }), [baseURL, apiKey]);
   const [state, setState] = useState<UsageState>({ usage: [], requestUsage: [], loading: false });
+  const [localRefreshKey, setLocalRefreshKey] = useState(0);
   const disabled = unavailable || !activeProjectID;
 
   useEffect(() => {
@@ -763,21 +915,19 @@ function UsagePanel({
       const usageRows = usage.status === "fulfilled" ? usage.value : [];
       const requestRows = requestUsage.status === "fulfilled" ? requestUsage.value : [];
       const projectGPU = projectGPUUsage.status === "fulfilled" ? projectGPUUsage.value : undefined;
-      const errors = [usage, requestUsage]
-        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
-        .map((result) => errorMessage(result.reason));
+      const usageError = [usage, requestUsage].some((result) => result.status === "rejected");
       setState({
         usage: usageRows,
         requestUsage: requestRows,
         projectGPUUsage: projectGPU,
-        projectGPUError: projectGPUUsage.status === "rejected" ? errorMessage(projectGPUUsage.reason) : undefined,
+        projectGPUError: projectGPUUsage.status === "rejected" ? "GPU usage refresh failed" : undefined,
         loading: false,
-        error: errors[0],
+        error: usageError ? "Usage refresh failed" : undefined,
       });
     });
 
     return () => controller.abort();
-  }, [activeProjectID, authEnabled, client, disabled, refreshKey]);
+  }, [activeProjectID, authEnabled, client, disabled, localRefreshKey, refreshKey]);
 
   const usageRows = useMemo(() => filterUsageForProject(state.usage, activeProjectID), [activeProjectID, state.usage]);
   const requestRows = useMemo(() => filterUsageForProject(state.requestUsage, activeProjectID), [activeProjectID, state.requestUsage]);
@@ -792,6 +942,15 @@ function UsagePanel({
           <div className="workload-meta">
             <span className="mono">{activeProjectID}</span>
             {state.loading ? <span>Refreshing</span> : null}
+            <button
+              className="icon-button small"
+              type="button"
+              aria-label="Refresh usage"
+              disabled={state.loading}
+              onClick={() => setLocalRefreshKey((value) => value + 1)}
+            >
+              <RefreshCw size={15} />
+            </button>
           </div>
           {state.error ? <div className="inline-error" role="alert">{state.error}</div> : null}
           <ProjectGPUUsageSummary usage={state.projectGPUUsage} error={state.projectGPUError} />
@@ -963,9 +1122,16 @@ function JobLogsTable({ state }: { state: LogState }) {
   if (!state.jobID) {
     return null;
   }
+  const status = state.refreshing || state.loading ? "Refreshing logs" : state.tailing ? "Tailing logs" : "";
   return (
     <div className="table-block">
       <h3>Logs for {state.jobID}</h3>
+      {status ? (
+        <div className="panel-summary">
+          {status}
+          {state.lastRefreshedAt ? ` - Last refreshed ${shortTime(state.lastRefreshedAt)}` : ""}
+        </div>
+      ) : null}
       {state.error ? <div className="inline-error" role="alert">{state.error}</div> : null}
       <table aria-label={`Job logs ${state.jobID}`}>
         <thead>
@@ -1080,9 +1246,30 @@ function ProjectGPUUsageSummary({ usage, error }: { usage?: ProjectGPUUsage; err
 }
 
 function UsageTable({ title, records }: { title: string; records: UsageRecord[] }) {
+  const cpuHours = usageTotal(records, "CPUHours", "cpu_hours");
+  const gpuHours = usageTotal(records, "GPUHours", "gpu_hours");
+  const memoryGBHours = usageTotal(records, "MemoryGBHours", "memory_gb_hours");
   return (
     <div className="table-block">
       <h3>{title}</h3>
+      <dl className="details compact summary-details" aria-label={`${title} totals`}>
+        <div>
+          <dt>Rows</dt>
+          <dd>{records.length}</dd>
+        </div>
+        <div>
+          <dt>CPUh</dt>
+          <dd>{formatNumber(cpuHours)}</dd>
+        </div>
+        <div>
+          <dt>GPUh</dt>
+          <dd>{formatNumber(gpuHours)}</dd>
+        </div>
+        <div>
+          <dt>Memory GBh</dt>
+          <dd>{formatNumber(memoryGBHours)}</dd>
+        </div>
+      </dl>
       <table aria-label={title}>
         <thead>
           <tr>
@@ -1381,6 +1568,13 @@ function imageBuildImage(record: ProjectImageBuildRecord): string {
   return valueText(record.image_reference, record.imageReference) || imageBuildID(record);
 }
 
+function imageBuildSubmitMessage(record?: ProjectImageBuildRecord): string {
+  const id = record ? valueText(record.id, record.build_id, record.buildId, record.job_name, record.jobName) : "";
+  const status = record ? valueText(record.status) : "";
+  const details = [id, status].filter(Boolean).join(" ");
+  return details ? `Image build submitted: ${details}` : "Image build submitted";
+}
+
 function usageProjectID(record: UsageRecord): string {
   return valueText(record.ProjectID, record.project_id);
 }
@@ -1395,6 +1589,10 @@ function usageJobID(record: UsageRecord): string {
 
 function usageNumber(record: UsageRecord, pascalKey: keyof UsageRecord, snakeKey: keyof UsageRecord): number {
   return numberValue(record[pascalKey] ?? record[snakeKey]);
+}
+
+function usageTotal(records: UsageRecord[], pascalKey: keyof UsageRecord, snakeKey: keyof UsageRecord): number {
+  return records.reduce((total, record) => total + usageNumber(record, pascalKey, snakeKey), 0);
 }
 
 function usagePeriod(record: UsageRecord): string {

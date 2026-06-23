@@ -127,11 +127,13 @@ func TestAuthorizationPolicyPDPWiresPlatformAuthorization(t *testing.T) {
 
 func TestRemoteAuthorizationPolicyPDPAuthorizesIsolatedService(t *testing.T) {
 	policyApp := platform.NewApp(platform.Config{
-		ServiceName:   "authorization-policy-service",
-		HTTPAddr:      ":0",
-		RequireAuth:   true,
-		ServiceAPIKey: "pdp-key",
-		APIKeys:       map[string]bool{"pdp-key": true},
+		ServiceName: "authorization-policy-service",
+		HTTPAddr:    ":0",
+		RequireAuth: true,
+		ServiceTrustedIdentities: map[string]platform.ServiceTrustedIdentity{
+			"identity-service": {Key: "identity-service-key", Audiences: []string{"authorization-policy-service"}},
+		},
+		APIKeys: map[string]bool{"pdp-key": true},
 		APIKeyPrincipals: map[string]platform.APIKeyPrincipal{
 			"pdp-key": {ID: "svc:identity", Username: "identity-service", Role: "service", Scopes: []string{"authorization-policy-service:write"}},
 		},
@@ -147,6 +149,8 @@ func TestRemoteAuthorizationPolicyPDPAuthorizesIsolatedService(t *testing.T) {
 		RequireAuth:               true,
 		AuthorizationPolicyURL:    server.URL,
 		AuthorizationPolicyAPIKey: "pdp-key",
+		ServiceIdentityName:       "identity-service",
+		ServiceIdentityKey:        "identity-service-key",
 		APIKeys:                   map[string]bool{"user-key": true},
 		APIKeyPrincipals:          map[string]platform.APIKeyPrincipal{"user-key": {ID: "alice", Username: "alice", Role: "user"}},
 		ExternalURLs:              map[string]string{},

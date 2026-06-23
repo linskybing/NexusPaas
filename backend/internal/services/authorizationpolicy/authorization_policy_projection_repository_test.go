@@ -167,6 +167,61 @@ func TestAuthorizationPolicyProjectionRepositoryConflictFallbackAndNilStore(t *t
 	}
 }
 
+func TestAuthorizationPolicyProjectionRepositoryProjectionDriftDetectsMissingOrphanStaleAndSorts(t *testing.T) {
+	ctx := context.Background()
+	store := platform.NewStore()
+	repo := authorizationPolicyProjectionRepoFromStore(store, platform.Config{ServiceName: "all"})
+
+	createAuthorizationPolicyProjectionRecord(t, store, policySourceProjectsResource, map[string]any{"id": "P9", "project_id": "P9", "plan_id": "PL-missing-9"})
+	createAuthorizationPolicyProjectionRecord(t, store, policySourceProjectsResource, map[string]any{"id": "P1", "project_id": "P1", "plan_id": "PL-clean"})
+	createAuthorizationPolicyProjectionRecord(t, store, policySourceProjectsResource, map[string]any{"id": "P5", "project_id": "P5", "plan_id": "PL-source"})
+	createAuthorizationPolicyProjectionRecord(t, store, policySourceProjectsResource, map[string]any{"id": "P3", "project_id": "P3", "plan_id": "PL-missing-3"})
+	createAuthorizationPolicyProjectionRecord(t, store, policyDataProjectsResource, map[string]any{"id": "P7", "project_id": "P7", "plan_id": "PL-orphan-7"})
+	createAuthorizationPolicyProjectionRecord(t, store, policyDataProjectsResource, map[string]any{"id": "P5", "project_id": "P5", "plan_id": "PL-local"})
+	createAuthorizationPolicyProjectionRecord(t, store, policyDataProjectsResource, map[string]any{"id": "P1", "project_id": "P1", "plan_id": "PL-clean"})
+	createAuthorizationPolicyProjectionRecord(t, store, policyDataProjectsResource, map[string]any{"id": "P2", "project_id": "P2", "plan_id": "PL-orphan-2"})
+
+	report, err := repo.projectionDrift(ctx)
+	if err != nil {
+		t.Fatalf("projectionDrift: %v", err)
+	}
+	assertAuthorizationPolicyProjectionDriftIDs(t, "missing", report.Missing, policyDataProjectsResource, "P3", "P9")
+	assertAuthorizationPolicyProjectionDriftIDs(t, "orphan", report.Orphan, policyDataProjectsResource, "P2", "P7")
+	assertAuthorizationPolicyProjectionDriftIDs(t, "stale", report.Stale, policyDataProjectsResource, "P5")
+}
+
+func TestAuthorizationPolicyProjectionRepositoryProjectionDriftNilStoreFailsClosed(t *testing.T) {
+	repo := authorizationPolicyProjectionRepoFromStore(nil, platform.Config{ServiceName: serviceName})
+	if _, err := repo.projectionDrift(context.Background()); !errors.Is(err, errAuthorizationPolicyProjectionRepositoryUnavailable) {
+		t.Fatalf("projectionDrift nil store error = %v, want %v", err, errAuthorizationPolicyProjectionRepositoryUnavailable)
+	}
+}
+
+func TestAuthorizationPolicyProjectionRepositoryProjectionDriftPairsCoverKnownResources(t *testing.T) {
+	want := map[string]string{
+		policyIdentityUsers:               usersResource,
+		policyIdentityRoles:               rolesResource,
+		policyDataProjectsResource:        policySourceProjectsResource,
+		policyDataPlansResource:           policySourcePlansResource,
+		policyDataImageAllowListsResource: policySourceImageAllowListsResource,
+	}
+	got := map[string]string{}
+	for _, pair := range authorizationPolicyProjectionDriftPairs {
+		if pair.idFn == nil {
+			t.Fatalf("projection drift pair %s -> %s has nil id function", pair.sourceResource, pair.localResource)
+		}
+		got[pair.localResource] = pair.sourceResource
+	}
+	if len(got) != len(want) {
+		t.Fatalf("projection drift pair count = %d, want %d (%#v)", len(got), len(want), got)
+	}
+	for localResource, sourceResource := range want {
+		if got[localResource] != sourceResource {
+			t.Fatalf("projection drift pair for %s = %q, want %q", localResource, got[localResource], sourceResource)
+		}
+	}
+}
+
 func TestAuthorizationPolicyProjectionRepositorySourceGuardOwnsProjectionResources(t *testing.T) {
 	dir := authorizationPolicyProjectionRepositoryTestDir(t)
 	guard := newAuthorizationPolicyProjectionSourceGuard()
@@ -186,6 +241,25 @@ func authorizationPolicyProjectionRepositoryTestDir(t *testing.T) string {
 		t.Fatal("runtime.Caller failed")
 	}
 	return filepath.Dir(currentFile)
+}
+
+func createAuthorizationPolicyProjectionRecord(t *testing.T, store platform.RecordStore, resource string, row map[string]any) {
+	t.Helper()
+	if _, err := store.Create(context.Background(), resource, row); err != nil {
+		t.Fatalf("create %s/%s: %v", resource, row["id"], err)
+	}
+}
+
+func assertAuthorizationPolicyProjectionDriftIDs(t *testing.T, label string, findings []authorizationPolicyProjectionDriftFinding, resource string, want ...string) {
+	t.Helper()
+	if len(findings) != len(want) {
+		t.Fatalf("%s findings = %#v, want ids %v", label, findings, want)
+	}
+	for i, id := range want {
+		if findings[i].LocalResource != resource || findings[i].ID != id {
+			t.Fatalf("%s finding[%d] = %#v, want resource %s id %s", label, i, findings[i], resource, id)
+		}
+	}
 }
 
 type authorizationPolicyProjectionSourceGuard struct {

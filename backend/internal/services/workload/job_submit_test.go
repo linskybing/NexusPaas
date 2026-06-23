@@ -75,6 +75,21 @@ func TestSubmitJobPersistsAdmittedStreamingFields(t *testing.T) {
 	}
 }
 
+func TestSubmitStreamingJobRejectedWithoutSidecarImage(t *testing.T) {
+	app := newJobSubmitTestApp()
+	app.Config.StreamSidecarImage = ""
+	seedJobAdmissionProject(t, app, map[string]any{})
+
+	serveSubmitJob(t, app, `{
+		"project_id":"P1",
+		"user_id":"U1",
+		"queue_name":"default-batch",
+		"required_cpu":1,
+		"required_memory":1024,
+		"streaming_session":true
+	}`, "U1", http.StatusBadRequest)
+}
+
 func TestSubmitJobDeniedAdmissionDoesNotCreateJob(t *testing.T) {
 	app := newJobSubmitTestApp()
 	seedJobAdmissionProject(t, app, map[string]any{"max_queued_jobs_per_user": 1})
@@ -435,7 +450,7 @@ func newJobSubmitTestApp() *platform.App {
 }
 
 func newJobSubmitTestAppWithCluster(cl *cluster.Client) *platform.App {
-	app := platform.NewApp(platform.Config{ServiceName: "all", HTTPAddr: ":0", ServiceAPIKey: "svc-key"}, platform.WithCluster(cl))
+	app := platform.NewApp(platform.Config{ServiceName: "all", HTTPAddr: ":0", ServiceAPIKey: "svc-key", StreamSidecarImage: "registry.example.com/nexuspaas/selkies-gl-desktop:24.04"}, platform.WithCluster(cl))
 	registerWorkloadJobRoute(app)
 	registerWorkloadPreemptionRoutes(app)
 	registerSchedulerAdmissionRoute(app)

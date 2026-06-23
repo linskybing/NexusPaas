@@ -48,9 +48,10 @@ and [`../adr/0001-ga-8-deployable-units.md`](../adr/0001-ga-8-deployable-units.m
 | `compute-control-plane` | scheduler-quota-service, k8s-control-service | Plan, Queue, Quota, admission, preemption, Kubernetes apply/delete/status |
 
 It should not be described as fully mature microservices until these are
-complete: typed domain data ownership; transactional outbox/inbox; service
-identity; provider abstraction; contract tests for owner-read/command/event
-contracts; independent deployable-unit readiness, rollback, and smoke evidence.
+complete: typed domain data ownership; outbox/inbox coverage beyond the current
+delivery-evidence baseline; service identity; provider abstraction; contract
+tests for owner-read/command/event contracts; independent deployable-unit
+readiness, rollback, and smoke evidence.
 
 ## Acceptance Areas
 

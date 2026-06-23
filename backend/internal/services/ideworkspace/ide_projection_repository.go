@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/linskybing/nexuspaas/backend/internal/contracts"
@@ -16,6 +18,45 @@ var errIDEProjectionRepositoryUnavailable = errors.New("ide projection repositor
 type recordStoreIDEProjectionRepository struct {
 	store  platform.RecordStore
 	config platform.Config
+}
+
+type ideProjectionDriftReport struct {
+	Missing []ideProjectionDriftFinding
+	Orphan  []ideProjectionDriftFinding
+	Stale   []ideProjectionDriftFinding
+}
+
+type ideProjectionDriftFinding struct {
+	SourceResource string
+	LocalResource  string
+	ID             string
+}
+
+type ideProjectionDriftPair struct {
+	sourceResource string
+	localResource  string
+	idFn           func(map[string]any) string
+}
+
+var ideProjectionDriftPairs = []ideProjectionDriftPair{
+	{sourceResource: identityUsersResource, localResource: ideIdentityUsersResource, idFn: func(row map[string]any) string {
+		return ideReadModelID(ideIdentityUsersResource, row)
+	}},
+	{sourceResource: identityRolesResource, localResource: ideIdentityRolesResource, idFn: func(row map[string]any) string {
+		return ideReadModelID(ideIdentityRolesResource, row)
+	}},
+	{sourceResource: authorizationRolesResource, localResource: idePolicyRolesResource, idFn: func(row map[string]any) string {
+		return ideReadModelID(idePolicyRolesResource, row)
+	}},
+	{sourceResource: orgProjectsResource, localResource: ideProjectsResource, idFn: func(row map[string]any) string {
+		return ideReadModelID(ideProjectsResource, row)
+	}},
+	{sourceResource: orgProjectMembersResource, localResource: ideProjectMembersResource, idFn: func(row map[string]any) string {
+		return ideReadModelID(ideProjectMembersResource, row)
+	}},
+	{sourceResource: orgUserGroupsResource, localResource: ideUserGroupsResource, idFn: func(row map[string]any) string {
+		return ideReadModelID(ideUserGroupsResource, row)
+	}},
 }
 
 func ideProjectionRepo(app *platform.App) *recordStoreIDEProjectionRepository {
@@ -101,6 +142,44 @@ func (r recordStoreIDEProjectionRepository) ListUserGroups(ctx context.Context) 
 	return r.readModelRecords(ctx, ideUserGroupsResource, orgUserGroupsResource)
 }
 
+func (r recordStoreIDEProjectionRepository) projectionDrift(ctx context.Context) (ideProjectionDriftReport, error) {
+	var report ideProjectionDriftReport
+	if r.store == nil {
+		return report, errIDEProjectionRepositoryUnavailable
+	}
+	for _, pair := range ideProjectionDriftPairs {
+		sourceRows := ideProjectionDriftIndex(r.listRecords(ctx, pair.sourceResource), pair.idFn)
+		localRows := ideProjectionDriftIndex(r.listRecords(ctx, pair.localResource), pair.idFn)
+		for id, sourceRow := range sourceRows {
+			localRow, ok := localRows[id]
+			finding := ideProjectionDriftFinding{
+				SourceResource: pair.sourceResource,
+				LocalResource:  pair.localResource,
+				ID:             id,
+			}
+			if !ok {
+				report.Missing = append(report.Missing, finding)
+				continue
+			}
+			if !reflect.DeepEqual(sourceRow, localRow) {
+				report.Stale = append(report.Stale, finding)
+			}
+		}
+		for id := range localRows {
+			if _, ok := sourceRows[id]; ok {
+				continue
+			}
+			report.Orphan = append(report.Orphan, ideProjectionDriftFinding{
+				SourceResource: pair.sourceResource,
+				LocalResource:  pair.localResource,
+				ID:             id,
+			})
+		}
+	}
+	report.sort()
+	return report, nil
+}
+
 func (r recordStoreIDEProjectionRepository) upsertReadModel(ctx context.Context, resource string, data map[string]any) error {
 	id := ideReadModelID(resource, data)
 	if id == "" {
@@ -164,6 +243,46 @@ func (r recordStoreIDEProjectionRepository) listRecords(ctx context.Context, res
 func (r recordStoreIDEProjectionRepository) sourceCoHosted(sourceResource string) bool {
 	owner, _, ok := strings.Cut(sourceResource, ":")
 	return ok && r.config.AllowsService(owner)
+}
+
+func ideProjectionDriftIndex(records []contracts.Record[map[string]any], idFn func(map[string]any) string) map[string]map[string]any {
+	out := map[string]map[string]any{}
+	for _, record := range records {
+		id, normalized := ideProjectionDriftNormalize(record.Data, idFn)
+		if id == "" {
+			continue
+		}
+		out[id] = normalized
+	}
+	return out
+}
+
+func ideProjectionDriftNormalize(row map[string]any, idFn func(map[string]any) string) (string, map[string]any) {
+	normalized := shared.CloneMap(row)
+	id := idFn(normalized)
+	if id == "" {
+		return "", nil
+	}
+	normalized[ideKeyID] = id
+	return id, normalized
+}
+
+func (r *ideProjectionDriftReport) sort() {
+	sortIDEProjectionDriftFindings(r.Missing)
+	sortIDEProjectionDriftFindings(r.Orphan)
+	sortIDEProjectionDriftFindings(r.Stale)
+}
+
+func sortIDEProjectionDriftFindings(findings []ideProjectionDriftFinding) {
+	sort.Slice(findings, func(i, j int) bool {
+		if findings[i].LocalResource != findings[j].LocalResource {
+			return findings[i].LocalResource < findings[j].LocalResource
+		}
+		if findings[i].ID != findings[j].ID {
+			return findings[i].ID < findings[j].ID
+		}
+		return findings[i].SourceResource < findings[j].SourceResource
+	})
 }
 
 func ideReadModelID(resource string, data map[string]any) string {

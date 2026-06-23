@@ -29,7 +29,7 @@ type identityAuthResult struct {
 func (a *App) remoteIdentityAuthEnabled() bool {
 	return !a.Config.AllowsService(identityServiceName) &&
 		strings.TrimSpace(a.Config.ServiceURLs[identityServiceName]) != "" &&
-		strings.TrimSpace(a.Config.ServiceAPIKey) != ""
+		a.Config.canUseRemoteServiceIdentity()
 }
 
 func (a *App) authorizeRemoteSessionToken(r *http.Request, token string) bool {
@@ -67,7 +67,7 @@ func (a *App) remoteIdentityAuth(ctx context.Context, requestPath, token string)
 		slog.Warn("identity auth request build failed", "path", requestPath, "error", err)
 		return identityAuthResult{}, false
 	}
-	req.Header.Set("X-Service-Key", a.Config.ServiceAPIKey)
+	a.Config.applyServiceIdentityHeaders(req.Header)
 	req.Header.Set(headerContentType, identityAuthContentTypeHeader)
 
 	client := a.identityAuthHTTPClient()

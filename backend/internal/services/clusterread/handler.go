@@ -2,8 +2,10 @@ package clusterread
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -53,6 +55,47 @@ const (
 	keyUserIDCamel                = "userId"
 	keyUserIDTitle                = "UserID"
 )
+
+var errClusterProjectionDriftUnavailable = errors.New("cluster projection drift unavailable")
+
+type clusterProjectionDriftReport struct {
+	Missing []clusterProjectionDriftFinding
+	Orphan  []clusterProjectionDriftFinding
+	Stale   []clusterProjectionDriftFinding
+}
+
+type clusterProjectionDriftFinding struct {
+	SourceResource string
+	LocalResource  string
+	ID             string
+}
+
+type clusterProjectionDriftPair struct {
+	sourceResource string
+	localResource  string
+	idFn           func(map[string]any) string
+}
+
+var clusterProjectionDriftPairs = []clusterProjectionDriftPair{
+	{sourceResource: identityUsersResource, localResource: clusterIdentityUsersResource, idFn: func(row map[string]any) string {
+		return readModelID(clusterIdentityUsersResource, row)
+	}},
+	{sourceResource: identityRolesResource, localResource: clusterIdentityRolesResource, idFn: func(row map[string]any) string {
+		return readModelID(clusterIdentityRolesResource, row)
+	}},
+	{sourceResource: authorizationRolesResource, localResource: clusterPolicyRolesResource, idFn: func(row map[string]any) string {
+		return readModelID(clusterPolicyRolesResource, row)
+	}},
+	{sourceResource: orgProjectsResource, localResource: clusterProjectsResource, idFn: func(row map[string]any) string {
+		return readModelID(clusterProjectsResource, row)
+	}},
+	{sourceResource: orgProjectMembersResource, localResource: clusterProjectMembersResource, idFn: func(row map[string]any) string {
+		return readModelID(clusterProjectMembersResource, row)
+	}},
+	{sourceResource: orgUserGroupsResource, localResource: clusterUserGroupsResource, idFn: func(row map[string]any) string {
+		return readModelID(clusterUserGroupsResource, row)
+	}},
+}
 
 func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/cluster/summary", getClusterSummary)
@@ -633,6 +676,96 @@ func recordMaps(app *platform.App, r *http.Request, resource string) []map[strin
 		out = append(out, shared.CloneMap(record.Data))
 	}
 	return out
+}
+
+func projectionDrift(app *platform.App, r *http.Request) (clusterProjectionDriftReport, error) {
+	var report clusterProjectionDriftReport
+	if app == nil || app.Store == nil {
+		return report, errClusterProjectionDriftUnavailable
+	}
+	for _, pair := range clusterProjectionDriftPairs {
+		sourceRows := clusterProjectionDriftIndex(recordMaps(app, r, pair.sourceResource), pair.idFn)
+		localRows := clusterProjectionDriftIndex(recordMaps(app, r, pair.localResource), pair.idFn)
+		report.addClusterProjectionPairDrift(pair, sourceRows, localRows)
+	}
+	report.sort()
+	return report, nil
+}
+
+func (r *clusterProjectionDriftReport) addClusterProjectionPairDrift(pair clusterProjectionDriftPair, sourceRows, localRows map[string]map[string]any) {
+	r.addClusterProjectionMissingAndStale(pair, sourceRows, localRows)
+	r.addClusterProjectionOrphans(pair, sourceRows, localRows)
+}
+
+func (r *clusterProjectionDriftReport) addClusterProjectionMissingAndStale(pair clusterProjectionDriftPair, sourceRows, localRows map[string]map[string]any) {
+	for id, sourceRow := range sourceRows {
+		localRow, ok := localRows[id]
+		finding := clusterProjectionDriftFinding{
+			SourceResource: pair.sourceResource,
+			LocalResource:  pair.localResource,
+			ID:             id,
+		}
+		if !ok {
+			r.Missing = append(r.Missing, finding)
+			continue
+		}
+		if !reflect.DeepEqual(sourceRow, localRow) {
+			r.Stale = append(r.Stale, finding)
+		}
+	}
+}
+
+func (r *clusterProjectionDriftReport) addClusterProjectionOrphans(pair clusterProjectionDriftPair, sourceRows, localRows map[string]map[string]any) {
+	for id := range localRows {
+		if _, ok := sourceRows[id]; ok {
+			continue
+		}
+		r.Orphan = append(r.Orphan, clusterProjectionDriftFinding{
+			SourceResource: pair.sourceResource,
+			LocalResource:  pair.localResource,
+			ID:             id,
+		})
+	}
+}
+
+func clusterProjectionDriftIndex(rows []map[string]any, idFn func(map[string]any) string) map[string]map[string]any {
+	out := map[string]map[string]any{}
+	for _, row := range rows {
+		id, normalized := clusterProjectionDriftNormalize(row, idFn)
+		if id == "" {
+			continue
+		}
+		out[id] = normalized
+	}
+	return out
+}
+
+func clusterProjectionDriftNormalize(row map[string]any, idFn func(map[string]any) string) (string, map[string]any) {
+	normalized := shared.CloneMap(row)
+	id := idFn(normalized)
+	if id == "" {
+		return "", nil
+	}
+	normalized[keyID] = id
+	return id, normalized
+}
+
+func (r *clusterProjectionDriftReport) sort() {
+	sortClusterProjectionDriftFindings(r.Missing)
+	sortClusterProjectionDriftFindings(r.Orphan)
+	sortClusterProjectionDriftFindings(r.Stale)
+}
+
+func sortClusterProjectionDriftFindings(findings []clusterProjectionDriftFinding) {
+	sort.Slice(findings, func(i, j int) bool {
+		if findings[i].LocalResource != findings[j].LocalResource {
+			return findings[i].LocalResource < findings[j].LocalResource
+		}
+		if findings[i].ID != findings[j].ID {
+			return findings[i].ID < findings[j].ID
+		}
+		return findings[i].SourceResource < findings[j].SourceResource
+	})
 }
 
 func sourceCoHosted(app *platform.App, sourceResource string) bool {

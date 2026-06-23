@@ -2,8 +2,11 @@ package gpuusage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/linskybing/nexuspaas/backend/internal/contracts"
@@ -14,6 +17,44 @@ import (
 const gpuProjectionConsumer = serviceName + ":gpu_usage_projection"
 
 const gpuKeyID = "id"
+
+var errGPUProjectionDriftUnavailable = errors.New("gpu usage projection drift unavailable")
+
+type gpuProjectionDriftReport struct {
+	Missing []gpuProjectionDriftFinding
+	Orphan  []gpuProjectionDriftFinding
+	Stale   []gpuProjectionDriftFinding
+}
+
+type gpuProjectionDriftFinding struct {
+	SourceResource string
+	LocalResource  string
+	ID             string
+}
+
+type gpuProjectionDriftPair struct {
+	sourceResource string
+	localResource  string
+	idFn           func(map[string]any) string
+}
+
+var gpuProjectionDriftPairs = []gpuProjectionDriftPair{
+	{sourceResource: identityUsersResource, localResource: gpuIdentityUsersResource, idFn: func(row map[string]any) string {
+		return gpuReadModelID(gpuIdentityUsersResource, row)
+	}},
+	{sourceResource: identityRolesResource, localResource: gpuIdentityRolesResource, idFn: func(row map[string]any) string {
+		return gpuReadModelID(gpuIdentityRolesResource, row)
+	}},
+	{sourceResource: authorizationRolesResource, localResource: gpuAuthorizationRolesResource, idFn: func(row map[string]any) string {
+		return gpuReadModelID(gpuAuthorizationRolesResource, row)
+	}},
+	{sourceResource: orgProjectsResource, localResource: gpuProjectsResource, idFn: func(row map[string]any) string {
+		return gpuReadModelID(gpuProjectsResource, row)
+	}},
+	{sourceResource: workloadJobsResource, localResource: gpuJobsResource, idFn: func(row map[string]any) string {
+		return gpuReadModelID(gpuJobsResource, row)
+	}},
+}
 
 func gpuRecords(app *platform.App, r *http.Request, localResource, sourceResource string) []contracts.Record[map[string]any] {
 	syncGPUReadModelsContext(app, r.Context())
@@ -181,6 +222,111 @@ func deleteGPUReadModelContext(app *platform.App, ctx context.Context, resource 
 	if id := gpuReadModelID(resource, data); id != "" {
 		app.Store.Delete(ctx, resource, id)
 	}
+}
+
+func projectionDrift(ctx context.Context, app *platform.App) (gpuProjectionDriftReport, error) {
+	var report gpuProjectionDriftReport
+	if app == nil || app.Store == nil {
+		return report, errGPUProjectionDriftUnavailable
+	}
+	for _, pair := range gpuProjectionDriftPairs {
+		sourceRows := gpuProjectionDriftIndex(gpuProjectionDriftRecordMaps(ctx, app, pair.sourceResource), pair.idFn)
+		localRows := gpuProjectionDriftIndex(gpuProjectionDriftRecordMaps(ctx, app, pair.localResource), pair.idFn)
+		report.addGPUProjectionPairDrift(pair, sourceRows, localRows)
+	}
+	report.sort()
+	return report, nil
+}
+
+func (r *gpuProjectionDriftReport) addGPUProjectionPairDrift(pair gpuProjectionDriftPair, sourceRows, localRows map[string]map[string]any) {
+	r.addGPUProjectionMissingAndStale(pair, sourceRows, localRows)
+	r.addGPUProjectionOrphans(pair, sourceRows, localRows)
+}
+
+func (r *gpuProjectionDriftReport) addGPUProjectionMissingAndStale(pair gpuProjectionDriftPair, sourceRows, localRows map[string]map[string]any) {
+	for id, sourceRow := range sourceRows {
+		localRow, ok := localRows[id]
+		finding := gpuProjectionDriftFinding{
+			SourceResource: pair.sourceResource,
+			LocalResource:  pair.localResource,
+			ID:             id,
+		}
+		if !ok {
+			r.Missing = append(r.Missing, finding)
+			continue
+		}
+		if !reflect.DeepEqual(sourceRow, localRow) {
+			r.Stale = append(r.Stale, finding)
+		}
+	}
+}
+
+func (r *gpuProjectionDriftReport) addGPUProjectionOrphans(pair gpuProjectionDriftPair, sourceRows, localRows map[string]map[string]any) {
+	for id := range localRows {
+		if _, ok := sourceRows[id]; ok {
+			continue
+		}
+		r.Orphan = append(r.Orphan, gpuProjectionDriftFinding{
+			SourceResource: pair.sourceResource,
+			LocalResource:  pair.localResource,
+			ID:             id,
+		})
+	}
+}
+
+func gpuProjectionDriftRecordMaps(ctx context.Context, app *platform.App, resource string) []map[string]any {
+	if app == nil || app.Store == nil {
+		return nil
+	}
+	records := app.Store.List(ctx, resource)
+	out := make([]map[string]any, 0, len(records))
+	for _, record := range records {
+		out = append(out, shared.CloneMap(record.Data))
+	}
+	return out
+}
+
+func gpuProjectionDriftIndex(rows []map[string]any, idFn func(map[string]any) string) map[string]map[string]any {
+	out := map[string]map[string]any{}
+	if idFn == nil {
+		return out
+	}
+	for _, row := range rows {
+		id, normalized := gpuProjectionDriftNormalize(row, idFn)
+		if id == "" {
+			continue
+		}
+		out[id] = normalized
+	}
+	return out
+}
+
+func gpuProjectionDriftNormalize(row map[string]any, idFn func(map[string]any) string) (string, map[string]any) {
+	normalized := shared.CloneMap(row)
+	id := idFn(normalized)
+	if id == "" {
+		return "", nil
+	}
+	normalized[gpuKeyID] = id
+	return id, normalized
+}
+
+func (r *gpuProjectionDriftReport) sort() {
+	sortGPUProjectionDriftFindings(r.Missing)
+	sortGPUProjectionDriftFindings(r.Orphan)
+	sortGPUProjectionDriftFindings(r.Stale)
+}
+
+func sortGPUProjectionDriftFindings(findings []gpuProjectionDriftFinding) {
+	sort.Slice(findings, func(i, j int) bool {
+		if findings[i].LocalResource != findings[j].LocalResource {
+			return findings[i].LocalResource < findings[j].LocalResource
+		}
+		if findings[i].ID != findings[j].ID {
+			return findings[i].ID < findings[j].ID
+		}
+		return findings[i].SourceResource < findings[j].SourceResource
+	})
 }
 
 func gpuReadModelID(resource string, data map[string]any) string {

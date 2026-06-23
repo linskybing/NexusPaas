@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "contract_name": "workload.create_configfile",
+  "owner_service": "workload-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "workload-service:configfiles",
+  "action": "create",
+  "method": "POST",
+  "path": "/api/v1/configfiles",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [],
+  "required_request_fields": [
+    "project_id",
+    "name"
+  ],
+  "optional_request_fields": [
+    "id",
+    "projectId",
+    "filename",
+    "path",
+    "content",
+    "manifest",
+    "yaml",
+    "config"
+  ],
+  "request_example": {
+    "project_id": "project-ga-001",
+    "name": "training-config.yaml",
+    "content": "batch_size: 32\nlearning_rate: 0.001\n",
+    "manifest": {
+      "kind": "TrainingConfig",
+      "version": "v1"
+    }
+  },
+  "success_statuses": [
+    201
+  ],
+  "error_statuses": [
+    400,
+    401,
+    403,
+    413,
+    422,
+    500
+  ],
+  "emits_events": [
+    "ConfigFileChanged"
+  ],
+  "response_example": {
+    "id": "config-ga-001",
+    "version": 1,
+    "data": {
+      "id": "config-ga-001",
+      "project_id": "project-ga-001",
+      "name": "training-config.yaml",
+      "content": "batch_size: 32\nlearning_rate: 0.001\n",
+      "created_at": "2026-06-22T00:00:00Z",
+      "updated_at": "2026-06-22T00:00:00Z"
+    }
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

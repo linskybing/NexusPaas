@@ -88,7 +88,7 @@ func TestRemoteIdentityAuthContractsAuthorizeProtectedRoutes(t *testing.T) {
 	paths := []string{}
 	identity := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
-		if r.Header.Get("X-Service-Key") != serviceKey {
+		if r.Header.Get("X-Service-Name") != "usage-observability-service" || r.Header.Get("X-Service-Key") != serviceKey {
 			WriteError(w, r, http.StatusUnauthorized, "unauthorized", "service authentication is required")
 			return
 		}
@@ -109,12 +109,13 @@ func TestRemoteIdentityAuthContractsAuthorizeProtectedRoutes(t *testing.T) {
 	defer identity.Close()
 
 	app := NewApp(Config{
-		ServiceName:   "usage-observability-service",
-		HTTPAddr:      ":0",
-		RequireAuth:   true,
-		ServiceURLs:   map[string]string{identityServiceName: identity.URL},
-		ServiceAPIKey: serviceKey,
-		ExternalURLs:  map[string]string{},
+		ServiceName:         "usage-observability-service",
+		HTTPAddr:            ":0",
+		RequireAuth:         true,
+		ServiceURLs:         map[string]string{identityServiceName: identity.URL},
+		ServiceIdentityName: "usage-observability-service",
+		ServiceIdentityKey:  serviceKey,
+		ExternalURLs:        map[string]string{},
 	})
 	adminRoute := RouteSpec{Method: http.MethodGet, Pattern: "/admin", Resource: "test:admin", Action: "list", AuthRequired: true, Admin: true}
 	app.Routes = []RouteSpec{adminRoute}
@@ -132,6 +133,33 @@ func TestRemoteIdentityAuthContractsAuthorizeProtectedRoutes(t *testing.T) {
 		if path == internalRecordsPath {
 			t.Fatalf("remote identity auth used generic records fallback: paths=%#v", paths)
 		}
+	}
+}
+
+func TestRemoteIdentityAuthStrictRuntimeRejectsLegacyOnlyServiceKey(t *testing.T) {
+	called := false
+	identity := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		WriteError(w, r, http.StatusUnauthorized, "unauthorized", "legacy service identity should not be used")
+	}))
+	defer identity.Close()
+
+	app := NewApp(Config{
+		ServiceName:        "usage-observability-service",
+		EnvironmentProfile: runtimeProfileStaging,
+		HTTPAddr:           ":0",
+		RequireAuth:        true,
+		ServiceURLs:        map[string]string{identityServiceName: identity.URL},
+		ServiceAPIKey:      "legacy-key",
+		ExternalURLs:       map[string]string{},
+	})
+	adminRoute := RouteSpec{Method: http.MethodGet, Pattern: "/admin", Resource: "test:admin", Action: "list", AuthRequired: true, Admin: true}
+	app.Routes = []RouteSpec{adminRoute}
+	app.RegisterCustomHandler(http.MethodGet, "/admin", echoAuthHandler)
+
+	requestAuthTest(t, app, http.MethodGet, "/admin", map[string]string{"Authorization": "Bearer legacy-session"}, http.StatusUnauthorized)
+	if called {
+		t.Fatal("strict legacy-only remote identity auth called identity service")
 	}
 }
 

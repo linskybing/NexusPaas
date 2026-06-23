@@ -77,7 +77,10 @@ func TestValidateProductionObjectStore(t *testing.T) {
 		ServiceName: mediaUploadServiceName, Production: true, RequireAuth: true, APIKeys: map[string]bool{"k": true},
 		APIKeyPrincipals:       map[string]APIKeyPrincipal{"k": {ID: "svc", Role: "service"}},
 		AuthorizationPolicyURL: "https://pdp", AuthorizationPolicyAPIKey: "x",
-		DatabaseURL: "postgres://h:5432", RedisURL: "redis://h:6379", EventBusURL: "redis://h:6379",
+		ServiceIdentityName:      mediaUploadServiceName,
+		ServiceIdentityKey:       "scoped-key",
+		ServiceTrustedIdentities: map[string]ServiceTrustedIdentity{"iam-unit": {Key: "iam-key", Audiences: []string{mediaUploadServiceName}}},
+		DatabaseURL:              "postgres://h:5432", RedisURL: "redis://h:6379", EventBusURL: "redis://h:6379",
 	})
 	// Missing object store URL fails in production.
 	if err := base.Validate(); err == nil {

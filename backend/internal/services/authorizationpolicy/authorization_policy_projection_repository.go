@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
@@ -30,6 +32,36 @@ var errAuthorizationPolicyProjectionRepositoryUnavailable = errors.New("authoriz
 type recordStoreAuthorizationPolicyProjectionRepository struct {
 	store  platform.RecordStore
 	config platform.Config
+}
+
+type authorizationPolicyProjectionDriftReport struct {
+	Missing []authorizationPolicyProjectionDriftFinding
+	Orphan  []authorizationPolicyProjectionDriftFinding
+	Stale   []authorizationPolicyProjectionDriftFinding
+}
+
+type authorizationPolicyProjectionDriftFinding struct {
+	SourceResource string
+	LocalResource  string
+	ID             string
+}
+
+type authorizationPolicyProjectionDriftPair struct {
+	sourceResource string
+	localResource  string
+	idFn           func(map[string]any) string
+}
+
+var authorizationPolicyProjectionDriftPairs = []authorizationPolicyProjectionDriftPair{
+	{sourceResource: usersResource, localResource: policyIdentityUsers, idFn: func(row map[string]any) string {
+		return policyIdentityReadModelID(policyIdentityUsers, row)
+	}},
+	{sourceResource: rolesResource, localResource: policyIdentityRoles, idFn: func(row map[string]any) string {
+		return policyIdentityReadModelID(policyIdentityRoles, row)
+	}},
+	{sourceResource: policySourceProjectsResource, localResource: policyDataProjectsResource, idFn: policyProjectID},
+	{sourceResource: policySourcePlansResource, localResource: policyDataPlansResource, idFn: policyPlanID},
+	{sourceResource: policySourceImageAllowListsResource, localResource: policyDataImageAllowListsResource, idFn: policyImageRuleID},
 }
 
 func authorizationPolicyProjectionRepo(app *platform.App) *recordStoreAuthorizationPolicyProjectionRepository {
@@ -146,6 +178,44 @@ func (r recordStoreAuthorizationPolicyProjectionRepository) ListPolicyImageRules
 	return out
 }
 
+func (r recordStoreAuthorizationPolicyProjectionRepository) projectionDrift(ctx context.Context) (authorizationPolicyProjectionDriftReport, error) {
+	var report authorizationPolicyProjectionDriftReport
+	if r.store == nil {
+		return report, errAuthorizationPolicyProjectionRepositoryUnavailable
+	}
+	for _, pair := range authorizationPolicyProjectionDriftPairs {
+		sourceRows := authorizationPolicyProjectionDriftIndex(r.listMaps(ctx, pair.sourceResource), pair.idFn)
+		localRows := authorizationPolicyProjectionDriftIndex(r.listMaps(ctx, pair.localResource), pair.idFn)
+		for id, sourceRow := range sourceRows {
+			localRow, ok := localRows[id]
+			finding := authorizationPolicyProjectionDriftFinding{
+				SourceResource: pair.sourceResource,
+				LocalResource:  pair.localResource,
+				ID:             id,
+			}
+			if !ok {
+				report.Missing = append(report.Missing, finding)
+				continue
+			}
+			if !reflect.DeepEqual(sourceRow, localRow) {
+				report.Stale = append(report.Stale, finding)
+			}
+		}
+		for id := range localRows {
+			if _, ok := sourceRows[id]; ok {
+				continue
+			}
+			report.Orphan = append(report.Orphan, authorizationPolicyProjectionDriftFinding{
+				SourceResource: pair.sourceResource,
+				LocalResource:  pair.localResource,
+				ID:             id,
+			})
+		}
+	}
+	report.sort()
+	return report, nil
+}
+
 func (r recordStoreAuthorizationPolicyProjectionRepository) upsertReadModel(ctx context.Context, resource string, data map[string]any, idFn func(map[string]any) string) error {
 	id := idFn(data)
 	if id == "" {
@@ -223,6 +293,46 @@ func (r recordStoreAuthorizationPolicyProjectionRepository) listMaps(ctx context
 		out = append(out, row)
 	}
 	return out
+}
+
+func authorizationPolicyProjectionDriftIndex(rows []map[string]any, idFn func(map[string]any) string) map[string]map[string]any {
+	out := map[string]map[string]any{}
+	for _, row := range rows {
+		id, normalized := authorizationPolicyProjectionDriftNormalize(row, idFn)
+		if id == "" {
+			continue
+		}
+		out[id] = normalized
+	}
+	return out
+}
+
+func authorizationPolicyProjectionDriftNormalize(row map[string]any, idFn func(map[string]any) string) (string, map[string]any) {
+	normalized := shared.CloneMap(row)
+	id := idFn(normalized)
+	if id == "" {
+		return "", nil
+	}
+	normalized["id"] = id
+	return id, normalized
+}
+
+func (r *authorizationPolicyProjectionDriftReport) sort() {
+	sortAuthorizationPolicyProjectionDriftFindings(r.Missing)
+	sortAuthorizationPolicyProjectionDriftFindings(r.Orphan)
+	sortAuthorizationPolicyProjectionDriftFindings(r.Stale)
+}
+
+func sortAuthorizationPolicyProjectionDriftFindings(findings []authorizationPolicyProjectionDriftFinding) {
+	sort.Slice(findings, func(i, j int) bool {
+		if findings[i].LocalResource != findings[j].LocalResource {
+			return findings[i].LocalResource < findings[j].LocalResource
+		}
+		if findings[i].ID != findings[j].ID {
+			return findings[i].ID < findings[j].ID
+		}
+		return findings[i].SourceResource < findings[j].SourceResource
+	})
 }
 
 func (r recordStoreAuthorizationPolicyProjectionRepository) identitySourceCoHosted(sourceResource string) bool {

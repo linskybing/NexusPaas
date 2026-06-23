@@ -87,6 +87,35 @@ func TestValidateServiceIsolationAllowsRemoteReadsWithServiceKey(t *testing.T) {
 	}
 }
 
+func TestValidateServiceIsolationStrictProfileRejectsLegacyOnlyRemoteReads(t *testing.T) {
+	app := NewApp(Config{
+		ServiceName:        "widget-service",
+		EnvironmentProfile: runtimeProfileStaging,
+		ServiceURLs:        map[string]string{"identity-service": "http://identity-service"},
+		ServiceAPIKey:      "legacy-key",
+	})
+	app.RegisterStoreDependencies("widget-service", testIdentityUsersResource)
+
+	if err := app.ValidateServiceIsolation(); err == nil {
+		t.Fatal("expected strict remote read with only SERVICE_API_KEY to fail isolation validation")
+	}
+}
+
+func TestValidateServiceIsolationStrictProfileAllowsScopedRemoteReads(t *testing.T) {
+	app := NewApp(Config{
+		ServiceName:         "widget-service",
+		EnvironmentProfile:  runtimeProfileStaging,
+		ServiceURLs:         map[string]string{"identity-service": "http://identity-service"},
+		ServiceIdentityName: "widget-service",
+		ServiceIdentityKey:  "scoped-key",
+	})
+	app.RegisterStoreDependencies("widget-service", testIdentityUsersResource)
+
+	if err := app.ValidateServiceIsolation(); err != nil {
+		t.Fatalf("strict scoped remote read should pass isolation validation: %v", err)
+	}
+}
+
 func TestValidateServiceIsolationRejectsRemoteReadsWithoutDomainContract(t *testing.T) {
 	app := NewApp(Config{
 		ServiceName:   "widget-service",

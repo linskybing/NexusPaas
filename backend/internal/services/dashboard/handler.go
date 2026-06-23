@@ -1,8 +1,11 @@
 package dashboard
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -30,6 +33,47 @@ const (
 	schedulerLiveQuotasResource     = "scheduler-quota-service:live_quotas"
 	schedulerQueuesResource         = "scheduler-quota-service:queues"
 )
+
+var errDashboardProjectionDriftUnavailable = errors.New("dashboard projection drift unavailable")
+
+type dashboardProjectionDriftReport struct {
+	Missing []dashboardProjectionDriftFinding
+	Orphan  []dashboardProjectionDriftFinding
+	Stale   []dashboardProjectionDriftFinding
+}
+
+type dashboardProjectionDriftFinding struct {
+	SourceResource string
+	LocalResource  string
+	ID             string
+}
+
+type dashboardProjectionDriftPair struct {
+	sourceResource string
+	localResource  string
+	idFn           func(map[string]any) string
+}
+
+var dashboardProjectionDriftPairs = []dashboardProjectionDriftPair{
+	{sourceResource: identityUsersResource, localResource: dashboardUsersResource, idFn: func(row map[string]any) string {
+		return readModelID(dashboardUsersResource, row)
+	}},
+	{sourceResource: orgProjectsResource, localResource: dashboardProjectsResource, idFn: func(row map[string]any) string {
+		return readModelID(dashboardProjectsResource, row)
+	}},
+	{sourceResource: orgProjectMembersResource, localResource: dashboardProjectMembersResource, idFn: func(row map[string]any) string {
+		return readModelID(dashboardProjectMembersResource, row)
+	}},
+	{sourceResource: requestFormsResource, localResource: dashboardFormsResource, idFn: func(row map[string]any) string {
+		return readModelID(dashboardFormsResource, row)
+	}},
+	{sourceResource: schedulerLiveQuotasResource, localResource: dashboardLiveQuotasResource, idFn: func(row map[string]any) string {
+		return readModelID(dashboardLiveQuotasResource, row)
+	}},
+	{sourceResource: schedulerQueuesResource, localResource: dashboardQueuesResource, idFn: func(row map[string]any) string {
+		return readModelID(dashboardQueuesResource, row)
+	}},
+}
 
 func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/dashboard/overview", getOverview)
@@ -241,6 +285,96 @@ func listRecords(app *platform.App, r *http.Request, resource string) []map[stri
 		out = append(out, shared.CloneMap(record.Data))
 	}
 	return out
+}
+
+func projectionDrift(app *platform.App, r *http.Request) (dashboardProjectionDriftReport, error) {
+	var report dashboardProjectionDriftReport
+	if app == nil || app.Store == nil {
+		return report, errDashboardProjectionDriftUnavailable
+	}
+	for _, pair := range dashboardProjectionDriftPairs {
+		sourceRows := dashboardProjectionDriftIndex(listRecords(app, r, pair.sourceResource), pair.idFn)
+		localRows := dashboardProjectionDriftIndex(listRecords(app, r, pair.localResource), pair.idFn)
+		report.addDashboardProjectionPairDrift(pair, sourceRows, localRows)
+	}
+	report.sort()
+	return report, nil
+}
+
+func (r *dashboardProjectionDriftReport) addDashboardProjectionPairDrift(pair dashboardProjectionDriftPair, sourceRows, localRows map[string]map[string]any) {
+	r.addDashboardProjectionMissingAndStale(pair, sourceRows, localRows)
+	r.addDashboardProjectionOrphans(pair, sourceRows, localRows)
+}
+
+func (r *dashboardProjectionDriftReport) addDashboardProjectionMissingAndStale(pair dashboardProjectionDriftPair, sourceRows, localRows map[string]map[string]any) {
+	for id, sourceRow := range sourceRows {
+		localRow, ok := localRows[id]
+		finding := dashboardProjectionDriftFinding{
+			SourceResource: pair.sourceResource,
+			LocalResource:  pair.localResource,
+			ID:             id,
+		}
+		if !ok {
+			r.Missing = append(r.Missing, finding)
+			continue
+		}
+		if !reflect.DeepEqual(sourceRow, localRow) {
+			r.Stale = append(r.Stale, finding)
+		}
+	}
+}
+
+func (r *dashboardProjectionDriftReport) addDashboardProjectionOrphans(pair dashboardProjectionDriftPair, sourceRows, localRows map[string]map[string]any) {
+	for id := range localRows {
+		if _, ok := sourceRows[id]; ok {
+			continue
+		}
+		r.Orphan = append(r.Orphan, dashboardProjectionDriftFinding{
+			SourceResource: pair.sourceResource,
+			LocalResource:  pair.localResource,
+			ID:             id,
+		})
+	}
+}
+
+func dashboardProjectionDriftIndex(rows []map[string]any, idFn func(map[string]any) string) map[string]map[string]any {
+	out := map[string]map[string]any{}
+	for _, row := range rows {
+		id, normalized := dashboardProjectionDriftNormalize(row, idFn)
+		if id == "" {
+			continue
+		}
+		out[id] = normalized
+	}
+	return out
+}
+
+func dashboardProjectionDriftNormalize(row map[string]any, idFn func(map[string]any) string) (string, map[string]any) {
+	normalized := shared.CloneMap(row)
+	id := idFn(normalized)
+	if id == "" {
+		return "", nil
+	}
+	normalized["id"] = id
+	return id, normalized
+}
+
+func (r *dashboardProjectionDriftReport) sort() {
+	sortDashboardProjectionDriftFindings(r.Missing)
+	sortDashboardProjectionDriftFindings(r.Orphan)
+	sortDashboardProjectionDriftFindings(r.Stale)
+}
+
+func sortDashboardProjectionDriftFindings(findings []dashboardProjectionDriftFinding) {
+	sort.Slice(findings, func(i, j int) bool {
+		if findings[i].LocalResource != findings[j].LocalResource {
+			return findings[i].LocalResource < findings[j].LocalResource
+		}
+		if findings[i].ID != findings[j].ID {
+			return findings[i].ID < findings[j].ID
+		}
+		return findings[i].SourceResource < findings[j].SourceResource
+	})
 }
 
 func syncDashboardReadModels(app *platform.App, r *http.Request) {

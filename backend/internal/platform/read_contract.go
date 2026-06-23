@@ -16,8 +16,9 @@ func (a *App) RegisterReadContract(resource, listPath, getPath string) {
 	if a == nil || a.Mux == nil {
 		return
 	}
+	audience := resourceOwner(resource)
 	a.Mux.HandleFunc(http.MethodGet+" "+listPath, func(w http.ResponseWriter, r *http.Request) {
-		if !a.AuthorizeServiceRequest(w, r) {
+		if !a.AuthorizeServiceRequestForAudience(w, r, audience) {
 			return
 		}
 		WriteJSON(w, r, http.StatusOK, a.Store.List(r.Context(), resource))
@@ -26,7 +27,7 @@ func (a *App) RegisterReadContract(resource, listPath, getPath string) {
 		return
 	}
 	a.Mux.HandleFunc(http.MethodGet+" "+getPath, func(w http.ResponseWriter, r *http.Request) {
-		if !a.AuthorizeServiceRequest(w, r) {
+		if !a.AuthorizeServiceRequestForAudience(w, r, audience) {
 			return
 		}
 		id := r.PathValue("id")

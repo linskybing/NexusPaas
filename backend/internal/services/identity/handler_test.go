@@ -195,6 +195,49 @@ func TestInternalIdentityAuthContractsVerifyCredentials(t *testing.T) {
 	postInternalIdentityAuth(t, app, "wrong-"+serviceKey, "/internal/identity/auth/api-token", rawAPIToken, http.StatusUnauthorized)
 }
 
+func TestInternalIdentityAuthContractsValidateScopedCallerAudience(t *testing.T) {
+	rawAPIToken := platform.FormatUserAPIToken("ATSCOPED", strings.ReplaceAll(t.Name(), "/", "_"))
+	app := platform.NewApp(platform.Config{
+		ServiceName: serviceName,
+		ServiceTrustedIdentities: map[string]platform.ServiceTrustedIdentity{
+			"allowed-caller": {Key: "allowed-key", Audiences: []string{serviceName}},
+			"wrong-caller":   {Key: "wrong-key", Audiences: []string{"other-service"}},
+		},
+	})
+	Register(app)
+	now := time.Now().UTC()
+	createIdentityRecord(t, app, usersResource, map[string]any{
+		"id":          "US1",
+		"username":    "alice",
+		"role":        "admin",
+		"system_role": 0,
+		"status":      "online",
+	})
+	createIdentityRecord(t, app, sessionsResource, map[string]any{
+		"id":         "session-scoped",
+		"user_id":    "US1",
+		"expires_at": now.Add(time.Hour).Format(time.RFC3339),
+	})
+	createIdentityRecord(t, app, apiTokensResource, map[string]any{
+		"id":         "ATSCOPED",
+		"user_id":    "US1",
+		"token_hash": platform.HashSecret(rawAPIToken),
+		"expires_at": now.Add(time.Hour).Format(time.RFC3339),
+		"revoked":    false,
+	})
+
+	for _, tc := range []struct {
+		path  string
+		token string
+	}{
+		{path: "/internal/identity/auth/session", token: "session-scoped"},
+		{path: "/internal/identity/auth/api-token", token: rawAPIToken},
+	} {
+		postInternalIdentityAuthWithCaller(t, app, "wrong-caller", "wrong-key", tc.path, tc.token, http.StatusUnauthorized)
+		postInternalIdentityAuthWithCaller(t, app, "allowed-caller", "allowed-key", tc.path, tc.token, http.StatusOK)
+	}
+}
+
 func TestInternalIdentityReadContractsAreDisabledWithoutServiceKey(t *testing.T) {
 	app := platform.NewApp(platform.Config{ServiceName: serviceName})
 	Register(app)
@@ -342,8 +385,16 @@ func assertIdentityCLICertDownload(t *testing.T, app *platform.App) {
 
 func postInternalIdentityAuth(t *testing.T, app *platform.App, serviceKey, path, token string, want int) string {
 	t.Helper()
+	return postInternalIdentityAuthWithCaller(t, app, "", serviceKey, path, token, want)
+}
+
+func postInternalIdentityAuthWithCaller(t *testing.T, app *platform.App, caller, serviceKey, path, token string, want int) string {
+	t.Helper()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"token":"`+token+`"}`))
+	if caller != "" {
+		req.Header.Set("X-Service-Name", caller)
+	}
 	req.Header.Set("X-Service-Key", serviceKey)
 	req.Header.Set("Content-Type", "application/json")
 	app.ServeHTTP(rec, req)

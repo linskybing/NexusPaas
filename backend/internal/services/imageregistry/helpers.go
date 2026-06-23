@@ -2,11 +2,14 @@ package imageregistry
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -19,6 +22,44 @@ import (
 type imageRecord struct {
 	ID   string
 	Data map[string]any
+}
+
+var errImageProjectionDriftUnavailable = errors.New("image registry projection drift unavailable")
+
+type imageProjectionDriftReport struct {
+	Missing []imageProjectionDriftFinding
+	Orphan  []imageProjectionDriftFinding
+	Stale   []imageProjectionDriftFinding
+}
+
+type imageProjectionDriftFinding struct {
+	SourceResource string
+	LocalResource  string
+	ID             string
+}
+
+type imageProjectionDriftPair struct {
+	sourceResource string
+	localResource  string
+	idFn           func(map[string]any) string
+}
+
+var imageProjectionDriftPairs = []imageProjectionDriftPair{
+	{sourceResource: identityUsersResource, localResource: imageIdentityUsersResource, idFn: func(row map[string]any) string {
+		return imageReadModelID(imageIdentityUsersResource, row)
+	}},
+	{sourceResource: identityRolesResource, localResource: imageIdentityRolesResource, idFn: func(row map[string]any) string {
+		return imageReadModelID(imageIdentityRolesResource, row)
+	}},
+	{sourceResource: orgProjectsResource, localResource: imageProjectsResource, idFn: func(row map[string]any) string {
+		return imageReadModelID(imageProjectsResource, row)
+	}},
+	{sourceResource: orgProjectMembersResource, localResource: imageProjectMembersResource, idFn: func(row map[string]any) string {
+		return imageReadModelID(imageProjectMembersResource, row)
+	}},
+	{sourceResource: orgUserGroupsResource, localResource: imageUserGroupsResource, idFn: func(row map[string]any) string {
+		return imageReadModelID(imageUserGroupsResource, row)
+	}},
 }
 
 func registryEvent(r *http.Request, name string, data map[string]any) contracts.Event {
@@ -627,6 +668,111 @@ func syncImageReadModels(app *platform.App, r *http.Request) {
 	}
 	app.RunProjection(r.Context(), imageProjectionConsumer, func(event contracts.Event) error {
 		return applyImageProjectionEvent(app, r, event)
+	})
+}
+
+func imageProjectionDrift(ctx context.Context, app *platform.App) (imageProjectionDriftReport, error) {
+	var report imageProjectionDriftReport
+	if app == nil || app.Store == nil {
+		return report, errImageProjectionDriftUnavailable
+	}
+	for _, pair := range imageProjectionDriftPairs {
+		sourceRows := imageProjectionDriftIndex(imageProjectionDriftRecordMaps(ctx, app, pair.sourceResource), pair.idFn)
+		localRows := imageProjectionDriftIndex(imageProjectionDriftRecordMaps(ctx, app, pair.localResource), pair.idFn)
+		report.addImageProjectionPairDrift(pair, sourceRows, localRows)
+	}
+	report.sort()
+	return report, nil
+}
+
+func (r *imageProjectionDriftReport) addImageProjectionPairDrift(pair imageProjectionDriftPair, sourceRows, localRows map[string]map[string]any) {
+	r.addImageProjectionMissingAndStale(pair, sourceRows, localRows)
+	r.addImageProjectionOrphans(pair, sourceRows, localRows)
+}
+
+func (r *imageProjectionDriftReport) addImageProjectionMissingAndStale(pair imageProjectionDriftPair, sourceRows, localRows map[string]map[string]any) {
+	for id, sourceRow := range sourceRows {
+		localRow, ok := localRows[id]
+		finding := imageProjectionDriftFinding{
+			SourceResource: pair.sourceResource,
+			LocalResource:  pair.localResource,
+			ID:             id,
+		}
+		if !ok {
+			r.Missing = append(r.Missing, finding)
+			continue
+		}
+		if !reflect.DeepEqual(sourceRow, localRow) {
+			r.Stale = append(r.Stale, finding)
+		}
+	}
+}
+
+func (r *imageProjectionDriftReport) addImageProjectionOrphans(pair imageProjectionDriftPair, sourceRows, localRows map[string]map[string]any) {
+	for id := range localRows {
+		if _, ok := sourceRows[id]; ok {
+			continue
+		}
+		r.Orphan = append(r.Orphan, imageProjectionDriftFinding{
+			SourceResource: pair.sourceResource,
+			LocalResource:  pair.localResource,
+			ID:             id,
+		})
+	}
+}
+
+func imageProjectionDriftRecordMaps(ctx context.Context, app *platform.App, resource string) []map[string]any {
+	if app == nil || app.Store == nil {
+		return nil
+	}
+	records := app.Store.List(ctx, resource)
+	out := make([]map[string]any, 0, len(records))
+	for _, record := range records {
+		out = append(out, shared.CloneMap(record.Data))
+	}
+	return out
+}
+
+func imageProjectionDriftIndex(rows []map[string]any, idFn func(map[string]any) string) map[string]map[string]any {
+	out := map[string]map[string]any{}
+	if idFn == nil {
+		return out
+	}
+	for _, row := range rows {
+		id, normalized := imageProjectionDriftNormalize(row, idFn)
+		if id == "" {
+			continue
+		}
+		out[id] = normalized
+	}
+	return out
+}
+
+func imageProjectionDriftNormalize(row map[string]any, idFn func(map[string]any) string) (string, map[string]any) {
+	normalized := shared.CloneMap(row)
+	id := idFn(normalized)
+	if id == "" {
+		return "", nil
+	}
+	normalized["id"] = id
+	return id, normalized
+}
+
+func (r *imageProjectionDriftReport) sort() {
+	sortImageProjectionDriftFindings(r.Missing)
+	sortImageProjectionDriftFindings(r.Orphan)
+	sortImageProjectionDriftFindings(r.Stale)
+}
+
+func sortImageProjectionDriftFindings(findings []imageProjectionDriftFinding) {
+	sort.Slice(findings, func(i, j int) bool {
+		if findings[i].LocalResource != findings[j].LocalResource {
+			return findings[i].LocalResource < findings[j].LocalResource
+		}
+		if findings[i].ID != findings[j].ID {
+			return findings[i].ID < findings[j].ID
+		}
+		return findings[i].SourceResource < findings[j].SourceResource
 	})
 }
 
