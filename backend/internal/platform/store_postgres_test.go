@@ -167,22 +167,20 @@ func TestPostgresStoreIdentityResourcesUseOwnedTables(t *testing.T) {
 }
 
 func TestIdentityMigrationBackfillsFromPlatformRecords(t *testing.T) {
-	url := requireTestDatabaseURL(t)
 	ctx := context.Background()
-	if err := ApplyMigrations(ctx, url); err != nil {
-		t.Fatalf("apply migrations: %v", err)
+	db := isolatedMigrationDatabase(t)
+	root := t.TempDir()
+	writeAllServiceMigrationsWithSQL(t, root, func(service string) string {
+		if service == "identity-service" {
+			return readTextFile(t, "../../identity-service/migrations/0001_init.sql")
+		}
+		return "-- noop\n"
+	})
+	if err := applyMigrationsInRoots(ctx, db.url, []string{root}); err != nil {
+		t.Fatalf("apply initial migrations: %v", err)
 	}
-	pool, err := pgxpool.New(ctx, url)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
+	pool := openMigrationTestPool(t, db)
 	defer pool.Close()
-	if _, err := pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, "US_BACKFILL_BOUNDARY"); err != nil {
-		t.Fatalf("reset user: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `DELETE FROM platform_records WHERE resource = $1 AND id = $2`, identityUsersResource, "US_BACKFILL_BOUNDARY"); err != nil {
-		t.Fatalf("reset platform record: %v", err)
-	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO platform_records (resource, id, payload)
 		VALUES ($1, $2, $3::jsonb)`,
@@ -192,8 +190,9 @@ func TestIdentityMigrationBackfillsFromPlatformRecords(t *testing.T) {
 	); err != nil {
 		t.Fatalf("seed platform record: %v", err)
 	}
-	if err := ApplyMigrations(ctx, url); err != nil {
-		t.Fatalf("re-apply migrations: %v", err)
+	writeServiceMigrationWithSQL(t, root, "identity-service", "0002_identity_owned_records.sql", readTextFile(t, "../../identity-service/migrations/0002_identity_owned_records.sql"))
+	if err := applyMigrationsInRoots(ctx, db.url, []string{root}); err != nil {
+		t.Fatalf("apply backfill migration: %v", err)
 	}
 	var payload string
 	if err := pool.QueryRow(ctx, `SELECT payload::text FROM users WHERE id = $1`, "US_BACKFILL_BOUNDARY").Scan(&payload); err != nil {

@@ -50,11 +50,19 @@ The gate must pass these phases:
      `collaboration-smoke-summary.json`, and
      `collaboration-smoke-summary.md` under `${ARTIFACT_DIR}`
 6. govulncheck, OSV source scan, backend image build, and Trivy image scan.
-7. SonarScanner Quality Gate when configured or required.
+7. Local SonarScanner Quality Gate when `SONAR_TOKEN` and `SONAR_HOST_URL` are
+   configured for `bash backend/scripts/ci-security-gate.sh sonar`, or
+   fail-closed when local/CI policy requires Sonar.
 8. generated RC evidence report at `${ARTIFACT_DIR}/beta-rc-report.md`.
    The report links `${ARTIFACT_DIR}/production-beta-deployable-units.md`,
    which maps the 8 physical backend units to the 15 logical services they
    host.
+
+GitHub Actions does not run SonarScanner. SonarCloud/SonarQube must publish an
+external required PR check and branch protection gate before merge. The backend
+workflow does not require `SONAR_TOKEN` or `SONAR_HOST_URL`; the local `sonar`
+script subcommand remains available for manual or release-candidate validation
+with configured credentials.
 
 The default artifact directory is under `/tmp/nexuspaas-quality-gate/<run-id>`.
 Override it with `CI_GATE_ARTIFACT_DIR` when a CI job needs to upload artifacts.
@@ -65,10 +73,43 @@ The `beta-rc` gate is non-live by default. Before external Production Beta
 traffic is allowed, run a live staging rehearsal with real staging secrets and a
 throwaway or dedicated staging namespace.
 
+The operator-only harness is:
+
+```sh
+LIVE_STAGING_REHEARSAL=1 \
+KUBE_CONTEXT=<real-staging-context> \
+NAMESPACE=nexuspaas \
+CANDIDATE_IMAGE=registry.example.com/nexuspaas/backend@sha256:<64-lowercase-hex-digest> \
+PROMOTION_EVIDENCE=<promotion-evidence-url-or-path> \
+REGISTRY_SCAN_STATUS=Success \
+bash backend/scripts/production-beta-live-rehearsal.sh
+```
+
+It refuses Docker Desktop, kind, minikube, localhost, loopback, and other
+local-style contexts; `kubectl config current-context` must exactly match
+`KUBE_CONTEXT`. The candidate image must come from a non-local external
+registry and must be pinned with `@sha256:<64 lowercase hex digest>`. If
+operators want the harness to perform promotion, provide both `SOURCE_IMAGE`
+and `PROMOTED_IMAGE_TAG`; the script then uses an already-installed `crane copy`. Otherwise
+`PROMOTION_EVIDENCE` is mandatory. `REGISTRY_SCAN_STATUS` or
+`REGISTRY_SCAN_EVIDENCE` is always mandatory.
+
+The harness checks Kubernetes Secret names only, records previous app-container
+images per backend unit, creates `ADMIN_TASK=apply-migrations` and
+`ADMIN_TASK=validate-migrations` Jobs, applies the production-beta render, sets
+the candidate image on each `deployment/<unit>`, waits for rollouts, port-forward
+smokes `/healthz`, `/readyz`, and `/metrics` for all 8 backend units, verifies
+gateway `/openapi.json` and `/service-registry` with all 15 logical services,
+then rolls each unit back to its recorded previous image and redeploys the
+candidate. The final artifact is
+`${ARTIFACT_DIR}/production-beta-live-rehearsal-report.md`.
+
 The live rehearsal must prove:
 
 - Production-beta manifests apply successfully through the chosen GitOps or
   kubectl workflow.
+- The same candidate image is promoted through a non-`localhost:5000` external
+  registry with tag, digest, and scan evidence.
 - Required Kubernetes Secrets or ExternalSecret-managed values exist before
   workloads start.
 - Database migrations apply and validate against the staging database.
@@ -96,7 +137,7 @@ The following issue classes remain blocking for external Beta traffic unless
 explicitly accepted:
 
 - live staging deploy, smoke, rollback, and re-deploy not rehearsed,
-- security scan or Sonar Quality Gate failure,
+- security scan or external SonarCloud/SonarQube Quality Gate failure,
 - focused E2E skip/failure,
 - integration coverage below 80%,
 - missing production secrets or default/dev credentials in the deployment path,

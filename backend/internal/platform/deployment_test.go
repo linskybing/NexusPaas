@@ -93,6 +93,10 @@ func TestProductionBetaRuntimeConfigAndSecretContract(t *testing.T) {
 	requireContains(t, configPath, config, "name: production-beta-runtime-config")
 	requireContains(t, configPath, config, `REDIS_URL: "redis://redis:6379/0"`)
 	requireContains(t, configPath, config, `EVENT_BUS_URL: "redis://redis:6379/1"`)
+	requireContains(t, configPath, config, `DEX_URL: ""`)
+	requireContains(t, configPath, config, `HARBOR_URL: ""`)
+	requireNotContains(t, configPath, config, `DEX_URL: "http://`)
+	requireNotContains(t, configPath, config, `HARBOR_URL: "http://`)
 	requireContains(t, configPath, config, `EVENT_RELAY_BATCH_SIZE: "100"`)
 	requireContains(t, configPath, config, `JWT_AUDIENCE: "platform"`)
 	serviceURLs := extractServiceURLs(t, configPath, config)
@@ -317,7 +321,9 @@ func TestProductionBetaObservabilityManifestsAreProvisioned(t *testing.T) {
 func TestProductionBetaReleaseCandidateGateIsDocumented(t *testing.T) {
 	scriptPath := "../../scripts/ci-security-gate.sh"
 	script := readTextFile(t, scriptPath)
-	requireContains(t, scriptPath, script, "beta-rc   quick, production-beta render/dry-run/rollback rehearsal, docker/routing/collaboration smoke, security, sonar, RC report")
+	requireContains(t, scriptPath, script, "sonar     SonarScanner Quality Gate")
+	requireContains(t, scriptPath, script, "beta-rc   quick, production-beta render/dry-run/rollback rehearsal, docker/routing/collaboration smoke, security, Sonar, RC report")
+	requireContains(t, scriptPath, script, "all       quick, docker, security, Sonar")
 	requireContains(t, scriptPath, script, "beta-rc) run_beta_rc_gate")
 	requireContains(t, scriptPath, script, "run_production_beta_manifest_rehearsal")
 	requireContains(t, scriptPath, script, "run_runtime_smoke")
@@ -335,8 +341,35 @@ func TestProductionBetaReleaseCandidateGateIsDocumented(t *testing.T) {
 	requireContains(t, scriptPath, script, "run_quick")
 	requireContains(t, scriptPath, script, "run_docker_gate")
 	requireContains(t, scriptPath, script, "run_security_gate")
-	requireContains(t, scriptPath, script, "run_sonar_gate")
+	requireContains(t, scriptPath, script, "sonar) run_sonar_gate")
+	requireContains(t, scriptPath, script, "sonar_scanner_install_complete")
+	requireContains(t, scriptPath, script, "Discarding incomplete SonarScanner")
+	requireContains(t, scriptPath, script, "FOCUSED_E2E_SKIP_PATTERN='^[[:space:]]*--- SKIP:|^SKIP[[:space:]]'")
+	requireNotContains(t, scriptPath, script, "grep -Eiq 'SKIP|skipping'")
+	requireContains(t, scriptPath, script, "CI_GATE_SONAR_REQUIRED")
+	requireContains(t, scriptPath, script, "SONAR_TOKEN and SONAR_HOST_URL are required for this CI event")
+	requireContains(t, scriptPath, script, "- Sonar Quality Gate: %s")
 	requireContains(t, scriptPath, script, "External Production Beta traffic still requires a live staging rehearsal")
+
+	workflowPath := "../../../.github/workflows/backend-quality-gate.yml"
+	workflow := readTextFile(t, workflowPath)
+	requireContains(t, workflowPath, workflow, "github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository")
+	requireContains(t, workflowPath, workflow, "FOCUSED_E2E_SKIP_PATTERN: '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]'")
+	requireContains(t, workflowPath, workflow, "go install \"golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}\"")
+	requireNotContains(t, workflowPath, workflow, "\n  sonar:\n")
+	requireNotContains(t, workflowPath, workflow, "Sonar Quality Gate")
+	requireNotContains(t, workflowPath, workflow, "Require Sonar secrets")
+	requireNotContains(t, workflowPath, workflow, "SONAR_TOKEN")
+	requireNotContains(t, workflowPath, workflow, "SONAR_HOST_URL")
+	requireNotContains(t, workflowPath, workflow, "needs.detect-changes.outputs.sonar")
+	requireNotContains(t, workflowPath, workflow, "SonarSource/sonarqube-scan-action")
+	requireNotContains(t, workflowPath, workflow, "-Dsonar.qualitygate.wait=true")
+	requireNotContains(t, workflowPath, workflow, "\n      - sonar\n")
+	requireNotContains(t, workflowPath, workflow, "echo \"sonar:")
+	requireNotContains(t, workflowPath, workflow, "sonar_config")
+	requireNotContains(t, workflowPath, workflow, "golang/govulncheck-action@v1")
+	requireNotContains(t, workflowPath, workflow, "grep -Eiq 'SKIP|skipping'")
+	requireNotContains(t, workflowPath, workflow, "Sonar skipped")
 
 	readinessPath := "../../docs/beta-launch-readiness.md"
 	readiness := readTextFile(t, readinessPath)
@@ -349,6 +382,10 @@ func TestProductionBetaReleaseCandidateGateIsDocumented(t *testing.T) {
 	requireContains(t, readinessPath, readiness, "re-deploy client dry-run")
 	requireContains(t, readinessPath, readiness, "Live Staging Rehearsal")
 	requireContains(t, readinessPath, readiness, "All 8 backend units become ready.")
+	requireContains(t, readinessPath, readiness, "GitHub Actions does not run SonarScanner")
+	requireContains(t, readinessPath, readiness, "external required PR check")
+	requireContains(t, readinessPath, readiness, "branch protection gate")
+	requireContains(t, readinessPath, readiness, "workflow does not require `SONAR_TOKEN` or `SONAR_HOST_URL`")
 	requireContains(t, readinessPath, readiness, "no unaccepted launch blockers")
 
 	e2eDocsPath := "../../docs/e2e-testing.md"
@@ -358,6 +395,111 @@ func TestProductionBetaReleaseCandidateGateIsDocumented(t *testing.T) {
 	requireContains(t, e2eDocsPath, e2eDocs, "for every backend unit deployment")
 	requireContains(t, e2eDocsPath, e2eDocs, "runtime smoke")
 	requireContains(t, e2eDocsPath, e2eDocs, "re-deploy evidence")
+	requireContains(t, e2eDocsPath, e2eDocs, "GitHub Actions does not run SonarScanner")
+	requireContains(t, e2eDocsPath, e2eDocs, "external required PR check")
+	requireContains(t, e2eDocsPath, e2eDocs, "branch protection gate")
+	requireContains(t, e2eDocsPath, e2eDocs, "workflow does not require `SONAR_TOKEN` or `SONAR_HOST_URL`")
+	requireContains(t, e2eDocsPath, e2eDocs, "local `sonar`")
+	requireContains(t, e2eDocsPath, e2eDocs, "script subcommand remains available")
+}
+
+func TestProductionBetaLiveRehearsalHarnessIsGuarded(t *testing.T) {
+	scriptPath := "../../scripts/production-beta-live-rehearsal.sh"
+	script := readTextFile(t, scriptPath)
+	requireContains(t, scriptPath, script, "set -Eeuo pipefail")
+	requireNotContains(t, scriptPath, script, "set -x")
+	requireContains(t, scriptPath, script, "LIVE_STAGING_REHEARSAL=1 is required before any live staging mutation")
+	requireContains(t, scriptPath, script, "require_live_opt_in")
+	requireContains(t, scriptPath, script, "require_env KUBE_CONTEXT")
+	requireContains(t, scriptPath, script, "kubectl config current-context")
+	requireContains(t, scriptPath, script, "kubectl --context \"${KUBE_CONTEXT}\" -n \"${NAMESPACE}\"")
+	requireContains(t, scriptPath, script, "refusing local-style kube context")
+	for _, marker := range []string{"docker-desktop", "localhost", "127.0.0.1", "loopback", "kind", "minikube"} {
+		requireContains(t, scriptPath, script, marker)
+	}
+
+	requireContains(t, scriptPath, script, "require_candidate_image")
+	requireContains(t, scriptPath, script, "CANDIDATE_IMAGE must be digest-pinned with @sha256:<64 lowercase hex digest>")
+	requireContains(t, scriptPath, script, "grep -Eq '^[a-f0-9]{64}$'")
+	requireContains(t, scriptPath, script, "reject_local_image_ref \"${CANDIDATE_IMAGE}\"")
+	requireContains(t, scriptPath, script, "crane copy \"${SOURCE_IMAGE}\" \"${PROMOTED_IMAGE_TAG}\"")
+	requireContains(t, scriptPath, script, "require_env PROMOTION_EVIDENCE")
+	requireContains(t, scriptPath, script, "REGISTRY_SCAN_STATUS or REGISTRY_SCAN_EVIDENCE is required")
+
+	requireContains(t, scriptPath, script, "kubectl kustomize backend")
+	requireContains(t, scriptPath, script, "kubectl apply --dry-run=client --validate=false")
+	requireContains(t, scriptPath, script, "production-beta render contains all-in-one platform Deployment")
+	requireContains(t, scriptPath, script, "production-beta render contains dev references")
+	requireContains(t, scriptPath, script, "rendered_deployment_names")
+	requireContains(t, scriptPath, script, "rendered_has_deployment")
+	for _, unit := range productionBackendUnits() {
+		requireContains(t, scriptPath, script, unit)
+	}
+
+	requireContains(t, scriptPath, script, "required_secret_names")
+	requireContains(t, scriptPath, script, "kctl get secret \"${secret}\" -o name")
+	requireNotContains(t, scriptPath, script, "kubectl get secret")
+	requireNotContains(t, scriptPath, script, "get secret \"${secret}\" -o yaml")
+	requireNotContains(t, scriptPath, script, "get secret \"${secret}\" -o json")
+	requireNotContains(t, scriptPath, script, "get secret \"${secret}\" -o jsonpath")
+	requireNotContains(t, scriptPath, script, "jsonpath=.*data")
+	requireNotContains(t, scriptPath, script, "base64")
+
+	requireContains(t, scriptPath, script, "ADMIN_TASK")
+	requireContains(t, scriptPath, script, "apply-migrations")
+	requireContains(t, scriptPath, script, "validate-migrations")
+	requireContains(t, scriptPath, script, "kctl wait --for=condition=complete --timeout=\"${JOB_TIMEOUT}\" \"job/${job_name}\"")
+	requireContains(t, scriptPath, script, "kctl apply -f \"${RENDER_FILE}\"")
+	requireContains(t, scriptPath, script, "kctl set image \"deployment/${unit}\" \"app=${CANDIDATE_IMAGE}\"")
+	requireContains(t, scriptPath, script, "kctl rollout status \"deployment/${unit}\" --timeout=\"${ROLLOUT_TIMEOUT}\"")
+	requireContains(t, scriptPath, script, "/healthz")
+	requireContains(t, scriptPath, script, "/readyz")
+	requireContains(t, scriptPath, script, "/metrics")
+	requireContains(t, scriptPath, script, "/openapi.json")
+	requireContains(t, scriptPath, script, "/service-registry")
+	requireContains(t, scriptPath, script, "service-registry contains ${count} services, want 15")
+	requireContains(t, scriptPath, script, "previous_image_for_unit")
+	requireContains(t, scriptPath, script, "rollback_and_redeploy_each_unit")
+	requireContains(t, scriptPath, script, "app=${previous_image}")
+	requireContains(t, scriptPath, script, "app=${CANDIDATE_IMAGE}")
+
+	requireContains(t, scriptPath, script, "Production Beta Live Rehearsal Report")
+	for _, field := range []string{
+		"Candidate image",
+		"Candidate digest",
+		"Promotion evidence",
+		"Registry scan status",
+		"Secret presence",
+		"Migration Jobs",
+		"Rollouts",
+		"Smoke checks",
+		"Rollback and redeploy",
+		"close live P0.2-P0.5",
+	} {
+		requireContains(t, scriptPath, script, field)
+	}
+
+	readinessPath := "../../docs/beta-launch-readiness.md"
+	readiness := readTextFile(t, readinessPath)
+	requireContains(t, readinessPath, readiness, "operator-only harness")
+	requireContains(t, readinessPath, readiness, "bash backend/scripts/production-beta-live-rehearsal.sh")
+	requireContains(t, readinessPath, readiness, "LIVE_STAGING_REHEARSAL=1")
+	requireContains(t, readinessPath, readiness, "KUBE_CONTEXT=<real-staging-context>")
+	requireContains(t, readinessPath, readiness, "Docker Desktop, kind, minikube, localhost, loopback")
+	requireContains(t, readinessPath, readiness, "Secret names only")
+	requireContains(t, readinessPath, readiness, "rolls each unit back to its recorded previous image")
+	requireContains(t, readinessPath, readiness, "production-beta-live-rehearsal-report.md")
+
+	e2eDocsPath := "../../docs/e2e-testing.md"
+	e2eDocs := readTextFile(t, e2eDocsPath)
+	requireContains(t, e2eDocsPath, e2eDocs, "operator machine")
+	requireContains(t, e2eDocsPath, e2eDocs, "staging context")
+	requireContains(t, e2eDocsPath, e2eDocs, "bash backend/scripts/production-beta-live-rehearsal.sh")
+	requireContains(t, e2eDocsPath, e2eDocs, "requires `kubectl config current-context` to match")
+	requireContains(t, e2eDocsPath, e2eDocs, "records")
+	requireContains(t, e2eDocsPath, e2eDocs, "only Secret name presence")
+	requireContains(t, e2eDocsPath, e2eDocs, "per-unit")
+	requireContains(t, e2eDocsPath, e2eDocs, "previous-image rollback plus candidate redeploy smoke")
 }
 
 func requireProductionDeploymentManifest(t *testing.T, path string) {

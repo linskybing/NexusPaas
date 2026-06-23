@@ -102,7 +102,7 @@ ports and point `TEST_OBJECT_STORE_URL` at it:
 docker start nexuspaas-minio-e2e || docker run -d --name nexuspaas-minio-e2e \
   -p 19000:9000 -p 19001:9001 \
   -e MINIO_ROOT_USER=nexuspaas \
-  -e MINIO_ROOT_PASSWORD=nexuspaas-secret \
+  -e MINIO_ROOT_PASSWORD='<local minio root password>' \
   minio/minio:RELEASE.2025-04-08T15-41-24Z \
   server /data --console-address :9001
 
@@ -118,7 +118,7 @@ export TEST_REDIS_URL='redis://localhost:6379/0'
 export TEST_EVENT_BUS_URL="$TEST_REDIS_URL"
 export TEST_OBJECT_STORE_URL='http://localhost:9000' # or http://localhost:19000 when using the fallback container
 export TEST_OBJECT_STORE_ACCESS_KEY='nexuspaas'
-export TEST_OBJECT_STORE_SECRET_KEY='nexuspaas-secret'
+export TEST_OBJECT_STORE_SECRET_KEY='<local object store secret>'
 export TEST_OBJECT_STORE_BUCKET='media-e2e'
 ```
 
@@ -166,7 +166,7 @@ go test -tags e2e ./internal/e2e \
   -run 'TestServiceRouteIsolationContract|TestServiceIsolationValidationE2E|TestIsolatedRuntimeRegistrationE2E|TestProviderConsumerContractMatrix|TestCriticalCrossServiceJourneys|TestSchedulerAdmissionOwnerReadContractsE2E|TestNonBlobIsolatedServiceIgnoresObjectStoreConfigE2E|TestStorageMountPlanContractE2E|TestImageBuildGovernanceE2E|TestIDELifecycleProjectAccessE2E|TestWorkloadConfigFileLifecycleE2E' \
   -count=1 -v | tee /tmp/cross-service-e2e.log
 rg '^--- PASS: Test(ServiceRouteIsolationContract|ServiceIsolationValidationE2E|IsolatedRuntimeRegistrationE2E|ProviderConsumerContractMatrix|CriticalCrossServiceJourneys|SchedulerAdmissionOwnerReadContractsE2E|NonBlobIsolatedServiceIgnoresObjectStoreConfigE2E|StorageMountPlanContractE2E|ImageBuildGovernanceE2E|IDELifecycleProjectAccessE2E|WorkloadConfigFileLifecycleE2E)' /tmp/cross-service-e2e.log
-! rg 'SKIP|skipping|Skipping' /tmp/cross-service-e2e.log
+! rg '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]' /tmp/cross-service-e2e.log
 ```
 
 Run the full E2E package after the focused gate when optional slice tests are
@@ -202,7 +202,7 @@ set -o pipefail
 go test -tags e2e ./internal/e2e -run '^TestStorageMountPlanContractE2E$' -count=1 -v \
   | tee /tmp/storage-mount-plan-e2e.log
 rg '^--- PASS: TestStorageMountPlanContractE2E' /tmp/storage-mount-plan-e2e.log
-! rg 'SKIP|skipping|Skipping' /tmp/storage-mount-plan-e2e.log
+! rg '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]' /tmp/storage-mount-plan-e2e.log
 ```
 
 Run the focused core user-journey E2E while working on workload ConfigFiles,
@@ -255,7 +255,7 @@ TEST_LIVE_K8S_PRIORITY_CLASS_SYNC=1 \
   go test -tags e2e ./internal/e2e -run '^TestPriorityClassSyncWorkerLiveK8sE2E$' -count=1 -v \
   | tee /tmp/priority-class-sync-e2e.log
 rg '^--- PASS: TestPriorityClassSyncWorkerLiveK8sE2E' /tmp/priority-class-sync-e2e.log
-! rg 'SKIP|skipping|Skipping' /tmp/priority-class-sync-e2e.log
+! rg '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]' /tmp/priority-class-sync-e2e.log
 ```
 
 Run the focused Docker image cleanup CronJob provisioner E2E while working on
@@ -283,7 +283,7 @@ TEST_LIVE_K8S_DOCKER_CLEANUP=1 \
   go test -tags e2e ./internal/e2e -run '^TestDockerImageCleanupCronJobLiveK8sE2E$' -count=1 -v \
   | tee /tmp/docker-cleanup-e2e.log
 rg '^--- PASS: TestDockerImageCleanupCronJobLiveK8sE2E' /tmp/docker-cleanup-e2e.log
-! rg 'SKIP|skipping|Skipping' /tmp/docker-cleanup-e2e.log
+! rg '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]' /tmp/docker-cleanup-e2e.log
 ```
 
 Run the live Kubernetes Longhorn RWX smoke while working on storage worker
@@ -299,7 +299,7 @@ TEST_LIVE_K8S_LONGHORN_RWX_SMOKE=1 \
   go test -tags e2e ./internal/e2e -run '^TestLonghornRWXHealthWorkerLiveK8sSmokeE2E$' -count=1 -v \
   | tee /tmp/longhorn-rwx-smoke-e2e.log
 rg '^--- PASS: TestLonghornRWXHealthWorkerLiveK8sSmokeE2E' /tmp/longhorn-rwx-smoke-e2e.log
-! rg 'SKIP|skipping|Skipping' /tmp/longhorn-rwx-smoke-e2e.log
+! rg '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]' /tmp/longhorn-rwx-smoke-e2e.log
 ```
 
 Run the optional real-Longhorn gate only when the current cluster is expected to
@@ -345,7 +345,7 @@ TEST_LIVE_LDAP_IDENTITY=1 \
   go test -tags e2e ./internal/e2e -run '^TestIdentityLDAPStrategyMirrorSyncE2E$' -count=1 -v \
   | tee /tmp/identity-ldap-e2e.log
 rg '^--- PASS: TestIdentityLDAPStrategyMirrorSyncE2E' /tmp/identity-ldap-e2e.log
-! rg 'SKIP|skipping|Skipping' /tmp/identity-ldap-e2e.log
+! rg '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]' /tmp/identity-ldap-e2e.log
 ```
 
 Run the live LDAP + project plan + Kubernetes deploy E2E while working on the
@@ -364,7 +364,7 @@ TEST_LIVE_K8S_USER_PROJECT_PLAN_DEPLOY=1 \
   go test -tags e2e ./internal/e2e -run '^TestLiveLDAPUserProjectPlanConfigDeployE2E$' -count=1 -v \
   | tee /tmp/live-user-project-plan-deploy-e2e.log
 rg '^--- PASS: TestLiveLDAPUserProjectPlanConfigDeployE2E' /tmp/live-user-project-plan-deploy-e2e.log
-! rg 'SKIP|skipping|Skipping' /tmp/live-user-project-plan-deploy-e2e.log
+! rg '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]' /tmp/live-user-project-plan-deploy-e2e.log
 ```
 
 Run the live Kubernetes queue-duration, plan-window, and auto-preemption E2E
@@ -380,7 +380,7 @@ TEST_LIVE_K8S_PLAN_WINDOW_DURATION_PREEMPTION=1 \
   go test -tags e2e ./internal/e2e -run '^TestLiveK8sPlanWindowDurationPreemptionE2E$' -count=1 -v \
   | tee /tmp/live-plan-window-duration-preemption-e2e.log
 rg '^--- PASS: TestLiveK8sPlanWindowDurationPreemptionE2E' /tmp/live-plan-window-duration-preemption-e2e.log
-! rg 'SKIP|skipping|Skipping' /tmp/live-plan-window-duration-preemption-e2e.log
+! rg '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]' /tmp/live-plan-window-duration-preemption-e2e.log
 ```
 
 Run the live Kubernetes ConfigFile DRA dispatch E2E only when the current
@@ -431,7 +431,7 @@ TEST_LIVE_K8S_POLICY_DATA_SYNC=1 \
   go test -tags e2e ./internal/e2e -run '^TestPolicyDataSyncConfigMapE2E$' -count=1 -v \
   | tee /tmp/policy-data-sync-e2e.log
 rg '^--- PASS: TestPolicyDataSyncConfigMapE2E' /tmp/policy-data-sync-e2e.log
-! rg 'SKIP|skipping|Skipping' /tmp/policy-data-sync-e2e.log
+! rg '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]' /tmp/policy-data-sync-e2e.log
 ```
 
 ## Production Beta Quality Gate
@@ -459,20 +459,21 @@ The Docker-backed gate uses isolated ports by default:
 - Redis: `localhost:16379`
 - MinIO API/console: `localhost:19000` / `localhost:19001`
 
-The gate writes `backend/coverage.out` for Sonar and fails when integration
-coverage is below `CI_GATE_COVERAGE_THRESHOLD`, which defaults to `80.0`.
+The gate writes `backend/coverage.out` and fails when integration coverage is
+below `CI_GATE_COVERAGE_THRESHOLD`, which defaults to `80.0`. SonarScanner
+reuses that coverage file when the local `sonar` script subcommand runs.
 Focused E2E must emit the required `PASS` lines and cannot pass by skipping.
 Full non-live E2E runs after the focused gate. The Docker-backed gate then
 starts `SERVICE_NAME=all` on `TEST_RUNTIME_PORT` (default `18080`) and checks
 `/healthz`, `/readyz`, `/metrics`, `/openapi.json`, `/service-registry`, and
-one read-only endpoint for each of the 15 registered services with no 5xx.
-Live cluster tests remain guarded by their explicit opt-in environment
-variables.
+one read-only endpoint for each of the 15 registered services with no 5xx. Live
+cluster tests remain guarded by their explicit opt-in environment variables.
 
-In GitHub Actions, SonarScanner is required for pushes, workflow dispatches, and
-non-fork pull requests. Fork pull requests skip Sonar when secrets are
-unavailable; branch protection should require the non-fork/default-branch gate
-before merge.
+GitHub Actions does not run SonarScanner. SonarCloud/SonarQube must publish an
+external required PR check and branch protection gate before merge. The backend
+workflow does not require `SONAR_TOKEN` or `SONAR_HOST_URL`; the local `sonar`
+script subcommand remains available for manual or release-candidate validation
+with configured credentials.
 
 Run the non-live Production Beta release-candidate rehearsal when preparing a
 Beta RC:
@@ -486,14 +487,39 @@ the production-beta render contains the 8 physical backend units that host the
 15 logical services and no all-in-one `platform` deployment, rejects `-dev-`
 secret references, runs client-side deploy dry-run, writes rollback commands
 for every backend unit deployment, runs re-deploy dry-run, then executes
-Docker-backed E2E, runtime smoke, security, and Sonar gates. It writes
+Docker-backed E2E, runtime smoke, security, and local Sonar gates. It writes
 `${ARTIFACT_DIR}/beta-rc-report.md` plus render, dry-run, rollback, E2E, and
 runtime-smoke artifacts.
 
 The `beta-rc` gate is non-live by default. External Production Beta traffic
 still requires a live staging rehearsal with real staging secrets, ready pods,
-8-unit health/ready/metrics smoke, critical journey E2E, rollback, and
-re-deploy evidence. See `docs/beta-launch-readiness.md`.
+external registry promotion by immutable digest, staging migration
+apply/validate evidence, 8-unit health/ready/metrics smoke, critical journey
+E2E, previous-image rollback, and re-deploy evidence. See
+`docs/beta-launch-readiness.md`.
+
+Use the live rehearsal harness only from an operator machine pointed at a real
+staging context:
+
+```sh
+LIVE_STAGING_REHEARSAL=1 \
+KUBE_CONTEXT=<real-staging-context> \
+NAMESPACE=nexuspaas \
+CANDIDATE_IMAGE=registry.example.com/nexuspaas/backend@sha256:<64-lowercase-hex-digest> \
+PROMOTION_EVIDENCE=<promotion-evidence-url-or-path> \
+REGISTRY_SCAN_STATUS=Success \
+bash backend/scripts/production-beta-live-rehearsal.sh
+```
+
+The script refuses Docker Desktop, kind, minikube, localhost, loopback, and
+other local-style contexts, requires `kubectl config current-context` to match
+`KUBE_CONTEXT`, and passes that context to live cluster commands. It records
+only Secret name presence, not Secret values, then creates migration
+apply/validate Jobs, deploys the candidate image to all 8 backend units, checks
+`/healthz`, `/readyz`, `/metrics`, gateway `/openapi.json`, and gateway
+`/service-registry` for 15 logical services, and performs per-unit
+previous-image rollback plus candidate redeploy smoke. The report is written to
+`${ARTIFACT_DIR}/production-beta-live-rehearsal-report.md`.
 
 Existing manual gates remain:
 

@@ -17,7 +17,8 @@ The backend is one Go module with 15 logical services selected at runtime by
 - a platform gateway and 15 bounded-context service packages;
 - Production Beta Kubernetes manifests and service registry behavior;
 - operational readiness, non-functional requirements, and event-contract docs;
-- quality gates for tests, build, security scans, and Sonar when configured;
+- quality gates for tests, build, security scans, and remote Sonar on trusted
+  events;
 - opt-in live E2E coverage for LDAP, Kubernetes deploy, runtime expiry, and
   preemption.
 
@@ -73,8 +74,8 @@ By Day 90, a GA architecture candidate is acceptable only if:
   org-project, identity, and authorization paths;
 - compute saga behavior is documented and tested for reserve, commit, release,
   dispatch, cleanup, plan windows, duration limits, and preemption;
-- GitHub-hosted quality gates require tests, build, scans, and Sonar when
-  credentials are configured;
+- GitHub-hosted quality gates require tests, build, scans, and remote
+  SonarScanner Quality Gate for trusted events;
 - `problem.md` contains no unaccepted GA architecture blocker.
 
 ## Rejected Alternatives

@@ -23,16 +23,19 @@ spec:
       labels:
         app.kubernetes.io/name: my-gpu-app
     spec:
+      automountServiceAccountToken: false
       containers:
         - name: app
           # Your unchanged application image — renders into DISPLAY :0.
-          image: registry.example.com/nexuspaas/my-gpu-app:latest
+          image: registry.example.com/nexuspaas/my-gpu-app:1.0.0
           resources:
             requests:
               cpu: "1"
               memory: 2Gi
+              ephemeral-storage: 1Gi
               nvidia.com/gpu: "1"
             limits:
               cpu: "4"
               memory: 8Gi
+              ephemeral-storage: 4Gi
               nvidia.com/gpu: "1"

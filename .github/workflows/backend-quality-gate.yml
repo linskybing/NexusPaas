@@ -24,13 +24,14 @@ concurrency:
 
 env:
   GO_VERSION: "1.25.11"
+  GOVULNCHECK_VERSION: "v1.3.0"
   COVERAGE_THRESHOLD: "80.0"
   BACKEND_IMAGE: nexuspaas-backend:ci-${{ github.sha }}
   TEST_POSTGRES_PASSWORD: nexuspaas
   TEST_REDIS_URL: redis://127.0.0.1:16379/0
   TEST_EVENT_BUS_URL: redis://127.0.0.1:16379/0
   TEST_OBJECT_STORE_ACCESS_KEY: nexuspaas
-  TEST_OBJECT_STORE_SECRET_KEY: nexuspaas-secret
+  TEST_OBJECT_STORE_SECRET_KEY: nexuspaas-local-only
   TEST_OBJECT_STORE_BUCKET: media-e2e
   TEST_OBJECT_STORE_URL: http://127.0.0.1:19000
   TEST_DATABASE_URL: postgres://nexuspaas:nexuspaas@127.0.0.1:15432/nexuspaas?sslmode=disable
@@ -51,9 +52,8 @@ jobs:
       integration: ${{ steps.filter.outputs.backend_go == 'true' || steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_migrations == 'true' || steps.filter.outputs.backend_docker == 'true' || steps.filter.outputs.backend_deploy == 'true' || steps.filter.outputs.backend_compose == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
       govulncheck: ${{ steps.filter.outputs.backend_go == 'true' || steps.filter.outputs.backend_deps == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
       osv: ${{ steps.filter.outputs.backend_deps == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
-      trivy_fs: ${{ steps.filter.outputs.workflow == 'true' || steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_docker == 'true' || steps.filter.outputs.backend_deploy == 'true' || steps.filter.outputs.backend_scripts == 'true' || steps.filter.outputs.frontend == 'true' || steps.filter.outputs.sonar_config == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
+      trivy_fs: ${{ steps.filter.outputs.workflow == 'true' || steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_docker == 'true' || steps.filter.outputs.backend_deploy == 'true' || steps.filter.outputs.backend_scripts == 'true' || steps.filter.outputs.frontend == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
       image_scan: ${{ steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_migrations == 'true' || steps.filter.outputs.backend_docker == 'true' || steps.filter.outputs.backend_deploy == 'true' || steps.filter.outputs.frontend == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
-      sonar: ${{ steps.filter.outputs.backend_go == 'true' || steps.filter.outputs.backend_deps == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
 
     steps:
       - name: Checkout
@@ -91,8 +91,6 @@ jobs:
               - 'backend/docker-compose*.yml'
             backend_scripts:
               - 'backend/scripts/**'
-            sonar_config:
-              - 'sonar-project.properties'
 
   workflow-lint:
     name: Workflow Lint
@@ -235,11 +233,12 @@ jobs:
         env:
           FOCUSED_E2E_PATTERN: TestServiceRouteIsolationContract|TestServiceIsolationValidationE2E|TestIsolatedRuntimeRegistrationE2E|TestProviderConsumerContractMatrix|TestCriticalCrossServiceJourneys|TestSchedulerAdmissionOwnerReadContractsE2E|TestNonBlobIsolatedServiceIgnoresObjectStoreConfigE2E|TestStorageMountPlanContractE2E
           FOCUSED_E2E_PASS_PATTERN: '^--- PASS: Test(ServiceRouteIsolationContract|ServiceIsolationValidationE2E|IsolatedRuntimeRegistrationE2E|ProviderConsumerContractMatrix|CriticalCrossServiceJourneys|SchedulerAdmissionOwnerReadContractsE2E|NonBlobIsolatedServiceIgnoresObjectStoreConfigE2E|StorageMountPlanContractE2E)'
+          FOCUSED_E2E_SKIP_PATTERN: '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]'
         run: |
           set -o pipefail
           go test -tags e2e ./internal/e2e -run "${FOCUSED_E2E_PATTERN}" -count=1 -v 2>&1 | tee focused-e2e.log
           grep -E "${FOCUSED_E2E_PASS_PATTERN}" focused-e2e.log >/dev/null
-          if grep -Eiq 'SKIP|skipping' focused-e2e.log; then
+          if grep -Eq "${FOCUSED_E2E_SKIP_PATTERN}" focused-e2e.log; then
             exit 1
           fi
 
@@ -268,13 +267,28 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Run govulncheck
-        uses: golang/govulncheck-action@v1
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          go-version-input: ${{ env.GO_VERSION }}
+          go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: backend/go.sum
-          work-dir: backend
-          go-package: ./...
+
+      - name: Run govulncheck
+        working-directory: backend
+        run: |
+          for attempt in 1 2 3; do
+            if go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"; then
+              break
+            fi
+            if [ "${attempt}" -eq 3 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 10))
+          done
+          "$(go env GOPATH)/bin/govulncheck" ./...
 
   osv-scan:
     name: OSV Dependency Scan
@@ -349,51 +363,6 @@ jobs:
           severity: HIGH,CRITICAL
           timeout: ${{ env.TRIVY_TIMEOUT }}
 
-  sonar:
-    name: Sonar Quality Gate
-    needs:
-      - detect-changes
-      - integration-e2e
-    if: needs.detect-changes.outputs.sonar == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    permissions:
-      contents: read
-    env:
-      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Download coverage
-        uses: actions/download-artifact@v4
-        with:
-          name: backend-test-artifacts
-
-      - name: Restore coverage path
-        run: |
-          if [ -f coverage.out ]; then
-            mkdir -p backend
-            mv coverage.out backend/coverage.out
-          fi
-
-      - name: SonarQube scan
-        if: env.SONAR_TOKEN != '' && env.SONAR_HOST_URL != ''
-        uses: SonarSource/sonarqube-scan-action@v5
-        env:
-          SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
-        with:
-          args: >
-            -Dsonar.qualitygate.wait=true
-
-      - name: Sonar skipped
-        if: env.SONAR_TOKEN == '' || env.SONAR_HOST_URL == ''
-        run: echo "Sonar skipped because SONAR_TOKEN or SONAR_HOST_URL is not configured."
-
   quality-gate:
     name: Quality Gate
     needs:
@@ -405,7 +374,6 @@ jobs:
       - osv-scan
       - trivy-fs
       - image-scan
-      - sonar
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -421,7 +389,6 @@ jobs:
           echo "osv-scan: ${{ needs.osv-scan.result }}"
           echo "trivy-fs: ${{ needs.trivy-fs.result }}"
           echo "image-scan: ${{ needs.image-scan.result }}"
-          echo "sonar: ${{ needs.sonar.result }}"
 
       - name: Fail on unsuccessful required jobs
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')

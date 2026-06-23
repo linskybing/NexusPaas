@@ -11,7 +11,9 @@
   registry (Harbor is only an isolated `harbor-system` foundation, never used
   for external promotion/rollback), 8-unit topology deploy/smoke, previous-image
   rollback per unit, production secrets (no `*-dev-*` references in the deploy
-  path), live staging DB migration/rollback drill, and remote CI/Sonar.
+  path), and live staging DB migration/rollback drill. Remote PR #33 evidence
+  now shows external SonarCloud Code Analysis and Backend Quality Gate passing;
+  that evidence does not close live P0.2-P0.5 or V1 external production launch.
 - **Web UI (`WEB-*`) is out of V1 scope** (API/CLI-first). The existing
   `frontend/` GUI is beta/future; `WEB-*` is required only before a future Web
   UI launch.
@@ -463,7 +465,7 @@ cleanup deleted 2 exact platform rows and left no API catalog leftovers.
 | --- | --- | --- |
 | Transactional outbox/inbox (service publishes) | Resolved for current delivery evidence. Single-record coupling via `App.*RecordWithEvent` / `App.UpsertRecordWithEvent` and **multi-record coupling via `App.WithTx`** (`tx.go`; `StoreTx` port + `PostgresStore.RunInTx`) — multiple writes plus events commit in one tx (in-memory fallback publishes after the owner write). **Verified foundation:** focused/full tests, quick gate, Sonar Quality Gate, live migration/validation jobs, 15-deployment rollout, PDP service-key scope fix, HTTP 201 `POST /api/v1/forms`, and matching durable `FormCreated` row. **Coupled:** generic CRUD + single-record sites in workload/imageregistry/orgproject/schedulerquota/requestnotification/storage/identity; authorizationpolicy non-batch and batch assignment/role/raw-permission mutations; schedulerquota plan/queue batch deletes, queue binding, and successful preemption `JobPreempted`; storage permission batches; identity user batch reset/role/delete paths; orgproject membership/project-member/quota/workspace/GPU/plan-binding paths; imageregistry catalog sync/publish/unpublish/delete; workload submit/cancel/config commit/instance command. **Live relay evidence:** representative storage events reached `published` with `relay_attempts=0` and were found in Redis DB1; synthetic `ga-outbox-crash-20260621103919` survived controlled relay unavailability plus relay-capable pod restart and then published after sentinel release. | No remaining outbox delivery-evidence action. Broader typed ownership remains tracked separately below. |
 | Typed domain data ownership | Core domains still rely too heavily on generic `platform_records` / JSONB payloads. | Move identity, tenant/project, workload, scheduler/quota, storage, registry/build, and billing-related data to typed schemas and repositories slice by slice. |
-| Reproducible toolchain | Local quick, Docker-backed, manifest rehearsal, 8-unit collaboration gates, full backend coverage run, and local Sonar Quality Gate are green. Remote CI and live external staging evidence remain open. Latest Sonar API status: `new_coverage=81.8`, `new_violations=0`, `new_duplicated_lines_density=0.8262`. | Keep local quick/Sonar/Docker-backed collaboration evidence green, provision remote CI/Sonar secrets, then capture live staging evidence per deployable unit. |
+| Reproducible toolchain | Local quick, Docker-backed, manifest rehearsal, 8-unit collaboration gates, full backend coverage run, and local Sonar Quality Gate are green. Remote PR #33 external SonarCloud Code Analysis and Backend Quality Gate evidence is passing; live external staging evidence remains open. Latest Sonar API status: `new_coverage=81.8`, `new_violations=0`, `new_duplicated_lines_density=0.8262`. | Keep local quick/Sonar/Docker-backed collaboration and PR Sonar/Backend Quality Gate evidence green, then capture live staging evidence per deployable unit. |
 | Harbor DR storage maturity | OPS-007 local drill now passes on Kubernetes static `local` PVs, but this storage is single-node and manually pre-provisioned. The runbook must recreate matching static PVs before restore readiness and recreate an empty Redis PVC because Redis is intentionally excluded as cache. This proves Harbor backup/restore mechanics for local evidence, not production-grade HA/off-cluster DR. | Keep static local PV evidence as the OPS-007 drill proof, then move the GA DR path to Longhorn/CSI snapshots or another reviewed HA/off-cluster design with encrypted backup storage and retention evidence before claiming production-grade DR. |
 
 ## P1 Architecture Maturity
@@ -487,7 +489,7 @@ cleanup deleted 2 exact platform rows and left no API catalog leftovers.
 | Service ownership docs | Service-level ownership is partially documented across several files. | Consolidate owner, API, data, config, test, and deployment responsibility per deployable unit. |
 | Provider ADRs | Provider abstraction is a target but not yet documented as concrete ADRs. | Add ADRs when replacing or abstracting current reference-stack assumptions. |
 | Supply chain | SBOM generation and image signing are GA goals but not enforced. | Add Syft/Cosign or equivalent after staging promotion is stable. |
-| Remote Sonar | GitHub-hosted Sonar still depends on repository secrets. | Provision reachable Sonar credentials and make the remote gate required when configured. |
+| Remote Sonar | PR #33 external `SonarCloud Code Analysis` and Backend Quality Gate evidence is passing. | Keep the external SonarCloud PR check required by repository policy; live P0.2-P0.5 staging evidence remains open. |
 
 ## Preserved Direction
 

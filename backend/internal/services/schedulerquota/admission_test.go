@@ -444,27 +444,42 @@ func TestSubmitAdmissionStreamingGuardrails(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			app := newSchedulerQuotaTestApp()
 			seedAdmissionProject(t, app, admissionFixture{})
-			for _, job := range tt.jobs {
-				job["project_id"] = "P1"
-				job["user_id"] = "U2"
-				createSchedulerRecord(t, app, workloadJobsResource, job)
-			}
+			seedStreamingAdmissionJobs(t, app, tt.jobs)
 
 			review, err := evaluateSubmitAdmission(context.Background(), newAdmissionReader(app.Store), tt.req, time.Now().UTC())
 
 			if tt.allowed {
-				if err != nil {
-					t.Fatalf("stream admission err = %v, want allowed", err)
-				}
-				if !review.StreamingSession || review.StreamMaxBitrateKbps != tt.req.StreamMaxBitrateKbps {
-					t.Fatalf("stream review = %#v, want stream metadata preserved", review)
-				}
+				requireStreamingAdmissionAllowed(t, review, err, tt.req)
 				return
 			}
-			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("stream admission err = %v, want %q", err, tt.want)
-			}
+			requireStreamingAdmissionRejected(t, err, tt.want)
 		})
+	}
+}
+
+func seedStreamingAdmissionJobs(t *testing.T, app *platform.App, jobs []map[string]any) {
+	t.Helper()
+	for _, job := range jobs {
+		job["project_id"] = "P1"
+		job["user_id"] = "U2"
+		createSchedulerRecord(t, app, workloadJobsResource, job)
+	}
+}
+
+func requireStreamingAdmissionAllowed(t *testing.T, review admissionReview, err error, req submitAdmissionRequest) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("stream admission err = %v, want allowed", err)
+	}
+	if !review.StreamingSession || review.StreamMaxBitrateKbps != req.StreamMaxBitrateKbps {
+		t.Fatalf("stream review = %#v, want stream metadata preserved", review)
+	}
+}
+
+func requireStreamingAdmissionRejected(t *testing.T, err error, want string) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("stream admission err = %v, want %q", err, want)
 	}
 }
 

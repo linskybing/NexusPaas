@@ -9,8 +9,10 @@ data:
   REDIS_URL: "redis://redis:6379/0"
   EVENT_BUS_URL: "redis://redis:6379/1"
   EVENT_RELAY_BATCH_SIZE: "100"
-  DEX_URL: "http://dex:5556/dex"
-  HARBOR_URL: "http://harbor.harbor-system.svc.cluster.local"
+  # Staging/production overlays must set TLS endpoints for Dex and the external
+  # registry. Keep the base free of insecure defaults.
+  DEX_URL: ""
+  HARBOR_URL: ""
   ADAPTER_CONFIG: '{"harbor":{"add_prefix":"/api/v2.0"}}'
   JWT_AUDIENCE: "platform"
   STREAM_TURN_URIS: ""
