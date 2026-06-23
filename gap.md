@@ -14,7 +14,9 @@ _Updated: 2026-06-22 (re-verified). Bar: **Full GA**
   registry (Harbor is only an isolated `harbor-system` foundation, never used
   for external promotion/rollback), 8-unit topology deploy/smoke, previous-image
   rollback per unit, production secrets (no `*-dev-*` references in the deploy
-  path), live staging DB migration/rollback drill, and remote CI/Sonar.
+  path), and live staging DB migration/rollback drill. Remote PR #33 evidence
+  now shows external SonarCloud Code Analysis and Backend Quality Gate passing;
+  that evidence does not close live P0.2-P0.5 or V1 external production launch.
 - **Web UI (`WEB-*`) is out of V1 scope** (API/CLI-first). The existing
   `frontend/` GUI is beta/future; `WEB-*` is required only before a future Web
   UI launch.
@@ -106,7 +108,9 @@ live nonzero requested-GPU pod evidence on
  plus temporary build/tune pods were cleaned.
 Latest local SonarScanner Quality Gate passes with API readback:
 `new_coverage=81.8`, `new_violations=0`,
-`new_duplicated_lines_density=0.8262`.
+`new_duplicated_lines_density=0.8262`. Remote PR #33 evidence also shows
+external SonarCloud Code Analysis and Backend Quality Gate passing; live
+P0.2-P0.5 launch evidence remains open.
 
 ## 1. Done — evidenced v1 proposed gap slices (not full GA)
 

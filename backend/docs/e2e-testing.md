@@ -498,6 +498,29 @@ apply/validate evidence, 8-unit health/ready/metrics smoke, critical journey
 E2E, previous-image rollback, and re-deploy evidence. See
 `docs/beta-launch-readiness.md`.
 
+Use the live rehearsal harness only from an operator machine pointed at a real
+staging context:
+
+```sh
+LIVE_STAGING_REHEARSAL=1 \
+KUBE_CONTEXT=<real-staging-context> \
+NAMESPACE=nexuspaas \
+CANDIDATE_IMAGE=registry.example.com/nexuspaas/backend@sha256:<64-lowercase-hex-digest> \
+PROMOTION_EVIDENCE=<promotion-evidence-url-or-path> \
+REGISTRY_SCAN_STATUS=Success \
+bash backend/scripts/production-beta-live-rehearsal.sh
+```
+
+The script refuses Docker Desktop, kind, minikube, localhost, loopback, and
+other local-style contexts, requires `kubectl config current-context` to match
+`KUBE_CONTEXT`, and passes that context to live cluster commands. It records
+only Secret name presence, not Secret values, then creates migration
+apply/validate Jobs, deploys the candidate image to all 8 backend units, checks
+`/healthz`, `/readyz`, `/metrics`, gateway `/openapi.json`, and gateway
+`/service-registry` for 15 logical services, and performs per-unit
+previous-image rollback plus candidate redeploy smoke. The report is written to
+`${ARTIFACT_DIR}/production-beta-live-rehearsal-report.md`.
+
 Existing manual gates remain:
 
 ```sh

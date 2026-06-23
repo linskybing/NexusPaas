@@ -73,6 +73,37 @@ The `beta-rc` gate is non-live by default. Before external Production Beta
 traffic is allowed, run a live staging rehearsal with real staging secrets and a
 throwaway or dedicated staging namespace.
 
+The operator-only harness is:
+
+```sh
+LIVE_STAGING_REHEARSAL=1 \
+KUBE_CONTEXT=<real-staging-context> \
+NAMESPACE=nexuspaas \
+CANDIDATE_IMAGE=registry.example.com/nexuspaas/backend@sha256:<64-lowercase-hex-digest> \
+PROMOTION_EVIDENCE=<promotion-evidence-url-or-path> \
+REGISTRY_SCAN_STATUS=Success \
+bash backend/scripts/production-beta-live-rehearsal.sh
+```
+
+It refuses Docker Desktop, kind, minikube, localhost, loopback, and other
+local-style contexts; `kubectl config current-context` must exactly match
+`KUBE_CONTEXT`. The candidate image must come from a non-local external
+registry and must be pinned with `@sha256:<64 lowercase hex digest>`. If
+operators want the harness to perform promotion, provide both `SOURCE_IMAGE`
+and `PROMOTED_IMAGE_TAG`; the script then uses an already-installed `crane copy`. Otherwise
+`PROMOTION_EVIDENCE` is mandatory. `REGISTRY_SCAN_STATUS` or
+`REGISTRY_SCAN_EVIDENCE` is always mandatory.
+
+The harness checks Kubernetes Secret names only, records previous app-container
+images per backend unit, creates `ADMIN_TASK=apply-migrations` and
+`ADMIN_TASK=validate-migrations` Jobs, applies the production-beta render, sets
+the candidate image on each `deployment/<unit>`, waits for rollouts, port-forward
+smokes `/healthz`, `/readyz`, and `/metrics` for all 8 backend units, verifies
+gateway `/openapi.json` and `/service-registry` with all 15 logical services,
+then rolls each unit back to its recorded previous image and redeploys the
+candidate. The final artifact is
+`${ARTIFACT_DIR}/production-beta-live-rehearsal-report.md`.
+
 The live rehearsal must prove:
 
 - Production-beta manifests apply successfully through the chosen GitOps or

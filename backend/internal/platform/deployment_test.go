@@ -403,6 +403,105 @@ func TestProductionBetaReleaseCandidateGateIsDocumented(t *testing.T) {
 	requireContains(t, e2eDocsPath, e2eDocs, "script subcommand remains available")
 }
 
+func TestProductionBetaLiveRehearsalHarnessIsGuarded(t *testing.T) {
+	scriptPath := "../../scripts/production-beta-live-rehearsal.sh"
+	script := readTextFile(t, scriptPath)
+	requireContains(t, scriptPath, script, "set -Eeuo pipefail")
+	requireNotContains(t, scriptPath, script, "set -x")
+	requireContains(t, scriptPath, script, "LIVE_STAGING_REHEARSAL=1 is required before any live staging mutation")
+	requireContains(t, scriptPath, script, "require_live_opt_in")
+	requireContains(t, scriptPath, script, "require_env KUBE_CONTEXT")
+	requireContains(t, scriptPath, script, "kubectl config current-context")
+	requireContains(t, scriptPath, script, "kubectl --context \"${KUBE_CONTEXT}\" -n \"${NAMESPACE}\"")
+	requireContains(t, scriptPath, script, "refusing local-style kube context")
+	for _, marker := range []string{"docker-desktop", "localhost", "127.0.0.1", "loopback", "kind", "minikube"} {
+		requireContains(t, scriptPath, script, marker)
+	}
+
+	requireContains(t, scriptPath, script, "require_candidate_image")
+	requireContains(t, scriptPath, script, "CANDIDATE_IMAGE must be digest-pinned with @sha256:<64 lowercase hex digest>")
+	requireContains(t, scriptPath, script, "grep -Eq '^[a-f0-9]{64}$'")
+	requireContains(t, scriptPath, script, "reject_local_image_ref \"${CANDIDATE_IMAGE}\"")
+	requireContains(t, scriptPath, script, "crane copy \"${SOURCE_IMAGE}\" \"${PROMOTED_IMAGE_TAG}\"")
+	requireContains(t, scriptPath, script, "require_env PROMOTION_EVIDENCE")
+	requireContains(t, scriptPath, script, "REGISTRY_SCAN_STATUS or REGISTRY_SCAN_EVIDENCE is required")
+
+	requireContains(t, scriptPath, script, "kubectl kustomize backend")
+	requireContains(t, scriptPath, script, "kubectl apply --dry-run=client --validate=false")
+	requireContains(t, scriptPath, script, "production-beta render contains all-in-one platform Deployment")
+	requireContains(t, scriptPath, script, "production-beta render contains dev references")
+	requireContains(t, scriptPath, script, "rendered_deployment_names")
+	requireContains(t, scriptPath, script, "rendered_has_deployment")
+	for _, unit := range productionBackendUnits() {
+		requireContains(t, scriptPath, script, unit)
+	}
+
+	requireContains(t, scriptPath, script, "required_secret_names")
+	requireContains(t, scriptPath, script, "kctl get secret \"${secret}\" -o name")
+	requireNotContains(t, scriptPath, script, "kubectl get secret")
+	requireNotContains(t, scriptPath, script, "get secret \"${secret}\" -o yaml")
+	requireNotContains(t, scriptPath, script, "get secret \"${secret}\" -o json")
+	requireNotContains(t, scriptPath, script, "get secret \"${secret}\" -o jsonpath")
+	requireNotContains(t, scriptPath, script, "jsonpath=.*data")
+	requireNotContains(t, scriptPath, script, "base64")
+
+	requireContains(t, scriptPath, script, "ADMIN_TASK")
+	requireContains(t, scriptPath, script, "apply-migrations")
+	requireContains(t, scriptPath, script, "validate-migrations")
+	requireContains(t, scriptPath, script, "kctl wait --for=condition=complete --timeout=\"${JOB_TIMEOUT}\" \"job/${job_name}\"")
+	requireContains(t, scriptPath, script, "kctl apply -f \"${RENDER_FILE}\"")
+	requireContains(t, scriptPath, script, "kctl set image \"deployment/${unit}\" \"app=${CANDIDATE_IMAGE}\"")
+	requireContains(t, scriptPath, script, "kctl rollout status \"deployment/${unit}\" --timeout=\"${ROLLOUT_TIMEOUT}\"")
+	requireContains(t, scriptPath, script, "/healthz")
+	requireContains(t, scriptPath, script, "/readyz")
+	requireContains(t, scriptPath, script, "/metrics")
+	requireContains(t, scriptPath, script, "/openapi.json")
+	requireContains(t, scriptPath, script, "/service-registry")
+	requireContains(t, scriptPath, script, "service-registry contains ${count} services, want 15")
+	requireContains(t, scriptPath, script, "previous_image_for_unit")
+	requireContains(t, scriptPath, script, "rollback_and_redeploy_each_unit")
+	requireContains(t, scriptPath, script, "app=${previous_image}")
+	requireContains(t, scriptPath, script, "app=${CANDIDATE_IMAGE}")
+
+	requireContains(t, scriptPath, script, "Production Beta Live Rehearsal Report")
+	for _, field := range []string{
+		"Candidate image",
+		"Candidate digest",
+		"Promotion evidence",
+		"Registry scan status",
+		"Secret presence",
+		"Migration Jobs",
+		"Rollouts",
+		"Smoke checks",
+		"Rollback and redeploy",
+		"close live P0.2-P0.5",
+	} {
+		requireContains(t, scriptPath, script, field)
+	}
+
+	readinessPath := "../../docs/beta-launch-readiness.md"
+	readiness := readTextFile(t, readinessPath)
+	requireContains(t, readinessPath, readiness, "operator-only harness")
+	requireContains(t, readinessPath, readiness, "bash backend/scripts/production-beta-live-rehearsal.sh")
+	requireContains(t, readinessPath, readiness, "LIVE_STAGING_REHEARSAL=1")
+	requireContains(t, readinessPath, readiness, "KUBE_CONTEXT=<real-staging-context>")
+	requireContains(t, readinessPath, readiness, "Docker Desktop, kind, minikube, localhost, loopback")
+	requireContains(t, readinessPath, readiness, "Secret names only")
+	requireContains(t, readinessPath, readiness, "rolls each unit back to its recorded previous image")
+	requireContains(t, readinessPath, readiness, "production-beta-live-rehearsal-report.md")
+
+	e2eDocsPath := "../../docs/e2e-testing.md"
+	e2eDocs := readTextFile(t, e2eDocsPath)
+	requireContains(t, e2eDocsPath, e2eDocs, "operator machine")
+	requireContains(t, e2eDocsPath, e2eDocs, "staging context")
+	requireContains(t, e2eDocsPath, e2eDocs, "bash backend/scripts/production-beta-live-rehearsal.sh")
+	requireContains(t, e2eDocsPath, e2eDocs, "requires `kubectl config current-context` to match")
+	requireContains(t, e2eDocsPath, e2eDocs, "records")
+	requireContains(t, e2eDocsPath, e2eDocs, "only Secret name presence")
+	requireContains(t, e2eDocsPath, e2eDocs, "per-unit")
+	requireContains(t, e2eDocsPath, e2eDocs, "previous-image rollback plus candidate redeploy smoke")
+}
+
 func requireProductionDeploymentManifest(t *testing.T, path string) {
 	t.Helper()
 	service := filepath.Base(filepath.Dir(filepath.Dir(path)))
