@@ -166,7 +166,7 @@ go test -tags e2e ./internal/e2e \
   -run 'TestServiceRouteIsolationContract|TestServiceIsolationValidationE2E|TestIsolatedRuntimeRegistrationE2E|TestProviderConsumerContractMatrix|TestCriticalCrossServiceJourneys|TestSchedulerAdmissionOwnerReadContractsE2E|TestNonBlobIsolatedServiceIgnoresObjectStoreConfigE2E|TestStorageMountPlanContractE2E|TestImageBuildGovernanceE2E|TestIDELifecycleProjectAccessE2E|TestWorkloadConfigFileLifecycleE2E' \
   -count=1 -v | tee /tmp/cross-service-e2e.log
 rg '^--- PASS: Test(ServiceRouteIsolationContract|ServiceIsolationValidationE2E|IsolatedRuntimeRegistrationE2E|ProviderConsumerContractMatrix|CriticalCrossServiceJourneys|SchedulerAdmissionOwnerReadContractsE2E|NonBlobIsolatedServiceIgnoresObjectStoreConfigE2E|StorageMountPlanContractE2E|ImageBuildGovernanceE2E|IDELifecycleProjectAccessE2E|WorkloadConfigFileLifecycleE2E)' /tmp/cross-service-e2e.log
-! rg 'SKIP|skipping|Skipping' /tmp/cross-service-e2e.log
+! rg '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]' /tmp/cross-service-e2e.log
 ```
 
 Run the full E2E package after the focused gate when optional slice tests are
@@ -202,7 +202,7 @@ set -o pipefail
 go test -tags e2e ./internal/e2e -run '^TestStorageMountPlanContractE2E$' -count=1 -v \
   | tee /tmp/storage-mount-plan-e2e.log
 rg '^--- PASS: TestStorageMountPlanContractE2E' /tmp/storage-mount-plan-e2e.log
-! rg 'SKIP|skipping|Skipping' /tmp/storage-mount-plan-e2e.log
+! rg '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]' /tmp/storage-mount-plan-e2e.log
 ```
 
 Run the focused core user-journey E2E while working on workload ConfigFiles,
@@ -255,7 +255,7 @@ TEST_LIVE_K8S_PRIORITY_CLASS_SYNC=1 \
   go test -tags e2e ./internal/e2e -run '^TestPriorityClassSyncWorkerLiveK8sE2E$' -count=1 -v \
   | tee /tmp/priority-class-sync-e2e.log
 rg '^--- PASS: TestPriorityClassSyncWorkerLiveK8sE2E' /tmp/priority-class-sync-e2e.log
-! rg 'SKIP|skipping|Skipping' /tmp/priority-class-sync-e2e.log
+! rg '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]' /tmp/priority-class-sync-e2e.log
 ```
 
 Run the focused Docker image cleanup CronJob provisioner E2E while working on
@@ -283,7 +283,7 @@ TEST_LIVE_K8S_DOCKER_CLEANUP=1 \
   go test -tags e2e ./internal/e2e -run '^TestDockerImageCleanupCronJobLiveK8sE2E$' -count=1 -v \
   | tee /tmp/docker-cleanup-e2e.log
 rg '^--- PASS: TestDockerImageCleanupCronJobLiveK8sE2E' /tmp/docker-cleanup-e2e.log
-! rg 'SKIP|skipping|Skipping' /tmp/docker-cleanup-e2e.log
+! rg '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]' /tmp/docker-cleanup-e2e.log
 ```
 
 Run the live Kubernetes Longhorn RWX smoke while working on storage worker
@@ -299,7 +299,7 @@ TEST_LIVE_K8S_LONGHORN_RWX_SMOKE=1 \
   go test -tags e2e ./internal/e2e -run '^TestLonghornRWXHealthWorkerLiveK8sSmokeE2E$' -count=1 -v \
   | tee /tmp/longhorn-rwx-smoke-e2e.log
 rg '^--- PASS: TestLonghornRWXHealthWorkerLiveK8sSmokeE2E' /tmp/longhorn-rwx-smoke-e2e.log
-! rg 'SKIP|skipping|Skipping' /tmp/longhorn-rwx-smoke-e2e.log
+! rg '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]' /tmp/longhorn-rwx-smoke-e2e.log
 ```
 
 Run the optional real-Longhorn gate only when the current cluster is expected to
@@ -345,7 +345,7 @@ TEST_LIVE_LDAP_IDENTITY=1 \
   go test -tags e2e ./internal/e2e -run '^TestIdentityLDAPStrategyMirrorSyncE2E$' -count=1 -v \
   | tee /tmp/identity-ldap-e2e.log
 rg '^--- PASS: TestIdentityLDAPStrategyMirrorSyncE2E' /tmp/identity-ldap-e2e.log
-! rg 'SKIP|skipping|Skipping' /tmp/identity-ldap-e2e.log
+! rg '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]' /tmp/identity-ldap-e2e.log
 ```
 
 Run the live LDAP + project plan + Kubernetes deploy E2E while working on the
@@ -364,7 +364,7 @@ TEST_LIVE_K8S_USER_PROJECT_PLAN_DEPLOY=1 \
   go test -tags e2e ./internal/e2e -run '^TestLiveLDAPUserProjectPlanConfigDeployE2E$' -count=1 -v \
   | tee /tmp/live-user-project-plan-deploy-e2e.log
 rg '^--- PASS: TestLiveLDAPUserProjectPlanConfigDeployE2E' /tmp/live-user-project-plan-deploy-e2e.log
-! rg 'SKIP|skipping|Skipping' /tmp/live-user-project-plan-deploy-e2e.log
+! rg '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]' /tmp/live-user-project-plan-deploy-e2e.log
 ```
 
 Run the live Kubernetes queue-duration, plan-window, and auto-preemption E2E
@@ -380,7 +380,7 @@ TEST_LIVE_K8S_PLAN_WINDOW_DURATION_PREEMPTION=1 \
   go test -tags e2e ./internal/e2e -run '^TestLiveK8sPlanWindowDurationPreemptionE2E$' -count=1 -v \
   | tee /tmp/live-plan-window-duration-preemption-e2e.log
 rg '^--- PASS: TestLiveK8sPlanWindowDurationPreemptionE2E' /tmp/live-plan-window-duration-preemption-e2e.log
-! rg 'SKIP|skipping|Skipping' /tmp/live-plan-window-duration-preemption-e2e.log
+! rg '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]' /tmp/live-plan-window-duration-preemption-e2e.log
 ```
 
 Run the live Kubernetes ConfigFile DRA dispatch E2E only when the current
@@ -431,7 +431,7 @@ TEST_LIVE_K8S_POLICY_DATA_SYNC=1 \
   go test -tags e2e ./internal/e2e -run '^TestPolicyDataSyncConfigMapE2E$' -count=1 -v \
   | tee /tmp/policy-data-sync-e2e.log
 rg '^--- PASS: TestPolicyDataSyncConfigMapE2E' /tmp/policy-data-sync-e2e.log
-! rg 'SKIP|skipping|Skipping' /tmp/policy-data-sync-e2e.log
+! rg '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]' /tmp/policy-data-sync-e2e.log
 ```
 
 ## Production Beta Quality Gate

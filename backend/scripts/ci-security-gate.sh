@@ -48,6 +48,7 @@ RUNTIME_PID=""
 
 FOCUSED_E2E_PATTERN='TestServiceRouteIsolationContract|TestServiceIsolationValidationE2E|TestIsolatedRuntimeRegistrationE2E|TestProviderConsumerContractMatrix|TestCriticalCrossServiceJourneys|TestSchedulerAdmissionOwnerReadContractsE2E|TestNonBlobIsolatedServiceIgnoresObjectStoreConfigE2E|TestStorageMountPlanContractE2E'
 FOCUSED_E2E_PASS_PATTERN='^--- PASS: Test(ServiceRouteIsolationContract|ServiceIsolationValidationE2E|IsolatedRuntimeRegistrationE2E|ProviderConsumerContractMatrix|CriticalCrossServiceJourneys|SchedulerAdmissionOwnerReadContractsE2E|NonBlobIsolatedServiceIgnoresObjectStoreConfigE2E|StorageMountPlanContractE2E)'
+FOCUSED_E2E_SKIP_PATTERN='^[[:space:]]*--- SKIP:|^SKIP[[:space:]]'
 
 mkdir -p "${ARTIFACT_DIR}" "${TOOLS_BIN}" "${DOCKER_CONFIG_DIR}" "${TRIVY_CACHE_DIR}"
 if [ ! -f "${DOCKER_CONFIG_DIR}/config.json" ]; then
@@ -282,7 +283,7 @@ run_focused_e2e() {
   run_backend go test -tags e2e ./internal/e2e -run "${FOCUSED_E2E_PATTERN}" -count=1 -v 2>&1 | tee "${log_file}"
   grep -E "${FOCUSED_E2E_PASS_PATTERN}" "${log_file}" >/dev/null \
     || die "focused E2E did not emit required PASS lines"
-  if grep -Eiq 'SKIP|skipping' "${log_file}"; then
+  if grep -Eq "${FOCUSED_E2E_SKIP_PATTERN}" "${log_file}"; then
     die "focused E2E skipped a required test"
   fi
 }
@@ -862,9 +863,15 @@ install_go_tool() {
   local version="$3"
   local target="${TOOLS_BIN}/${binary}-${version}"
   if [ ! -x "${target}" ]; then
+    local attempt
     log "Installing ${binary} ${version}"
-    GOBIN="${TOOLS_BIN}" run_backend go install "${module}@${version}" \
-      || die "failed to install ${binary} ${version}"
+    for attempt in 1 2 3; do
+      if GOBIN="${TOOLS_BIN}" run_backend go install "${module}@${version}"; then
+        break
+      fi
+      [ "${attempt}" -lt 3 ] || die "failed to install ${binary} ${version}"
+      sleep $((attempt * 10))
+    done
     mv "${TOOLS_BIN}/${binary}" "${target}" \
       || die "failed to cache ${binary} ${version}"
   fi

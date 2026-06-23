@@ -344,6 +344,8 @@ func TestProductionBetaReleaseCandidateGateIsDocumented(t *testing.T) {
 	requireContains(t, scriptPath, script, "sonar) run_sonar_gate")
 	requireContains(t, scriptPath, script, "sonar_scanner_install_complete")
 	requireContains(t, scriptPath, script, "Discarding incomplete SonarScanner")
+	requireContains(t, scriptPath, script, "FOCUSED_E2E_SKIP_PATTERN='^[[:space:]]*--- SKIP:|^SKIP[[:space:]]'")
+	requireNotContains(t, scriptPath, script, "grep -Eiq 'SKIP|skipping'")
 	requireContains(t, scriptPath, script, "CI_GATE_SONAR_REQUIRED")
 	requireContains(t, scriptPath, script, "SONAR_TOKEN and SONAR_HOST_URL are required for this CI event")
 	requireContains(t, scriptPath, script, "- Sonar Quality Gate: %s")
@@ -357,6 +359,10 @@ func TestProductionBetaReleaseCandidateGateIsDocumented(t *testing.T) {
 	requireContains(t, workflowPath, workflow, "sonarqube-scan-action")
 	requireContains(t, workflowPath, workflow, "-Dsonar.qualitygate.wait=true")
 	requireContains(t, workflowPath, workflow, "github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository")
+	requireContains(t, workflowPath, workflow, "FOCUSED_E2E_SKIP_PATTERN: '^[[:space:]]*--- SKIP:|^SKIP[[:space:]]'")
+	requireContains(t, workflowPath, workflow, "go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}")
+	requireNotContains(t, workflowPath, workflow, "golang/govulncheck-action@v1")
+	requireNotContains(t, workflowPath, workflow, "grep -Eiq 'SKIP|skipping'")
 	requireNotContains(t, workflowPath, workflow, "Sonar skipped")
 
 	readinessPath := "../../docs/beta-launch-readiness.md"
