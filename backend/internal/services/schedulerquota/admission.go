@@ -42,6 +42,7 @@ type submitAdmissionRequest struct {
 	RequiredMemory         int
 	GPUCount               int
 	SMPercentage           *int
+	MPSShareProjectID      string
 	StreamingSession       bool
 	StreamMaxBitrateKbps   int
 	StreamBitrateCapKbps   int
@@ -189,6 +190,9 @@ func evaluateSubmitAdmission(ctx context.Context, reader admissionReader, req su
 		return review, err
 	}
 	review.DeviceClassName = req.DeviceClassName
+	if err := enforceAdmissionMPSPolicy(plan, req); err != nil {
+		return review, err
+	}
 
 	floor, err := admissionResourceFloorFromRequest(req)
 	if err != nil {

@@ -27,6 +27,7 @@ func decodeSubmitAdmissionRequest(payload map[string]any) (submitAdmissionReques
 		sm := int(getInt64(rawSM, 0))
 		req.SMPercentage = &sm
 	}
+	req.MPSShareProjectID = shared.TextValue(payload, "mps_share_project_id", "mpsShareProjectId", "shared_claim_project_id", "sharedClaimProjectId")
 	return req, nil
 }
 

@@ -108,6 +108,28 @@ func enforceAdmissionDeviceClass(plan contracts.Record[map[string]any], req *sub
 	return deny(http.StatusForbidden, fmt.Sprintf("GPU model %q is not allowed by the plan", deviceClass))
 }
 
+// enforceAdmissionMPSPolicy implements GPU-012: MPS GPU sharing across projects
+// is blocked unless a platform admin explicitly allows it on the plan. MPS is
+// requested when the job declares an SM percentage below 100 (fractional GPU
+// sharing). Same-project (single-tenant) MPS is always allowed; cross-project
+// sharing is signalled by mps_share_project_id pointing at a different project.
+func enforceAdmissionMPSPolicy(plan contracts.Record[map[string]any], req submitAdmissionRequest) error {
+	if req.SMPercentage == nil || *req.SMPercentage >= 100 {
+		return nil
+	}
+	if shared.BoolValue(plan.Data, "mps_forbidden", "mpsForbidden") {
+		return deny(http.StatusForbidden, "MPS GPU sharing is forbidden by the plan; use MIG or a whole GPU")
+	}
+	share := strings.TrimSpace(req.MPSShareProjectID)
+	if share == "" || share == req.ProjectID {
+		return nil
+	}
+	if shared.BoolValue(plan.Data, "allow_cross_project_mps", "allowCrossProjectMPS") {
+		return nil
+	}
+	return deny(http.StatusForbidden, "MPS GPU sharing across projects requires platform admin approval (plan allow_cross_project_mps)")
+}
+
 func admissionUsageForJobs(ctx context.Context, reader admissionReader, projectID, userID string, usage admissionUsage) admissionUsage {
 	for _, job := range reader.ListWorkloadJobs(ctx) {
 		status := strings.ToLower(shared.TextValue(job.Data, "status", "Status"))

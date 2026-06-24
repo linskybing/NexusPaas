@@ -59,6 +59,7 @@ func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/internal/scheduler/admission", reviewSubmitAdmission)
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/internal/scheduler/preemptions", handlePreemption)
 	registerResourceQuotaReconciler(app)
+	registerGPUReservationDriftDetector(app)
 	registerPlanWindowReaper(app)
 	registerPriorityClassSync(app)
 }
