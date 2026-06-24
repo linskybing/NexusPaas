@@ -99,6 +99,26 @@ func (m *Metrics) SetCounter(name string, labels map[string]string, value int64)
 	m.setLabeledMetric(name, "counter", labels, value)
 }
 
+func (m *Metrics) IncLabeledCounter(name string, labels map[string]string) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return
+	}
+	labelText, ok := prometheusLabels(labels)
+	if !ok {
+		return
+	}
+	key := name + "\xff" + labelText
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sample := m.labeled[key]
+	if sample.name == "" {
+		sample = metricSample{name: name, kind: "counter", labels: labelText}
+	}
+	sample.value++
+	m.labeled[key] = sample
+}
+
 func (m *Metrics) setLabeledMetric(name, kind string, labels map[string]string, value int64) {
 	name = strings.TrimSpace(name)
 	if name == "" {

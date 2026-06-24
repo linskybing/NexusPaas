@@ -1,9 +1,11 @@
 package platform
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -149,6 +151,93 @@ func TestProductionBetaRuntimeConfigAndSecretContract(t *testing.T) {
 	}
 	for _, unit := range productionBackendUnits() {
 		requireContains(t, contractPath, contract, fmt.Sprintf("`%s-runtime-secret`", unit))
+	}
+}
+
+func TestProductionBetaSecretDeployPathStaticEvidence(t *testing.T) {
+	requiredSecrets := productionBetaRequiredSecretNames()
+
+	for _, path := range productionBetaSecretSourcePaths(t) {
+		body := readTextFile(t, path)
+		if strings.HasSuffix(path, "production-beta-live-rehearsal.sh") {
+			body = withoutShellFunction(body, "forbidden_secret_ref_pattern")
+		}
+		requireNoForbiddenProductionBetaSecretRefs(t, path, body)
+	}
+
+	kustomizationPath := "../../kustomization.yaml"
+	kustomization := readTextFile(t, kustomizationPath)
+	for _, required := range []string{
+		"deploy/k3s/production-beta/runtime-config.yaml",
+		"deploy/k3s/production-beta/runtime-secret-contract.yaml",
+		"deploy/k3s/production-beta/backend-units.yaml",
+		"deploy/k3s/production-beta/backing-secret-postgres-patch.yaml",
+		"deploy/k3s/production-beta/backing-secret-dex-patch.yaml",
+		"deploy/k3s/production-beta/backing-secret-minio-patch.yaml",
+	} {
+		requireContains(t, kustomizationPath, kustomization, required)
+	}
+	requireNotContains(t, kustomizationPath, kustomization, "deploy/k3s/platform.yaml")
+
+	requireSecretKeyRef(t, "../../deploy/k3s/production-beta/backing-secret-postgres-patch.yaml", "postgres-password", "password")
+	requireSecretKeyRef(t, "../../deploy/k3s/production-beta/backing-secret-dex-patch.yaml", "dex-password", "bcrypt-hash")
+	requireSecretKeyRef(t, "../../deploy/k3s/production-beta/backing-secret-dex-patch.yaml", "postgres-password", "password")
+	requireSecretKeyRef(t, "../../deploy/k3s/production-beta/backing-secret-minio-patch.yaml", "minio-credentials", "access-key")
+	requireSecretKeyRef(t, "../../deploy/k3s/production-beta/backing-secret-minio-patch.yaml", "minio-credentials", "secret-key")
+
+	unitManifestPath := "../../deploy/k3s/production-beta/backend-units.yaml"
+	unitManifest := readTextFile(t, unitManifestPath)
+	requireOnlyExpectedRuntimeSecretRefs(t, unitManifestPath, unitManifest, productionBetaRuntimeSecretNames())
+
+	contractPath := "../../deploy/k3s/production-beta/runtime-secret-contract.yaml"
+	contract := readTextFile(t, contractPath)
+	for _, secret := range requiredSecrets {
+		requireContains(t, contractPath, contract, "`"+secret+"`")
+	}
+	for _, key := range []string{
+		"`password`",
+		"`bcrypt-hash`",
+		"`access-key`",
+		"`secret-key`",
+		"`TURN_STATIC_AUTH_SECRET`",
+		"`DATABASE_URL`",
+		"`SERVICE_IDENTITY_KEY`",
+		"`SERVICE_TRUSTED_IDENTITIES`",
+		"`AUTHORIZATION_POLICY_API_KEY`",
+		"`STREAM_TURN_SHARED_SECRET`",
+	} {
+		requireContains(t, contractPath, contract, key)
+	}
+
+	scriptPath := "../../scripts/production-beta-live-rehearsal.sh"
+	script := readTextFile(t, scriptPath)
+	for _, secret := range requiredSecrets {
+		requireContains(t, scriptPath, script, secret)
+	}
+	requireContains(t, scriptPath, script, "validate_render_secret_refs")
+	requireContains(t, scriptPath, script, "forbidden_secret_ref_pattern")
+	requireContains(t, scriptPath, script, "kctl get secret \"${secret}\" -o name")
+	requireNotContains(t, scriptPath, script, "get secret \"${secret}\" -o yaml")
+	requireNotContains(t, scriptPath, script, "get secret \"${secret}\" -o json")
+	requireNotContains(t, scriptPath, script, "get secret \"${secret}\" -o jsonpath")
+	requireNotContains(t, scriptPath, script, "jsonpath=.*data")
+	requireNotContains(t, scriptPath, script, "base64")
+
+	render := renderProductionBetaKustomization(t)
+	requireNoForbiddenProductionBetaSecretRefs(t, "kubectl kustomize backend", render)
+	requireNotContains(t, "kubectl kustomize backend", render, "\nkind: Secret\n")
+	requireNotContains(t, "kubectl kustomize backend", render, "\nstringData:")
+	for _, secret := range requiredSecrets {
+		requireContains(t, "kubectl kustomize backend", render, secret)
+	}
+	for _, snippet := range []string{
+		"key: password\n              name: postgres-password",
+		"key: bcrypt-hash\n              name: dex-password",
+		"key: access-key\n              name: minio-credentials",
+		"key: secret-key\n              name: minio-credentials",
+		"key: TURN_STATIC_AUTH_SECRET\n              name: coturn-runtime-secret",
+	} {
+		requireContains(t, "kubectl kustomize backend", render, snippet)
 	}
 }
 
@@ -661,6 +750,134 @@ func logicalServiceUnits() map[string]string {
 		"scheduler-quota-service":      "compute-control-plane",
 		"k8s-control-service":          "compute-control-plane",
 	}
+}
+
+func productionBetaRuntimeSecretNames() []string {
+	secrets := make([]string, 0, len(productionBackendUnits()))
+	for _, unit := range productionBackendUnits() {
+		secrets = append(secrets, unit+"-runtime-secret")
+	}
+	return secrets
+}
+
+func productionBetaRequiredSecretNames() []string {
+	return append([]string{
+		"postgres-password",
+		"dex-password",
+		"minio-credentials",
+		"coturn-runtime-secret",
+	}, productionBetaRuntimeSecretNames()...)
+}
+
+func productionBetaForbiddenSecretTerms() []string {
+	return []string{
+		"postgres-dev-password",
+		"dex-dev-password",
+		"minio-dev-credentials",
+		"-dev-",
+		"-test-",
+		"-local-",
+		"placeholder-secret",
+		"sample-secret",
+		"dummy-secret",
+		"fake-secret",
+		"test-secret",
+		"local-secret",
+		"change-me",
+		"changeme",
+	}
+}
+
+func productionBetaSecretSourcePaths(t *testing.T) []string {
+	t.Helper()
+	paths := []string{
+		"../../kustomization.yaml",
+		"../../scripts/production-beta-live-rehearsal.sh",
+	}
+	productionBetaFiles, err := filepath.Glob("../../deploy/k3s/production-beta/*.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths = append(paths, productionBetaFiles...)
+	return paths
+}
+
+func requireNoForbiddenProductionBetaSecretRefs(t *testing.T, path, body string) {
+	t.Helper()
+	for _, forbidden := range productionBetaForbiddenSecretTerms() {
+		requireNotContains(t, path, body, forbidden)
+	}
+}
+
+func requireSecretKeyRef(t *testing.T, path, name, key string) {
+	t.Helper()
+	body := readTextFile(t, path)
+	requireContains(t, path, body, "secretKeyRef:")
+	requireContains(t, path, body, "name: "+name)
+	requireContains(t, path, body, "key: "+key)
+}
+
+func requireOnlyExpectedRuntimeSecretRefs(t *testing.T, path, body string, expected []string) {
+	t.Helper()
+	expectedSet := map[string]bool{}
+	for _, secret := range expected {
+		expectedSet[secret] = true
+	}
+	found := map[string]int{}
+	for _, line := range strings.Split(body, "\n") {
+		trimmed := strings.TrimSpace(line)
+		const prefix = "- secretRef: {name: "
+		if !strings.HasPrefix(trimmed, prefix) || !strings.HasSuffix(trimmed, "}") {
+			continue
+		}
+		secret := strings.TrimSuffix(strings.TrimPrefix(trimmed, prefix), "}")
+		if !expectedSet[secret] {
+			t.Fatalf("%s contains unexpected runtime secretRef %q", path, secret)
+		}
+		found[secret]++
+	}
+	for _, secret := range expected {
+		if found[secret] == 0 {
+			t.Fatalf("%s missing runtime secretRef %q", path, secret)
+		}
+	}
+	if len(found) != len(expected) {
+		t.Fatalf("%s runtime secretRef unique count = %d, want %d: %#v", path, len(found), len(expected), found)
+	}
+}
+
+func renderProductionBetaKustomization(t *testing.T) string {
+	t.Helper()
+	cmd := exec.Command("kubectl", "kustomize", "../..")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("kubectl kustomize backend failed: %v: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return string(output)
+}
+
+func withoutShellFunction(body, name string) string {
+	lines := strings.Split(body, "\n")
+	out := make([]string, 0, len(lines))
+	skipping := false
+	start := name + "() {"
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !skipping && trimmed == start {
+			skipping = true
+			continue
+		}
+		if skipping {
+			if trimmed == "}" {
+				skipping = false
+			}
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
 }
 
 func extractServiceURLs(t *testing.T, path, body string) map[string]string {

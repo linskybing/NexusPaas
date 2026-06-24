@@ -182,6 +182,12 @@ compute-control-plane-runtime-secret
 EOF
 }
 
+forbidden_secret_ref_pattern() {
+  cat <<'EOF'
+postgres-dev-password|dex-dev-password|minio-dev-credentials|(^|[^[:alnum:]-])([[:alnum:]-]*-(dev|test|local)-[[:alnum:]-]*|placeholder-secret|sample-secret|dummy-secret|fake-secret|test-secret|local-secret|change-me|changeme)([^[:alnum:]-]|$)
+EOF
+}
+
 rendered_deployment_names() {
   local render_file="$1"
   awk '
@@ -214,6 +220,22 @@ rendered_has_deployment() {
   rendered_deployment_names "${render_file}" | grep -Fxq "${deployment}"
 }
 
+validate_render_secret_refs() {
+  local pattern secret missing=0
+  pattern="$(forbidden_secret_ref_pattern)"
+  if grep -Eiq -- "${pattern}" "${RENDER_FILE}"; then
+    die "production-beta render contains dev references or forbidden local/test/placeholder Secret references"
+  fi
+
+  while IFS= read -r secret; do
+    [[ -n "${secret}" ]] || continue
+    if ! grep -Fq -- "${secret}" "${RENDER_FILE}"; then
+      missing=$((missing + 1))
+    fi
+  done < <(required_secret_names)
+  [[ "${missing}" = "0" ]] || die "production-beta render is missing ${missing} required Secret names"
+}
+
 validate_render() {
   log "Rendering production-beta kustomization"
   (cd "${REPO_ROOT}" && kubectl kustomize backend) >"${RENDER_FILE}"
@@ -236,9 +258,7 @@ validate_render() {
   if rendered_has_deployment "${RENDER_FILE}" "platform"; then
     die "production-beta render contains all-in-one platform Deployment"
   fi
-  if grep -q -- '-dev-' "${RENDER_FILE}"; then
-    die "production-beta render contains dev references"
-  fi
+  validate_render_secret_refs
 }
 
 verify_kube_context() {

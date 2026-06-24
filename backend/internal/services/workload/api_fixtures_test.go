@@ -367,6 +367,9 @@ func assertCancelJobFixtureMetadata(t *testing.T, fixture workloadExternalAPIFix
 	if len(fixture.OptionalRequestFields) != 0 {
 		t.Fatalf("optional_request_fields = %v, want none", fixture.OptionalRequestFields)
 	}
+	if !reflect.DeepEqual(fixture.OptionalRequestHeaders, []string{"Idempotency-Key"}) {
+		t.Fatalf("optional_request_headers = %v, want [Idempotency-Key]", fixture.OptionalRequestHeaders)
+	}
 	if len(fixture.RequestExample) != 0 {
 		t.Fatalf("request_example = %v, want empty object", fixture.RequestExample)
 	}
@@ -511,15 +514,26 @@ func assertCancelJobResponseExample(t *testing.T, response map[string]any) {
 		t.Fatalf("response_example.data = %T, want object", response["data"])
 	}
 	want := map[string]string{
-		"job_id":          "job-ga-001",
-		"status":          "accepted",
-		"operation":       "workload_job_cancel",
-		"idempotency_key": "cancel-job-ga-001",
-		"requested_at":    "2026-06-23T00:00:00Z",
+		"job_id":       "job-ga-001",
+		"status":       "accepted",
+		"operation":    "workload_job_cancel",
+		"requested_at": "2026-06-23T00:00:00Z",
 	}
 	for field, wantValue := range want {
 		if got, ok := data[field].(string); !ok || got != wantValue {
 			t.Fatalf("response_example.data.%s = %v, want %q", field, data[field], wantValue)
+		}
+	}
+	for _, forbidden := range []string{
+		"idempotency_key",
+		"idempotencyKey",
+		internalCancelIdempotencyKeyHash,
+		internalCancelIdempotencyFingerprintHash,
+		"key_hash",
+		"fingerprint_hash",
+	} {
+		if _, ok := data[forbidden]; ok {
+			t.Fatalf("response_example.data contains cancel idempotency material")
 		}
 	}
 }
@@ -617,22 +631,23 @@ func assertCommitConfigFileVersionResponseExample(t *testing.T, response map[str
 }
 
 type workloadExternalAPIFixture struct {
-	OwnerService          string         `json:"owner_service"`
-	Resource              string         `json:"resource"`
-	Action                string         `json:"action"`
-	Method                string         `json:"method"`
-	Path                  string         `json:"path"`
-	Auth                  string         `json:"auth"`
-	AuthRequired          bool           `json:"auth_required"`
-	ServiceKeyRequired    bool           `json:"service_key_required"`
-	PathParameters        []string       `json:"path_parameters"`
-	RequiredRequestFields []string       `json:"required_request_fields"`
-	OptionalRequestFields []string       `json:"optional_request_fields"`
-	RequestExample        map[string]any `json:"request_example"`
-	SuccessStatuses       []int          `json:"success_statuses"`
-	ErrorStatuses         []int          `json:"error_statuses"`
-	EmitsEvents           []string       `json:"emits_events"`
-	ResponseExample       map[string]any `json:"response_example"`
+	OwnerService           string         `json:"owner_service"`
+	Resource               string         `json:"resource"`
+	Action                 string         `json:"action"`
+	Method                 string         `json:"method"`
+	Path                   string         `json:"path"`
+	Auth                   string         `json:"auth"`
+	AuthRequired           bool           `json:"auth_required"`
+	ServiceKeyRequired     bool           `json:"service_key_required"`
+	PathParameters         []string       `json:"path_parameters"`
+	RequiredRequestFields  []string       `json:"required_request_fields"`
+	OptionalRequestFields  []string       `json:"optional_request_fields"`
+	OptionalRequestHeaders []string       `json:"optional_request_headers"`
+	RequestExample         map[string]any `json:"request_example"`
+	SuccessStatuses        []int          `json:"success_statuses"`
+	ErrorStatuses          []int          `json:"error_statuses"`
+	EmitsEvents            []string       `json:"emits_events"`
+	ResponseExample        map[string]any `json:"response_example"`
 }
 
 func findRoute(routes []platform.RouteSpec, method, pattern string) (platform.RouteSpec, bool) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -91,6 +92,73 @@ func TestDispatchSubmittedWorkloadCreatesNativeJobAndMarksRunning(t *testing.T) 
 	}
 	if resources, ok := record.Data["created_resources"].([]map[string]any); !ok || len(resources) != 1 || resources[0]["kind"] != "Job" {
 		t.Fatalf("created resources = %#v, want one Job", record.Data["created_resources"])
+	}
+}
+
+func TestDispatchSubmittedWorkloadsAppliesAtMostBatchLimitPerRun(t *testing.T) {
+	now := time.Date(2026, 6, 14, 16, 32, 0, 0, time.UTC)
+	cl := cluster.New(fake.NewSimpleClientset(), "proj")
+	app := platform.NewApp(platform.Config{ServiceName: serviceName}, platform.WithCluster(cl))
+	ctx := context.Background()
+	total := dispatcherMaxJobsPerRun + 2
+	for index := 0; index < total; index++ {
+		id := fmt.Sprintf("J26002%02d", index)
+		createWorkloadRecord(t, app, jobsResource, map[string]any{
+			"id":         id,
+			"job_id":     id,
+			"project_id": "P1",
+			"user_id":    "U1",
+			"status":     "submitted",
+			"namespace":  "proj-p1",
+			"queue_name": "default-batch",
+			"priority":   1000,
+			"created_at": now.Add(-time.Minute).Format(time.RFC3339),
+			"resources":  []any{nativeJobResource(fmt.Sprintf("batch-%02d", index))},
+		})
+	}
+
+	if err := dispatchSubmittedWorkloads(ctx, app.Cluster, app.Store, now); err != nil {
+		t.Fatal(err)
+	}
+
+	assertDispatchedBatchState(t, ctx, app, cl, dispatcherMaxJobsPerRun, total-dispatcherMaxJobsPerRun, dispatcherMaxJobsPerRun)
+	for index := dispatcherMaxJobsPerRun; index < total; index++ {
+		if _, err := cl.Clientset().BatchV1().Jobs("proj-p1").Get(ctx, fmt.Sprintf("batch-%02d", index), metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+			t.Fatalf("job batch-%02d lookup err = %v, want not created before second run", index, err)
+		}
+	}
+
+	if err := dispatchSubmittedWorkloads(ctx, app.Cluster, app.Store, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	assertDispatchedBatchState(t, ctx, app, cl, total, 0, total)
+}
+
+func assertDispatchedBatchState(t *testing.T, ctx context.Context, app *platform.App, cl *cluster.Client, wantRunning, wantSubmitted, wantCreated int) {
+	t.Helper()
+	running := 0
+	submitted := 0
+	for _, record := range app.Store.List(ctx, jobsResource) {
+		switch record.Data["status"] {
+		case jobStatusRunning:
+			running++
+		case jobStatusSubmitted:
+			submitted++
+			if record.Data["created_resources"] != nil {
+				t.Fatalf("submitted job %s has created_resources = %#v", record.ID, record.Data["created_resources"])
+			}
+		}
+	}
+	if running != wantRunning || submitted != wantSubmitted {
+		t.Fatalf("job statuses running=%d submitted=%d, want running=%d submitted=%d", running, submitted, wantRunning, wantSubmitted)
+	}
+	jobs, err := cl.Clientset().BatchV1().Jobs("proj-p1").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("list batch jobs: %v", err)
+	}
+	if len(jobs.Items) != wantCreated {
+		t.Fatalf("created batch jobs = %d, want %d", len(jobs.Items), wantCreated)
 	}
 }
 

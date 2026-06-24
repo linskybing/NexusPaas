@@ -1,6 +1,9 @@
 package workload
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -11,9 +14,13 @@ import (
 )
 
 const (
-	defaultJobPrefix  = "J"
-	defaultJobIDStart = 2600001
-	defaultJobIDWidth = 7
+	defaultJobPrefix     = "J"
+	defaultJobIDStart    = 2600001
+	defaultJobIDWidth    = 7
+	idempotencyKeyHeader = "Idempotency-Key"
+
+	internalSubmitIdempotencyKeyHash         = "internal_submit_idempotency_key_hash"
+	internalSubmitIdempotencyFingerprintHash = "internal_submit_idempotency_fingerprint_hash"
 )
 
 type jobSubmitError struct {
@@ -45,6 +52,10 @@ func submitJob(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, a
 	if status, data, ok := requireProjectAccess(app, r, shared.TextValue(job, "project_id", "projectId")); !ok {
 		return status, data, nil
 	}
+	keyHash, fingerprintHash := submitJobIdempotencyHashes(r, payload, job, admissionPayload)
+	if status, data := submitJobIdempotencyResult(jobs, r, keyHash, fingerprintHash); status != 0 {
+		return status, data, nil
+	}
 	status, review, preemption, denial, err := admitSubmittedJob(app, r, job, admissionPayload)
 	if err != nil {
 		return http.StatusServiceUnavailable, shared.ErrorData("scheduler admission unavailable"), nil
@@ -54,13 +65,17 @@ func submitJob(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, a
 	}
 	applyAdmissionReview(job, review)
 	applyAutoPreemptionResult(job, preemption)
+	if keyHash != "" {
+		job[internalSubmitIdempotencyKeyHash] = keyHash
+		job[internalSubmitIdempotencyFingerprintHash] = fingerprintHash
+	}
 	record, err := jobs.CreateSubmittedJobWithEvent(r.Context(), app, job, func(record contracts.Record[map[string]any]) contracts.Event {
 		return buildEvent(r, "JobSubmitted", "submitted", record.Data)
 	})
 	if err != nil {
 		return createStatus(err), shared.ErrorData("job could not be submitted"), nil
 	}
-	return http.StatusCreated, record, nil
+	return http.StatusCreated, publicWorkloadJobRecord(record), nil
 }
 
 func admitSubmittedJob(app *platform.App, r *http.Request, job, admissionPayload map[string]any) (int, map[string]any, map[string]any, map[string]any, error) {
@@ -134,6 +149,65 @@ func buildSubmittedJob(app *platform.App, r *http.Request, payload map[string]an
 		job["stream_sidecar_image"] = image
 	}
 	return job, jobAdmissionPayload(job, payload), nil
+}
+
+type submitJobIdempotencyFingerprint struct {
+	Command        string         `json:"command"`
+	UserID         string         `json:"user_id"`
+	ProjectID      string         `json:"project_id"`
+	SuppliedJobID  string         `json:"supplied_job_id,omitempty"`
+	SubmitType     string         `json:"submit_type"`
+	ExecutorType   string         `json:"executor_type"`
+	ConfigID       string         `json:"config_id,omitempty"`
+	ConfigCommitID string         `json:"config_commit_id,omitempty"`
+	Admission      map[string]any `json:"admission"`
+}
+
+func submitJobIdempotencyHashes(r *http.Request, payload, job, admissionPayload map[string]any) (string, string) {
+	key := strings.TrimSpace(r.Header.Get(idempotencyKeyHeader))
+	if key == "" {
+		return "", ""
+	}
+	userID := shared.TextValue(job, "user_id", "userId")
+	admission := shared.CloneMap(admissionPayload)
+	suppliedJobID := shared.TextValue(payload, "job_id", "jobId", "id")
+	if suppliedJobID == "" {
+		delete(admission, "job_id")
+	} else {
+		admission["job_id"] = suppliedJobID
+	}
+	fingerprint := submitJobIdempotencyFingerprint{
+		Command:        "workload_submit",
+		UserID:         userID,
+		ProjectID:      shared.TextValue(job, "project_id", "projectId"),
+		SuppliedJobID:  suppliedJobID,
+		SubmitType:     shared.TextValue(job, "submit_type", "submitType"),
+		ExecutorType:   shared.TextValue(job, "executor_type", "executorType"),
+		ConfigID:       shared.TextValue(job, "config_id", "configId"),
+		ConfigCommitID: shared.TextValue(job, "config_commit_id", "configCommitId"),
+		Admission:      admission,
+	}
+	rawFingerprint, _ := json.Marshal(fingerprint)
+	return submitJobHash("workload_submit\x00" + userID + "\x00" + key), submitJobHash(string(rawFingerprint))
+}
+
+func submitJobHash(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func submitJobIdempotencyResult(jobs *recordStoreWorkloadJobRepository, r *http.Request, keyHash, fingerprintHash string) (int, any) {
+	if keyHash == "" {
+		return 0, nil
+	}
+	existing, found := jobs.FindJobBySubmitIdempotencyKeyHash(r.Context(), keyHash)
+	if !found {
+		return 0, nil
+	}
+	if shared.TextValue(existing.Data, internalSubmitIdempotencyFingerprintHash) != fingerprintHash {
+		return http.StatusConflict, shared.ErrorData("idempotency key is already used by a different workload submit request")
+	}
+	return http.StatusCreated, publicWorkloadJobRecord(existing)
 }
 
 type jobSubmitContext struct {
@@ -300,11 +374,11 @@ func schedulerPreemptionPayload(job, admissionPayload, review map[string]any) (m
 func autoPreemptionHeaders(r *http.Request, job map[string]any) http.Header {
 	headers := r.Header.Clone()
 	jobID := shared.TextValue(job, "job_id", "jobId", "id")
-	key := strings.TrimSpace(headers.Get("Idempotency-Key"))
+	key := strings.TrimSpace(headers.Get(idempotencyKeyHeader))
 	if key == "" {
 		key = jobID
 	}
-	headers.Set("Idempotency-Key", "auto-preempt:"+jobID+":"+key)
+	headers.Set(idempotencyKeyHeader, "auto-preempt:"+jobID+":"+key)
 	return headers
 }
 

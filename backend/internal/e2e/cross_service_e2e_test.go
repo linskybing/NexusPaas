@@ -1206,6 +1206,10 @@ func (h *e2eHarness) assertWorkloadSchedulerSubmit(ids identityIDs) {
 }
 
 func (h *e2eHarness) submitJob(ids identityIDs, baseURL string, want int) testResponse {
+	return h.submitJobWithIdempotencyKey(ids, baseURL, "", want)
+}
+
+func (h *e2eHarness) submitJobWithIdempotencyKey(ids identityIDs, baseURL string, idempotencyKey string, want int) testResponse {
 	payload := map[string]any{
 		"project_id":      h.projectID(),
 		"user_id":         ids.userID,
@@ -1214,7 +1218,7 @@ func (h *e2eHarness) submitJob(ids identityIDs, baseURL string, want int) testRe
 		"required_memory": 1024,
 		"e2e_run_id":      h.runID,
 	}
-	return h.doURLJSON(baseURL, http.MethodPost, "/api/v1/jobs", payload, h.apiKey, want)
+	return h.doURLJSONWithIdempotencyKey(baseURL, http.MethodPost, "/api/v1/jobs", payload, h.apiKey, idempotencyKey, want)
 }
 
 func (h *e2eHarness) assertQuotaReservationEvents() {
@@ -1328,7 +1332,7 @@ func (h *e2eHarness) assertSchedulerUnavailableDoesNotPersist(ids identityIDs) {
 		schedulerQuotaService: "http://127.0.0.1:1",
 		orgProjectService:     h.services[orgProjectService].url,
 	})
-	h.submitJob(ids, failing.url, http.StatusServiceUnavailable)
+	h.submitJobWithIdempotencyKey(ids, failing.url, "idem-"+h.runID+"-scheduler-unavailable", http.StatusServiceUnavailable)
 	after := len(h.listRecords(workloadJobsResource))
 	if after != before {
 		h.t.Fatalf("workload jobs after scheduler outage = %d, want unchanged %d", after, before)
@@ -1343,7 +1347,7 @@ func (h *e2eHarness) assertSchedulerUnavailableDoesNotPersist(ids identityIDs) {
 		schedulerQuotaService: unauthorizedScheduler.URL,
 		orgProjectService:     h.services[orgProjectService].url,
 	})
-	h.submitJob(ids, badKeyWorkload.url, http.StatusUnauthorized)
+	h.submitJobWithIdempotencyKey(ids, badKeyWorkload.url, "idem-"+h.runID+"-scheduler-bad-key", http.StatusUnauthorized)
 	if afterJobs := len(h.listRecords(workloadJobsResource)); afterJobs != beforeBadRemoteKeyJobs {
 		h.t.Fatalf("workload jobs after bad remote scheduler key = %d, want unchanged %d", afterJobs, beforeBadRemoteKeyJobs)
 	}

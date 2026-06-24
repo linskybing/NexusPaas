@@ -79,6 +79,18 @@ func (r recordStoreWorkloadJobRepository) CreateJobCommandWithEvent(ctx context.
 	return app.CreateRecordWithEvent(ctx, jobCommandsResource, shared.CloneMap(command), build)
 }
 
+func (r recordStoreWorkloadJobRepository) FindJobCommandByCancelIdempotencyKeyHash(ctx context.Context, keyHash string) (contracts.Record[map[string]any], bool) {
+	if keyHash == "" {
+		return contracts.Record[map[string]any]{}, false
+	}
+	for _, record := range r.store.List(ctx, jobCommandsResource) {
+		if shared.TextValue(record.Data, internalCancelIdempotencyKeyHash) == keyHash {
+			return record, true
+		}
+	}
+	return contracts.Record[map[string]any]{}, false
+}
+
 func (r recordStoreWorkloadJobRepository) FindJob(ctx context.Context, idOrJobID string) (contracts.Record[map[string]any], bool) {
 	if idOrJobID == "" {
 		return contracts.Record[map[string]any]{}, false
@@ -94,8 +106,54 @@ func (r recordStoreWorkloadJobRepository) FindJob(ctx context.Context, idOrJobID
 	return contracts.Record[map[string]any]{}, false
 }
 
+func (r recordStoreWorkloadJobRepository) FindJobBySubmitIdempotencyKeyHash(ctx context.Context, keyHash string) (contracts.Record[map[string]any], bool) {
+	if keyHash == "" {
+		return contracts.Record[map[string]any]{}, false
+	}
+	for _, record := range r.store.List(ctx, jobsResource) {
+		if shared.TextValue(record.Data, internalSubmitIdempotencyKeyHash) == keyHash {
+			return record, true
+		}
+	}
+	return contracts.Record[map[string]any]{}, false
+}
+
 func (r recordStoreWorkloadJobRepository) ListJobs(ctx context.Context) []contracts.Record[map[string]any] {
 	return r.store.List(ctx, jobsResource)
+}
+
+func publicWorkloadJobRecord(record contracts.Record[map[string]any]) contracts.Record[map[string]any] {
+	record.Data = publicWorkloadJobData(record.Data)
+	return record
+}
+
+func publicWorkloadJobRecords(records []contracts.Record[map[string]any]) []contracts.Record[map[string]any] {
+	public := make([]contracts.Record[map[string]any], 0, len(records))
+	for _, record := range records {
+		public = append(public, publicWorkloadJobRecord(record))
+	}
+	return public
+}
+
+func publicWorkloadJobData(data map[string]any) map[string]any {
+	out := shared.CloneMap(data)
+	delete(out, internalSubmitIdempotencyKeyHash)
+	delete(out, internalSubmitIdempotencyFingerprintHash)
+	return out
+}
+
+func publicWorkloadJobCommandRecord(record contracts.Record[map[string]any]) contracts.Record[map[string]any] {
+	record.Data = publicWorkloadJobCommandData(record.Data)
+	return record
+}
+
+func publicWorkloadJobCommandData(data map[string]any) map[string]any {
+	out := shared.CloneMap(data)
+	delete(out, "idempotency_key")
+	delete(out, "idempotencyKey")
+	delete(out, internalCancelIdempotencyKeyHash)
+	delete(out, internalCancelIdempotencyFingerprintHash)
+	return out
 }
 
 func (r recordStoreWorkloadJobRepository) ListPreemptionCandidates(ctx context.Context) []contracts.Record[map[string]any] {

@@ -11,20 +11,81 @@ import (
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
 )
 
-func TestDockerfileBuildExternalAPIFixtureMatchesSpec(t *testing.T) {
-	fixture := readDockerfileBuildExternalAPIFixture(t)
-	spec := Spec()
-	route, ok := findRoute(spec.Routes, fixture.Method, fixture.Path)
-	if !ok {
-		t.Fatalf("route %s %s not found in Spec()", fixture.Method, fixture.Path)
+func TestImageBuildCreateExternalAPIFixturesMatchSpec(t *testing.T) {
+	cases := []imageBuildCreateFixtureCase{
+		{
+			name:         "context",
+			fixtureName:  "image-registry-context-build.json",
+			contractName: "image-registry.context_build",
+			path:         "/api/v1/images/build",
+			buildType:    "context",
+			optionalFields: []string{
+				"context",
+				"build_args",
+				"tag",
+				"registry",
+				"repository",
+				"cpu",
+				"memory_gb",
+				"max_build_seconds",
+			},
+		},
+		{
+			name:         "dockerfile",
+			fixtureName:  "image-registry-dockerfile-build.json",
+			contractName: "image-registry.dockerfile_build",
+			path:         "/api/v1/images/build/dockerfile",
+			buildType:    "dockerfile",
+			optionalFields: []string{
+				"dockerfile",
+				"context",
+				"build_args",
+				"tag",
+				"registry",
+				"repository",
+				"cpu",
+				"memory_gb",
+				"max_build_seconds",
+			},
+		},
+		{
+			name:         "storage",
+			fixtureName:  "image-registry-storage-build.json",
+			contractName: "image-registry.storage_build",
+			path:         "/api/v1/images/build/from-storage",
+			buildType:    "storage",
+			optionalFields: []string{
+				"storage_path",
+				"tag",
+				"registry",
+				"repository",
+				"cpu",
+				"memory_gb",
+				"max_build_seconds",
+			},
+		},
 	}
 
-	assertDockerfileBuildFixtureMetadata(t, fixture, spec.Name, route)
-	assertDockerfileBuildRouteMetadata(t, route, fixture)
+	spec := Spec()
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := readImageBuildCreateExternalAPIFixture(t, tt.fixtureName)
+			route, ok := findRoute(spec.Routes, fixture.Method, fixture.Path)
+			if !ok {
+				t.Fatalf("route %s %s not found in Spec()", fixture.Method, fixture.Path)
+			}
+
+			assertImageBuildCreateFixtureMetadata(t, fixture, tt, spec.Name, route)
+			assertImageBuildCreateRouteMetadata(t, route, fixture, tt.path)
+		})
+	}
 }
 
-func assertDockerfileBuildFixtureMetadata(t *testing.T, fixture dockerfileBuildExternalAPIFixture, serviceName string, route platform.RouteSpec) {
+func assertImageBuildCreateFixtureMetadata(t *testing.T, fixture imageBuildCreateExternalAPIFixture, want imageBuildCreateFixtureCase, serviceName string, route platform.RouteSpec) {
 	t.Helper()
+	if fixture.ContractName != want.contractName {
+		t.Fatalf("contract_name = %q, want %q", fixture.ContractName, want.contractName)
+	}
 	if fixture.OwnerService != serviceName {
 		t.Fatalf("owner_service = %q, want %q", fixture.OwnerService, serviceName)
 	}
@@ -40,9 +101,16 @@ func assertDockerfileBuildFixtureMetadata(t *testing.T, fixture dockerfileBuildE
 	if len(fixture.PathParameters) != 0 {
 		t.Fatalf("fixture path_parameters = %v, want none", fixture.PathParameters)
 	}
-	if !reflect.DeepEqual(fixture.RequiredRequestFields, []string{"project_id", "image_reference"}) {
-		t.Fatalf("required_request_fields = %v, want [project_id image_reference]", fixture.RequiredRequestFields)
+	requiredFields := []string{"project_id", "image_reference", "cpu_cores", "memory_gib", "max_build_time_seconds"}
+	if !reflect.DeepEqual(fixture.RequiredRequestFields, requiredFields) {
+		t.Fatalf("required_request_fields = %v, want %v", fixture.RequiredRequestFields, requiredFields)
 	}
+	assertFixtureStringsContainAll(t, "optional_request_fields", fixture.OptionalRequestFields, want.optionalFields)
+	assertFixtureStringsContainAll(t, "optional_request_headers", fixture.OptionalRequestHeaders, []string{"Idempotency-Key"})
+	assertFixtureIntsContainAll(t, "error_statuses", fixture.ErrorStatuses, []int{http.StatusConflict})
+	assertImageBuildResourceExample(t, "request_example", fixture.RequestExample)
+	assertImageBuildResourceExample(t, "response_example", fixture.ResponseExample)
+	assertFixtureStringField(t, "response_example", fixture.ResponseExample, "build_type", want.buildType)
 	if !reflect.DeepEqual(fixture.SuccessStatuses, []int{http.StatusAccepted}) {
 		t.Fatalf("success_statuses = %v, want [202]", fixture.SuccessStatuses)
 	}
@@ -51,7 +119,7 @@ func assertDockerfileBuildFixtureMetadata(t *testing.T, fixture dockerfileBuildE
 	}
 }
 
-func assertDockerfileBuildRouteMetadata(t *testing.T, route platform.RouteSpec, fixture dockerfileBuildExternalAPIFixture) {
+func assertImageBuildCreateRouteMetadata(t *testing.T, route platform.RouteSpec, fixture imageBuildCreateExternalAPIFixture, path string) {
 	t.Helper()
 	if got, want := route.Resource, "image_builds"; got != want {
 		t.Fatalf("route resource = %q, want %q", got, want)
@@ -59,8 +127,8 @@ func assertDockerfileBuildRouteMetadata(t *testing.T, route platform.RouteSpec, 
 	if got, want := route.Action, "command"; got != want {
 		t.Fatalf("route action = %q, want %q", got, want)
 	}
-	if route.Method != http.MethodPost || route.Pattern != "/api/v1/images/build/dockerfile" {
-		t.Fatalf("route = %s %s, want POST /api/v1/images/build/dockerfile", route.Method, route.Pattern)
+	if route.Method != http.MethodPost || route.Pattern != path {
+		t.Fatalf("route = %s %s, want POST %s", route.Method, route.Pattern, path)
 	}
 	if route.IDParam != "" {
 		t.Fatalf("route IDParam = %q, want none", route.IDParam)
@@ -82,19 +150,83 @@ func assertDockerfileBuildRouteMetadata(t *testing.T, route platform.RouteSpec, 
 	}
 }
 
-type dockerfileBuildExternalAPIFixture struct {
-	OwnerService          string   `json:"owner_service"`
-	Resource              string   `json:"resource"`
-	Action                string   `json:"action"`
-	Method                string   `json:"method"`
-	Path                  string   `json:"path"`
-	Auth                  string   `json:"auth"`
-	AuthRequired          bool     `json:"auth_required"`
-	ServiceKeyRequired    bool     `json:"service_key_required"`
-	PathParameters        []string `json:"path_parameters"`
-	RequiredRequestFields []string `json:"required_request_fields"`
-	SuccessStatuses       []int    `json:"success_statuses"`
-	EmitsEvents           []string `json:"emits_events"`
+type imageBuildCreateFixtureCase struct {
+	name           string
+	fixtureName    string
+	contractName   string
+	path           string
+	buildType      string
+	optionalFields []string
+}
+
+type imageBuildCreateExternalAPIFixture struct {
+	ContractName           string         `json:"contract_name"`
+	OwnerService           string         `json:"owner_service"`
+	Resource               string         `json:"resource"`
+	Action                 string         `json:"action"`
+	Method                 string         `json:"method"`
+	Path                   string         `json:"path"`
+	Auth                   string         `json:"auth"`
+	AuthRequired           bool           `json:"auth_required"`
+	ServiceKeyRequired     bool           `json:"service_key_required"`
+	PathParameters         []string       `json:"path_parameters"`
+	RequiredRequestFields  []string       `json:"required_request_fields"`
+	OptionalRequestFields  []string       `json:"optional_request_fields"`
+	OptionalRequestHeaders []string       `json:"optional_request_headers"`
+	RequestExample         map[string]any `json:"request_example"`
+	SuccessStatuses        []int          `json:"success_statuses"`
+	ErrorStatuses          []int          `json:"error_statuses"`
+	EmitsEvents            []string       `json:"emits_events"`
+	ResponseExample        map[string]any `json:"response_example"`
+}
+
+func assertFixtureStringsContainAll(t *testing.T, field string, got, want []string) {
+	t.Helper()
+	present := make(map[string]bool, len(got))
+	for _, value := range got {
+		present[value] = true
+	}
+	for _, value := range want {
+		if !present[value] {
+			t.Fatalf("%s = %v, missing %q", field, got, value)
+		}
+	}
+}
+
+func assertFixtureIntsContainAll(t *testing.T, field string, got, want []int) {
+	t.Helper()
+	present := make(map[int]bool, len(got))
+	for _, value := range got {
+		present[value] = true
+	}
+	for _, value := range want {
+		if !present[value] {
+			t.Fatalf("%s = %v, missing %d", field, got, value)
+		}
+	}
+}
+
+func assertImageBuildResourceExample(t *testing.T, field string, example map[string]any) {
+	t.Helper()
+	assertFixtureNumberField(t, field, example, "cpu_cores", 2)
+	assertFixtureNumberField(t, field, example, "memory_gib", 4)
+	assertFixtureNumberField(t, field, example, "max_build_time_seconds", 600)
+}
+
+func assertFixtureNumberField(t *testing.T, field string, data map[string]any, key string, want float64) {
+	t.Helper()
+	got, ok := data[key].(float64)
+	if !ok || got != want {
+		t.Fatalf("%s.%s = %v, want %v", field, key, data[key], want)
+	}
+}
+
+func assertFixtureStringField(t *testing.T, field string, data map[string]any, key string, want string) {
+	t.Helper()
+	got, ok := data[key].(string)
+	if !ok || got != want {
+		t.Fatalf("%s.%s = %v, want %q", field, key, data[key], want)
+	}
 }
 
 func findRoute(routes []platform.RouteSpec, method, pattern string) (platform.RouteSpec, bool) {
@@ -106,15 +238,15 @@ func findRoute(routes []platform.RouteSpec, method, pattern string) (platform.Ro
 	return platform.RouteSpec{}, false
 }
 
-func readDockerfileBuildExternalAPIFixture(t *testing.T) dockerfileBuildExternalAPIFixture {
+func readImageBuildCreateExternalAPIFixture(t *testing.T, name string) imageBuildCreateExternalAPIFixture {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "contracts", "fixtures", "api", "v1", "image-registry-dockerfile-build.json"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "contracts", "fixtures", "api", "v1", name))
 	if err != nil {
-		t.Fatalf("read image-registry Dockerfile build external API fixture: %v", err)
+		t.Fatalf("read image-registry build external API fixture %s: %v", name, err)
 	}
-	var fixture dockerfileBuildExternalAPIFixture
+	var fixture imageBuildCreateExternalAPIFixture
 	if err := json.Unmarshal(raw, &fixture); err != nil {
-		t.Fatalf("unmarshal image-registry Dockerfile build external API fixture: %v", err)
+		t.Fatalf("unmarshal image-registry build external API fixture %s: %v", name, err)
 	}
 	return fixture
 }

@@ -1,6 +1,9 @@
 package workload
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,6 +19,9 @@ const (
 	jobLogsResource     = serviceName + ":job_logs"
 	jobGPUUsageResource = serviceName + ":job_gpu_usage"
 	jobCommandsResource = jobsResource + ":commands"
+
+	internalCancelIdempotencyKeyHash         = "internal_cancel_idempotency_key_hash"
+	internalCancelIdempotencyFingerprintHash = "internal_cancel_idempotency_fingerprint_hash"
 )
 
 func registerJobAccessHandlers(app *platform.App) {
@@ -33,7 +39,7 @@ func listJobs(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, an
 	if !ok {
 		return status, data, nil
 	}
-	return http.StatusOK, filterRecordsForAuthorizedProjects(jobRepository(app).ListJobs(r.Context()), projects, all), nil
+	return http.StatusOK, publicWorkloadJobRecords(filterRecordsForAuthorizedProjects(jobRepository(app).ListJobs(r.Context()), projects, all)), nil
 }
 
 func getJob(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
@@ -41,29 +47,121 @@ func getJob(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any,
 	if !ok {
 		return status, data, nil
 	}
-	return http.StatusOK, record, nil
+	return http.StatusOK, publicWorkloadJobRecord(record), nil
 }
 
 func cancelJob(app *platform.App, r *http.Request, route platform.RouteSpec) (int, any, *platform.Degraded) {
-	if _, status, data, ok := authorizedJobRecord(app, r); !ok {
+	job, status, data, ok := authorizedJobRecord(app, r)
+	if !ok {
 		return status, data, nil
 	}
 	payload, err := platform.DecodeMapWithError(r)
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(msgInvalidBody), nil
 	}
-	payload["job_id"] = pathValue(r, "id")
-	payload["status"] = "accepted"
-	payload["operation"] = shared.FirstNonEmpty(route.OperationID, "workload_job_cancel")
-	payload["idempotency_key"] = r.Header.Get("Idempotency-Key")
-	payload["requested_at"] = time.Now().UTC().Format(time.RFC3339)
-	record, err := jobRepository(app).CreateJobCommandWithEvent(r.Context(), app, payload, func(record contracts.Record[map[string]any]) contracts.Event {
+	operation := shared.FirstNonEmpty(route.OperationID, "workload_job_cancel")
+	command, body := cancelJobCommandPayload(job, payload, operation)
+	jobs := jobRepository(app)
+	keyHash, fingerprintHash := cancelJobIdempotencyHashes(r, job, command, body)
+	if status, data := cancelJobIdempotencyResult(jobs, r, keyHash, fingerprintHash); status != 0 {
+		return status, data, nil
+	}
+	command["requested_at"] = time.Now().UTC().Format(time.RFC3339)
+	if keyHash != "" {
+		command[internalCancelIdempotencyKeyHash] = keyHash
+		command[internalCancelIdempotencyFingerprintHash] = fingerprintHash
+	}
+	record, err := jobs.CreateJobCommandWithEvent(r.Context(), app, command, func(record contracts.Record[map[string]any]) contracts.Event {
 		return buildEvent(r, "JobCancelRequested", "cancel", record.Data)
 	})
 	if err != nil {
 		return createStatus(err), shared.ErrorData("job command could not be created"), nil
 	}
-	return http.StatusAccepted, record, nil
+	return http.StatusAccepted, publicWorkloadJobCommandRecord(record), nil
+}
+
+type cancelJobIdempotencyFingerprint struct {
+	Command     string         `json:"command"`
+	UserID      string         `json:"user_id"`
+	ProjectID   string         `json:"project_id"`
+	JobRecordID string         `json:"job_record_id"`
+	JobID       string         `json:"job_id"`
+	Status      string         `json:"status"`
+	Operation   string         `json:"operation"`
+	Body        map[string]any `json:"body,omitempty"`
+}
+
+func cancelJobCommandPayload(job contracts.Record[map[string]any], payload map[string]any, operation string) (map[string]any, map[string]any) {
+	body := cancelJobRequestBody(payload)
+	command := shared.CloneMap(body)
+	command["job_id"] = canonicalCancelJobID(job)
+	command["project_id"] = jobProjectID(job)
+	command["job_record_id"] = job.ID
+	command["status"] = "accepted"
+	command["operation"] = operation
+	return command, body
+}
+
+func cancelJobRequestBody(payload map[string]any) map[string]any {
+	body := shared.CloneMap(payload)
+	for _, key := range []string{
+		"id",
+		"job_id", "jobId",
+		"project_id", "projectId",
+		"job_record_id", "jobRecordID",
+		"status",
+		"operation",
+		"requested_at", "requestedAt",
+		"idempotency_key", "idempotencyKey",
+		internalCancelIdempotencyKeyHash,
+		internalCancelIdempotencyFingerprintHash,
+	} {
+		delete(body, key)
+	}
+	return body
+}
+
+func canonicalCancelJobID(job contracts.Record[map[string]any]) string {
+	return shared.FirstNonEmpty(shared.TextValue(job.Data, "job_id", "jobId"), job.ID)
+}
+
+func cancelJobIdempotencyHashes(r *http.Request, job contracts.Record[map[string]any], command, body map[string]any) (string, string) {
+	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if key == "" {
+		return "", ""
+	}
+	userID := workloadAuthenticatedUserID(r)
+	fingerprint := cancelJobIdempotencyFingerprint{
+		Command:     "workload_cancel",
+		UserID:      userID,
+		ProjectID:   jobProjectID(job),
+		JobRecordID: job.ID,
+		JobID:       canonicalCancelJobID(job),
+		Status:      shared.TextValue(command, "status"),
+		Operation:   shared.TextValue(command, "operation"),
+		Body:        body,
+	}
+	rawFingerprint, _ := json.Marshal(fingerprint)
+	return cancelJobHash("workload_cancel\x00" + userID + "\x00" + key), cancelJobHash(string(rawFingerprint))
+}
+
+func cancelJobHash(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func cancelJobIdempotencyResult(jobs *recordStoreWorkloadJobRepository, r *http.Request, keyHash, fingerprintHash string) (int, any) {
+	if keyHash == "" {
+		return 0, nil
+	}
+	existing, found := jobs.FindJobCommandByCancelIdempotencyKeyHash(r.Context(), keyHash)
+	if !found {
+		return 0, nil
+	}
+	if shared.TextValue(existing.Data, internalCancelIdempotencyFingerprintHash) != fingerprintHash {
+		return http.StatusConflict, shared.ErrorData("idempotency key is already used by a different workload cancel request")
+	}
+	return http.StatusAccepted, publicWorkloadJobCommandRecord(existing)
 }
 
 func listJobLogs(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {

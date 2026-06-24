@@ -6,14 +6,16 @@
   `STORAGE-*`, `SECRET-*`, `AUDIT-*`, `PLANADMIN-*`, and the accepted GA families
   passed the `beta-rc` gate and a **local** RKE2 staging rollout/rollback
   rehearsal (`localhost:5000` registry, 15 deployments). See
-  `docs/plan/2026-06-20-v1-launch-gap-gate.md`.
+  evidence id `2026-06-20-v1-launch-gap-gate`.
 - **V1 external production launch: OPEN.** Still unproven: a real external image
   registry (Harbor is only an isolated `harbor-system` foundation, never used
   for external promotion/rollback), 8-unit topology deploy/smoke, previous-image
-  rollback per unit, production secrets (no `*-dev-*` references in the deploy
-  path), and live staging DB migration/rollback drill. Remote PR #33 evidence
-  now shows external SonarCloud Code Analysis and Backend Quality Gate passing;
-  that evidence does not close live P0.2-P0.5 or V1 external production launch.
+  rollback per unit, live external staging Secret readiness, and live staging DB
+  migration/rollback drill. Static production-beta deploy-path evidence now
+  proves required Secret names/keys and no local/dev/test placeholder Secret
+  references in source/render only. Remote PR #33 evidence now shows external
+  SonarCloud Code Analysis and Backend Quality Gate passing; that evidence does
+  not close live P0.2-P0.5 or V1 external production launch.
 - **Web UI (`WEB-*`) is out of V1 scope** (API/CLI-first). The existing
   `frontend/` GUI is beta/future; `WEB-*` is required only before a future Web
   UI launch.
@@ -21,7 +23,44 @@
   disclaimers means the V1 *external production launch* state above (OPEN)** — it
   does **not** mean the individual slice is unfinished.
 
-_Updated: 2026-06-22 (re-verified). Branch: `ga-web-gate`. Full
+_Updated: 2026-06-24 (re-verified, scheduled backend gap/code review;
+independently re-confirmed this pass — `go build ./...`, `go vet ./...`, and
+full `go test ./...` all green across all 24 packages on the current working
+tree, including uncommitted PERF/MON/DATA-014/IMG work; cron parity re-checked
+file-by-file vs `references/CSCC_AI_Platform_Backend/internal/cron` — 15
+reconcilers ported, `course_monitoring_reconciler` deliberately out of scope per
+ADR 0006; spot-checked the largest uncommitted diffs (schedulerquota
+`preemption.go` public/internal id separation, imageregistry `handler.go`, no
+error swallowing or panics) — no local code-quality regression surfaced).
+Branch: `feature/ga-gap-clearance`. This pass re-ran the local toolchain on the
+current working tree (incl. uncommitted PERF-003..008, MON-013..017, partial
+DATA-014, IMG-011/012/013, image-build create contract fixtures, the new
+`monitoring_metrics.go` low-cardinality metric source, and the new local
+schedulerquota `queue_stress_test.go`): `go build
+./...` clean, `go vet ./...` clean, and full `go test ./...` green across all 24
+packages (`cmd/microservice`, `internal/platform`, `internal/services`, and
+every service package). Reference parity vs `references/CSCC_AI_Platform_Backend`
+re-checked file-by-file this pass: every `internal/cron` reconciler is ported —
+priority_class (`schedulerquota/priority_class_sync.go` + `cluster/priority_class.go`),
+longhorn_rwx (`storage/longhorn_rwx_health.go` + `cluster/longhorn_rwx.go`),
+docker_cleanup (`k8scontrol/docker_cleanup.go`), gpu_usage
+(`gpuusage/collector.go`), vpn_usage (`integrationproxy/vpn_usage_collector.go`),
+cluster_resources (`clusterread/cluster_resource_collector.go`), ldap_mirror
+(`identity/ldap.go`), user_delete_cleanup (`identity/cleanup.go`),
+resource_hours (`resourcehours`), resource_quota (`schedulerquota`),
+harbor_health, idle_reaper, plan_window_reaper, workload_runtime_reaper, and
+policy_data_sync (`authorizationpolicy/policy_data_sync.go`) — all registered via
+the per-service maintenance-task framework (`internal/platform/maintenance.go` +
+`RegisterMaintenanceTaskForService`); the reference course_monitoring_reconciler
+is the only one deliberately out of scope (ADR 0006). No new untracked reference
+capability surfaced this pass. New this pass: a local deterministic schedulerquota
+queue-stress test now exercises pending/admitted/preempted/rejected workloads
+(`queue_stress_test.go`); this is local evidence only — live queue stress under
+real scheduler/Kubernetes load remains an open P0/PERF item. All remaining open items
+are the already-tracked live-execution P0 blockers (external Harbor registry,
+8-unit staging deploy/rollback, live staging DB migration/rollback drill, live
+external Secret readiness) plus the GA family tail — none are local code-quality
+regressions. Prior basis retained below. Branch `ga-web-gate`. Full
 `go test ./...`, quick gate, coverage run, focused transactional batch/per-item
 tests, local SonarScanner Quality Gate, and live RKE2 outbox/PDP/Web GUI
 active-Project seeded image-build plus job submit/cancel/log-route smoke
@@ -60,14 +99,62 @@ focused local evidence: `frontend/src/App.test.tsx` covers
 fallback, no browser storage persistence, and generic secret-safe submit
 failure text. This is frontend REST workflow evidence only; it does not prove
 live Harbor build execution, SBOM/signing, allow-list enforcement, or full
-image workflow GA. Image-registry Dockerfile build submission now also has
-local/static typed external REST fixture coverage for
-`POST /api/v1/images/build/dockerfile`: the fixture uses `202 Accepted`,
-requires `project_id` and `image_reference`, emits only `ImageBuildStarted`,
-and is checked against `imageregistry.Spec()` for auth, route, path params,
-state-changing, and `harbor` adapter metadata. This is static contract evidence
-only; it does not prove live Harbor build execution, SBOM/signing, allow-list
-enforcement, image scan lifecycle, or full image workflow GA. Workload job
+image workflow GA. Image-registry image build create routes now also have
+local/static typed external REST fixture coverage for `POST /api/v1/images/build`,
+`POST /api/v1/images/build/from-storage`, and
+`POST /api/v1/images/build/dockerfile`: the fixtures use `202 Accepted`, require
+`project_id`, `image_reference`, and resource fields, emit only
+`ImageBuildStarted`, and are checked against `imageregistry.Spec()` for auth,
+route, path params, state-changing, and `harbor` adapter metadata. This is
+static contract evidence only; it does not prove live Harbor build execution,
+SBOM/signing, allow-list enforcement, image scan lifecycle, or full image
+workflow GA. Image build create and cancel routes now also have partial local
+deterministic `DATA-014` evidence for optional `Idempotency-Key` replay/conflict
+behavior: create covers same-request replay and changed-request conflict, while
+cancel covers same-target replay across both cancel route aliases and
+different-target conflict without duplicate `ImageBuildCancelled` events. This
+is local image-build command evidence only and does not prove full DATA-014,
+deploy idempotency, live executor cancellation, live Harbor/Tekton/BuildKit or
+Kubernetes execution, full IMG/DATA, V1 external launch, or Full GA. Workload
+submit now also has partial local deterministic `DATA-014` evidence for
+`POST /api/v1/jobs`: same-key same-semantic-payload replays return the existing
+submitted job without duplicate scheduler admission, auto-preemption, job record,
+or `JobSubmitted` event side effects, and same-key different-payload attempts
+return `409 Conflict` before those side effects. This is local workload submit
+evidence only and does not prove full DATA-014, deploy idempotency, live
+Kubernetes apply, full workload GA, V1 external launch, or Full GA. Workload
+cancel now also has partial local deterministic `DATA-014` evidence
+for `POST /api/v1/jobs/{id}/cancel`: same-key same-semantic-command replays,
+including canonical-equivalent job identifiers, return the existing accepted
+cancel command without duplicate command record or `JobCancelRequested` event
+side effects, and same-key different-target attempts return `409 Conflict`
+before those side effects. The workload cancel fixture now lists only the
+optional `Idempotency-Key` header name, and internal cancel matching metadata is
+stripped from cancel responses and event payload data. This is local workload
+cancel evidence only and does not prove full DATA-014, deploy idempotency, live
+scheduler/Kubernetes cancellation, GPU evidence, full workload GA, V1 external
+launch, or Full GA. Scheduler explicit preemption now also has partial local
+deterministic `DATA-014` evidence for scheduler preemption: same-key
+same-request replays return the existing sanitized decision without duplicate
+cleanup, workload transition, or `JobPreempted` event side effects, and same-key
+different-requester or different-payload attempts return `409 Conflict` before
+victim selection, cleanup, workload preempt, or event emission. Responses,
+workload preempt calls, and event payload data use a generated public
+`preemption_id`, while key-derived store record IDs and internal
+key/fingerprint hashes remain private. This is local scheduler/workload
+preemption evidence only and does not prove full DATA-014, deploy idempotency,
+live scheduler/Kubernetes preemption, live GPU behavior, full scheduler/workload
+GA, V1 external launch, or Full GA. Image build
+logs now also have local deterministic `IMG-011`
+response redaction evidence for common Authorization bearer and secret-like
+key/value patterns while preserving ordinary log lines and stored logs; this
+does not prove live Harbor/Tekton/BuildKit logs, streaming/tailing,
+SBOM/signing/scan, or full image workflow GA. Image build cancellation and
+timeout terminal states now also have local deterministic `IMG-012`/`IMG-013`
+active-build slot release evidence; this does not prove live resource
+termination, a real timeout controller, executor/Kubernetes quota release,
+live Harbor/Tekton/BuildKit, SBOM/signing/scan, GPU closure, or full image
+workflow GA. Workload job
 submission now also has local/static typed external REST fixture
 coverage for `POST /api/v1/jobs`: the fixture uses `201 Created`, requires
 `project_id` and `user_id`, keeps queue/resource/config/streaming fields as
@@ -431,7 +518,7 @@ The accurate description is:
 | API token indexed lookup | Done | User API tokens now use `nexuspaas_<token-id>_<secret>` format; local and identity verification parse the id, load one record, verify one full-token hash, pass focused/full Go tests, quick gate, Sonar Quality Gate, reviewer approval, and live RKE2 identity auth evidence. |
 | Trusted client IP resolution | Done | Identity login failures, captcha checks, cleanup, and API-token audit events now reuse the platform trusted-proxy resolver; focused/full Go tests, quick gate, Sonar Quality Gate, reviewer approval, RKE2 rollout, health checks, and live spoofed `X-Forwarded-For` evidence passed. |
 | Environment profiles and PDP fail-closed | Done | Runtime config now supports explicit `APP_ENV` profiles (`local`, `test`, `dev`, `staging`, `production`), preserves legacy `PRODUCTION` fallback, rejects invalid/conflicting mode settings, uses strict startup/PDP checks for staging/production, declares `APP_ENV: "production"` in production backend manifests, and passed focused/full tests, quick gate, Sonar Quality Gate, reviewer approval, and live RKE2 rollout health/readiness evidence. |
-| Production Beta operations | Partial | Non-live gates and docs exist, current live 15 first-party deployments have same-image Kubernetes rollout/undo evidence, OPS-006 PostgreSQL logical backup/restore drill passed, OPS-008 MinIO synthetic object restore drill passed, OPS-009 current-live Kubernetes Secret recovery copy drill passed, OPS-007 Harbor backup/restore passed after moving Harbor from unsupported Rancher `local-path` hostPath PVCs to Kubernetes static `local` PVs, Harbor-side push/scan/delete passed with official Trivy and `crane`, OPS-011 Redis/event-broker outage evidence passed (`ga-redis-outage-20260621202250`, event `33fc697b-2cac-4715-ac04-e46097b0ea99`), partial OPS-013 Prometheus/telemetry stale and quota non-grant evidence passed (`ci-ga-prometheus-stale-20260621205458`, trace `ga-prometheus-stale-20260621205959`), Harbor dependency outage evidence passed through `/api/v1/harbor-status` (`ga-harbor-outage-20260621200008`), OPS-012 image-registry build/list degraded-route outage evidence passed (`ga-image-harbor-degraded-20260621212113`, image `ci-ga-image-harbor-degraded-20260621211729`, digest `sha256:21345ac6ad43db05f489bfa2ee37122b0b79873daca6f04619506c8bcef9d319`), a bounded PERF read smoke baseline passed after correcting k6 endpoint selection (`20` VUs / `210` iterations / `30` requests per endpoint / `0` failures / total p95 `2306.00ms`), and Project list `100` VU live k6 evidence now passes on `ci-ga-pdp-enforce-20260622094936` (`100` temporary principals, `30s`, `/api/v1/projects` `1000/1000` 2xx, `0` failures, `0` 429, p95 `3.668ms`, enforce `429` count `0`, exact cleanup verified). Live 8-unit staging deploy/smoke/previous-image rollback/redeploy, full NexusPaaS image-build/allow-list/SBOM/signing/GUI scan workflow evidence, managed/off-cluster secret recovery, PITR/off-cluster DR, HA/off-cluster Harbor storage, full OPS-019 failure injection beyond the Redis/event-broker, Prometheus telemetry/admission, Harbor dependency/status API, OPS-012 build/list degraded-route slices, and PERF-003..008 evidence remain open. |
+| Production Beta operations | Partial | Non-live gates and docs exist, static production-beta Secret deploy-path source/render proof now shows required Secret names/keys and no local/dev/test placeholder references without exposing values, current live 15 first-party deployments have same-image Kubernetes rollout/undo evidence, OPS-006 PostgreSQL logical backup/restore drill passed, OPS-008 MinIO synthetic object restore drill passed, OPS-009 current-live Kubernetes Secret recovery copy drill passed, OPS-007 Harbor backup/restore passed after moving Harbor from unsupported Rancher `local-path` hostPath PVCs to Kubernetes static `local` PVs, Harbor-side push/scan/delete passed with official Trivy and `crane`, OPS-011 Redis/event-broker outage evidence passed (`ga-redis-outage-20260621202250`, event `33fc697b-2cac-4715-ac04-e46097b0ea99`), partial OPS-013 Prometheus/telemetry stale and quota non-grant evidence passed (`ci-ga-prometheus-stale-20260621205458`, trace `ga-prometheus-stale-20260621205959`), Harbor dependency outage evidence passed through `/api/v1/harbor-status` (`ga-harbor-outage-20260621200008`), OPS-012 image-registry build/list degraded-route outage evidence passed (`ga-image-harbor-degraded-20260621212113`, image `ci-ga-image-harbor-degraded-20260621211729`, digest `sha256:21345ac6ad43db05f489bfa2ee37122b0b79873daca6f04619506c8bcef9d319`), a bounded PERF read smoke baseline passed after correcting k6 endpoint selection (`20` VUs / `210` iterations / `30` requests per endpoint / `0` failures / total p95 `2306.00ms`), Project list `100` VU live k6 evidence now passes on `ci-ga-pdp-enforce-20260622094936` (`100` temporary principals, `30s`, `/api/v1/projects` `1000/1000` 2xx, `0` failures, `0` 429, p95 `3.668ms`, enforce `429` count `0`, exact cleanup verified), and local deterministic `PERF-003..008`, `MON-013..017`, partial `DATA-014` image-build create/cancel, workload-submit/cancel, and scheduler-preemption idempotency, and all three image build create fixture optional-header evidence are recorded in the ledgers. Live 8-unit staging deploy/smoke/previous-image rollback/redeploy, live external staging Secret objects/provenance, full NexusPaaS image-build/allow-list/SBOM/signing/GUI scan workflow evidence, managed/off-cluster secret recovery, PITR/off-cluster DR, HA/off-cluster Harbor storage, full OPS-019 failure injection, live Prometheus telemetry/retention/alerting, live build execution/cleanup, live K8s-control throughput, full DATA-014 command coverage, typed ownership, live drift jobs, and Full GA remain open. |
 
 Additional Web/performance evidence: WEB-006 stream credential operation and
 the stream credential p95 sub-target passed on
@@ -444,6 +531,26 @@ WEB-007 active-Project GPU usage has a live nonzero requested-GPU pod proof on
 GPU utilization telemetry, live continuous log tailing/full workload status
 beyond the focused frontend REST polling slice, full usage workflow, full image
 workflow, or the remaining PERF families.
+
+Additional local non-GPU PERF/MON/DATA/IMG evidence: deterministic local coverage
+now exists for `PERF-003` queue states, `PERF-004` large Group request-usage
+queries, `PERF-005`/`USAGE-023` retained GPU-metric cardinality sanitization,
+`PERF-006` image-build quota/timeout/concurrency admission, `PERF-007` stream
+admission/egress policy, `PERF-008` dispatcher batch limiting, `MON-013` through
+`MON-017` low-cardinality `/metrics` snapshots, partial `DATA-014`
+image-build create/cancel, workload-submit/cancel, and scheduler-preemption
+idempotency, and all three image
+build create fixture optional-header contract evidence for `Idempotency-Key`, and
+`IMG-011` build-log response redaction, plus `IMG-012`/`IMG-013` active-build
+slot release after cancellation and timeout terminal states. This remains local
+deterministic and static contract evidence only; live queue stress, usage-query load,
+Prometheus retention/alerting, live build execution/cleanup, live resource
+termination, real timeout control, executor/Kubernetes quota release, deploy
+idempotency, live scheduler/Kubernetes preemption, live
+Harbor/Tekton/BuildKit/Kubernetes cancellation, live build log
+streaming/tailing, browser media/live egress, K8s-control throughput, full
+DATA-014 command coverage, typed ownership, live drift jobs, V1 external launch,
+and Full GA remain open.
 
 Additional image-registry evidence: bounded Harbor-to-catalog sync now uses the
 existing Harbor adapter/proxy and image-registry maintenance task to upsert one
@@ -476,7 +583,7 @@ cleanup deleted 2 exact platform rows and left no API catalog leftovers.
 | JWT/JWKS verification | Done for the first-release library-verifier slice: production JWT verification now uses `github.com/coreos/go-oidc/v3` for compact JWT/JWKS/signature handling with an explicit RS*/ES* algorithm allow-list, while local checks preserve the existing trusted-audience map, required `sub`/`exp`, one-minute `exp`/`nbf`/future-`iat` skew, `jti` revocation, and user/role mapping. | Keep this slice as v1 evidence; broader live OIDC/provider proof, service credential rotation, workload identity, mTLS/SPIFFE, and full GA security maturity remain separate gaps. |
 | Migration runner | Started — the existing pgx runner now has a first-release ledger/checksum/advisory-lock/dirty-state implementation slice with DB-free validation, focused/full backend tests, and live PostgreSQL integration evidence through redacted `platform-gateway-runtime-secret:DATABASE_URL` for temporary-schema isolation, dirty persistence, checksum mismatch blocking, first ledger adoption/skip, and lock contention. | Keep live staging migration/rollback drill, full schema-change rollback evidence, and broader migration-runner GA maturity open. |
 | Provider coupling | Longhorn, Harbor, MinIO, Dex, Redis Streams, and k3s are still reference-stack assumptions in several places. | Separate core contracts from provider implementations before claiming portability. |
-| Typed API contracts | Started for local/static external REST fixtures: request-notification create-form has fixture validation and spec parity coverage for `POST /api/v1/forms`, image-registry Dockerfile build submission has fixture validation plus `imageregistry.Spec()` parity coverage for `POST /api/v1/images/build/dockerfile`, workload job submission has fixture validation plus `workload.Spec()` parity coverage for `POST /api/v1/jobs`, workload ConfigFile creation/update has fixture validation plus `workload.Spec()` parity coverage for `POST /api/v1/configfiles` and `PUT /api/v1/configfiles/{id}` with a `ConfigFileChanged` service event metadata repair, workload job cancellation has fixture validation plus `workload.Spec()` parity coverage for `POST /api/v1/jobs/{id}/cancel` and a `JobCancelRequested` service event metadata repair, org-project Project creation has fixture validation plus `orgproject.Spec()` parity coverage for `POST /api/v1/projects`, org-project Project update has fixture validation plus `orgproject.Spec()` parity coverage for `PUT /api/v1/projects/{id}`, org-project Project delete has fixture validation plus `orgproject.Spec()` parity coverage for `DELETE /api/v1/projects/{id}`, org-project Project batch delete has fixture validation plus `orgproject.Spec()` parity coverage for `DELETE /api/v1/projects/batch`, org-project Group creation has fixture validation plus `orgproject.Spec()` parity coverage for `POST /api/v1/groups`, org-project Group update has fixture validation plus `orgproject.Spec()` parity coverage for `PUT /api/v1/groups/{id}` and a `GroupUpdated` service event metadata repair, org-project Group delete has fixture validation plus `orgproject.Spec()` parity coverage for `DELETE /api/v1/groups/{id}` and a `GroupDeleted` service event metadata repair, org-project Group batch delete has fixture validation plus `orgproject.Spec()` parity coverage for `DELETE /api/v1/groups/batch`, storage permission creation has fixture validation plus `storage.Spec()` parity coverage for `POST /api/v1/storage/permissions`, storage project permission update has fixture validation plus `storage.Spec()` parity coverage for `PUT /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions`, storage project permission delete has fixture validation plus `storage.Spec()` parity coverage for `DELETE /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/{userId}`, storage project permission batch update has fixture validation plus `storage.Spec()` parity coverage for `PUT /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/batch`, and storage project permission batch delete has fixture validation plus `storage.Spec()` parity coverage for `DELETE /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/batch`. Broader critical APIs still rely on route specs/generated OpenAPI instead of typed request/response contracts. | Continue moving critical APIs toward OpenAPI-first or explicit typed DTO contracts with fixtures; do not treat these fixtures as DATA GA, live ConfigFile update proof, live admin authorization proof, full Project/Group lifecycle, tenant isolation, live scheduler cancellation, Kubernetes job termination, cancellation propagation, live scheduler/Kubernetes execution, live permission enforcement, Kubernetes mount execution, cluster PVC isolation, namespace enforcement, CSI behavior, full workload workflow, full image workflow, first-version readiness, or Full GA coverage. |
+| Typed API contracts | Started for local/static external REST fixtures: request-notification create-form has fixture validation and spec parity coverage for `POST /api/v1/forms`, image-registry image build create routes have fixture validation plus `imageregistry.Spec()` parity coverage for `POST /api/v1/images/build`, `POST /api/v1/images/build/from-storage`, and `POST /api/v1/images/build/dockerfile`, workload job submission has fixture validation plus `workload.Spec()` parity coverage for `POST /api/v1/jobs`, workload ConfigFile creation/update has fixture validation plus `workload.Spec()` parity coverage for `POST /api/v1/configfiles` and `PUT /api/v1/configfiles/{id}` with a `ConfigFileChanged` service event metadata repair, workload job cancellation has fixture validation plus `workload.Spec()` parity coverage for `POST /api/v1/jobs/{id}/cancel` and a `JobCancelRequested` service event metadata repair, org-project Project creation has fixture validation plus `orgproject.Spec()` parity coverage for `POST /api/v1/projects`, org-project Project update has fixture validation plus `orgproject.Spec()` parity coverage for `PUT /api/v1/projects/{id}`, org-project Project delete has fixture validation plus `orgproject.Spec()` parity coverage for `DELETE /api/v1/projects/{id}`, org-project Project batch delete has fixture validation plus `orgproject.Spec()` parity coverage for `DELETE /api/v1/projects/batch`, org-project Group creation has fixture validation plus `orgproject.Spec()` parity coverage for `POST /api/v1/groups`, org-project Group update has fixture validation plus `orgproject.Spec()` parity coverage for `PUT /api/v1/groups/{id}` and a `GroupUpdated` service event metadata repair, org-project Group delete has fixture validation plus `orgproject.Spec()` parity coverage for `DELETE /api/v1/groups/{id}` and a `GroupDeleted` service event metadata repair, org-project Group batch delete has fixture validation plus `orgproject.Spec()` parity coverage for `DELETE /api/v1/groups/batch`, storage permission creation has fixture validation plus `storage.Spec()` parity coverage for `POST /api/v1/storage/permissions`, storage project permission update has fixture validation plus `storage.Spec()` parity coverage for `PUT /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions`, storage project permission delete has fixture validation plus `storage.Spec()` parity coverage for `DELETE /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/{userId}`, storage project permission batch update has fixture validation plus `storage.Spec()` parity coverage for `PUT /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/batch`, and storage project permission batch delete has fixture validation plus `storage.Spec()` parity coverage for `DELETE /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/batch`. Broader critical APIs still rely on route specs/generated OpenAPI instead of typed request/response contracts. | Continue moving critical APIs toward OpenAPI-first or explicit typed DTO contracts with fixtures; do not treat these fixtures as DATA GA, live ConfigFile update proof, live admin authorization proof, full Project/Group lifecycle, tenant isolation, live scheduler cancellation, Kubernetes job termination, cancellation propagation, live scheduler/Kubernetes execution, live permission enforcement, Kubernetes mount execution, cluster PVC isolation, namespace enforcement, CSI behavior, full workload workflow, full image workflow, first-version readiness, or Full GA coverage. |
 | Read-model drift and replay | Replay idempotency now has focused evidence: dead-letter replay retries only unresolved events and does not double-apply successful events. Authorization-policy, IDE, dashboard, clusterread, request-notification project-access, GPU usage, and image-registry local/in-memory drift comparisons now cover raw owner/source vs local projection missing, orphan, and stale rows for their scoped read-model pairs. GPU usage evidence covers the five identity/role/project/job pairs, deterministic ordering, canonical id normalization, nil app/store fail-closed behavior, exact pair coverage, snapshot/summary exclusion, blank-id skip behavior, and the co-hosted fallback trap. Image-registry evidence covers the five identity/role/project/member/group access read-model pairs, deterministic ordering, canonical id normalization, nil app/store fail-closed behavior, exact pair coverage, catalog/build/image-request/sync exclusion, blank-id skip behavior, and the co-hosted fallback trap. Live drift jobs, all-service DATA-016 coverage, and rebuild/cutover evidence are still not enough for cutover; this does not claim DATA GA, Full GA, first-version readiness, rebuild/replay cutover readiness, or production readiness. | Add live drift jobs, all-service DATA-016 coverage, and rebuild/cutover proof before retiring owner-read/shared-store paths. |
 | Per-unit runtime isolation | Non-live 8-unit runtime isolation is proven locally, and current live 15 first-party deployments now have same-image rollout/undo evidence. Deployable-unit RBAC, network policy, migration ownership, target 8-unit staging rollback, previous-image rollback, and live staging evidence are not fully proven. | Capture staging deploy, smoke, previous-image rollback, and redeploy evidence for each of the 8 units. |
 
@@ -489,6 +596,7 @@ cleanup deleted 2 exact platform rows and left no API catalog leftovers.
 | Service ownership docs | Service-level ownership is partially documented across several files. | Consolidate owner, API, data, config, test, and deployment responsibility per deployable unit. |
 | Provider ADRs | Provider abstraction is a target but not yet documented as concrete ADRs. | Add ADRs when replacing or abstracting current reference-stack assumptions. |
 | Supply chain | SBOM generation and image signing are GA goals but not enforced. | Add Syft/Cosign or equivalent after staging promotion is stable. |
+| Course-monitoring scope | Decided by ADR 0006: the reference course-monitoring reconciler is out of scope for current NexusPaaS GA. | Done for scope decision only; MON GA, usage reporting, Prometheus retention, alerting, live monitoring evidence, V1 external launch, and Full GA remain open. |
 | Remote Sonar | PR #33 external `SonarCloud Code Analysis` and Backend Quality Gate evidence is passing. | Keep the external SonarCloud PR check required by repository policy; live P0.2-P0.5 staging evidence remains open. |
 
 ## Preserved Direction
@@ -499,3 +607,35 @@ cleanup deleted 2 exact platform rows and left no API catalog leftovers.
   Redis Streams until provider abstractions are justified by concrete needs.
 - Prefer deleting stale docs and consolidating status over adding more planning
   files.
+
+## Reviewer Status
+
+This file is the maintained NexusPaaS backend gap/code-problem record, kept in
+the team's narrative format aligned with `gap.md` rather than the generic
+scheduled-task template (the same substance — feature gaps, code problems,
+SOLID/12-Factor posture, microservice boundaries, and verification — is covered
+in the sections above and in `gap.md`).
+
+This pass found **no local code-quality regression and no newly-surfaced
+unported reference capability.** All open items are the already-tracked
+live-execution P0/GA blockers — external Harbor registry promotion/rollback,
+8-unit staging deploy/smoke/previous-image rollback, live staging DB
+migration/rollback drill, live external Secret readiness, typed domain
+ownership, live drift jobs, full image-build/SBOM/signing workflow, and the
+remaining PERF/OPS families — none of which are code defects in the current
+tree.
+
+Verification this pass (current working tree, branch `feature/ga-gap-clearance`):
+
+| Command | Purpose | Result |
+| --- | --- | --- |
+| `go build ./...` | Compile all packages | Pass |
+| `go vet ./...` | Static checks | Pass |
+| `go test ./...` | Full unit/contract suite (24 pkgs) | Pass |
+| Cron parity diff vs reference | Confirm reconciler ports | Pass (15/15 in scope; `course_monitoring` out per ADR 0006) |
+
+Live external staging / SonarCloud PR gate evidence (P0.2–P0.5, V1 external
+launch) remains open and is not re-run here — it requires the live environment,
+not local toolchain.
+
+Status: Approved

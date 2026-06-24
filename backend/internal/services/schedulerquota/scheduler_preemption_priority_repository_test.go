@@ -30,6 +30,7 @@ func TestSchedulerPreemptionPriorityRepositoryPreemptionLifecycle(t *testing.T) 
 	}
 	recordID := preemptionRecordID(req.IdempotencyKey)
 	initial := initialPreemptionRecord(recordID, req)
+	assertInitialPreemptionRecordPrivateMaterial(t, initial, recordID)
 
 	created, err := repo.CreatePreemptionRecord(ctx, initial)
 	if err != nil {
@@ -63,6 +64,19 @@ func TestSchedulerPreemptionPriorityRepositoryPreemptionLifecycle(t *testing.T) 
 	missing := repo.FinishPreemptionRecord(ctx, "missing", "failed", map[string]any{"reason": "gone"}, completedAt)
 	if missing["status"] != "failed" || missing["reason"] != "gone" {
 		t.Fatalf("FinishPreemptionRecord missing = %#v, want update payload", missing)
+	}
+}
+
+func assertInitialPreemptionRecordPrivateMaterial(t *testing.T, initial map[string]any, recordID string) {
+	t.Helper()
+	if initial["idempotency_key"] != nil || initial["fingerprint"] != nil {
+		t.Fatalf("initial preemption record stored raw idempotency material")
+	}
+	if initial[internalPreemptionIdempotencyKeyHash] == "" || initial[internalPreemptionFingerprintHash] == "" {
+		t.Fatalf("initial preemption record missing private hashes")
+	}
+	if initial["preemption_id"] == "" || initial["preemption_id"] == recordID {
+		t.Fatalf("initial preemption record must have generated public preemption_id")
 	}
 }
 

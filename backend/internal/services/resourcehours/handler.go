@@ -18,6 +18,8 @@ const (
 type UserResourceHours struct {
 	UserID         string
 	Username       string
+	GroupID        string
+	GroupName      string
 	ProjectID      string
 	ProjectName    string
 	JobID          string
@@ -32,6 +34,7 @@ type UserResourceHours struct {
 
 type AdminUsageSummary struct {
 	UniqueUsers        int     `json:"uniqueUsers"`
+	UniqueGroups       int     `json:"uniqueGroups"`
 	UniqueProjects     int     `json:"uniqueProjects"`
 	TotalCPUHours      float64 `json:"totalCPUHours"`
 	TotalGPUHours      float64 `json:"totalGPUHours"`
@@ -44,6 +47,16 @@ type AdminUsageResponse struct {
 	Since    string              `json:"since"`
 	Filters  map[string]string   `json:"filters"`
 	RowCount int                 `json:"rowCount"`
+}
+
+type adminUsageFilters struct {
+	UserID          string
+	Username        string
+	GroupID         string
+	ProjectID       string
+	FinalizedRaw    string
+	FilterFinalized bool
+	Finalized       bool
 }
 
 func Register(app *platform.App) {
@@ -78,51 +91,88 @@ func getAdminUsage(app *platform.App, r *http.Request, _ platform.RouteSpec) (in
 	}
 
 	since := resolveSince(r.URL.Query().Get("since"))
-	userIDFilter := strings.TrimSpace(r.URL.Query().Get("user_id"))
-	usernameFilter := strings.TrimSpace(r.URL.Query().Get("username"))
-	projectIDFilter := strings.TrimSpace(r.URL.Query().Get("project_id"))
-	finalizedFilterRaw := strings.TrimSpace(r.URL.Query().Get("finalized"))
-	filterFinalized := finalizedFilterRaw != ""
-	finalizedValue := strings.EqualFold(finalizedFilterRaw, "true")
+	filters := adminUsageFiltersFromRequest(r)
+	filtered, summary := filterAdminUsageRows(usageRows(app, r, since), filters)
+	return http.StatusOK, AdminUsageResponse{
+		Rows:     filtered,
+		Summary:  summary,
+		Since:    since.Format(dateLayout),
+		Filters:  filters.values(),
+		RowCount: len(filtered),
+	}, nil
+}
 
-	filtered := []UserResourceHours{}
+func adminUsageFiltersFromRequest(r *http.Request) adminUsageFilters {
+	finalizedRaw := strings.TrimSpace(r.URL.Query().Get("finalized"))
+	return adminUsageFilters{
+		UserID:          strings.TrimSpace(r.URL.Query().Get("user_id")),
+		Username:        strings.TrimSpace(r.URL.Query().Get("username")),
+		GroupID:         strings.TrimSpace(r.URL.Query().Get("group_id")),
+		ProjectID:       strings.TrimSpace(r.URL.Query().Get("project_id")),
+		FinalizedRaw:    finalizedRaw,
+		FilterFinalized: finalizedRaw != "",
+		Finalized:       strings.EqualFold(finalizedRaw, "true"),
+	}
+}
+
+func filterAdminUsageRows(rows []UserResourceHours, filters adminUsageFilters) ([]UserResourceHours, AdminUsageSummary) {
+	filtered := make([]UserResourceHours, 0, len(rows))
+	for _, row := range rows {
+		if filters.matches(row) {
+			filtered = append(filtered, row)
+		}
+	}
+	return filtered, summarizeAdminUsageRows(filtered)
+}
+
+func (filters adminUsageFilters) matches(row UserResourceHours) bool {
+	if filters.UserID != "" && row.UserID != filters.UserID {
+		return false
+	}
+	if filters.Username != "" && !strings.EqualFold(row.Username, filters.Username) {
+		return false
+	}
+	if filters.GroupID != "" && row.GroupID != filters.GroupID {
+		return false
+	}
+	if filters.ProjectID != "" && row.ProjectID != filters.ProjectID {
+		return false
+	}
+	if filters.FilterFinalized && row.IsFinalized != filters.Finalized {
+		return false
+	}
+	return true
+}
+
+func summarizeAdminUsageRows(rows []UserResourceHours) AdminUsageSummary {
 	userSet := map[string]struct{}{}
+	groupSet := map[string]struct{}{}
 	projectSet := map[string]struct{}{}
 	summary := AdminUsageSummary{}
-	for _, row := range usageRows(app, r, since) {
-		if userIDFilter != "" && row.UserID != userIDFilter {
-			continue
-		}
-		if usernameFilter != "" && !strings.EqualFold(row.Username, usernameFilter) {
-			continue
-		}
-		if projectIDFilter != "" && row.ProjectID != projectIDFilter {
-			continue
-		}
-		if filterFinalized && row.IsFinalized != finalizedValue {
-			continue
-		}
-		filtered = append(filtered, row)
+	for _, row := range rows {
 		userSet[row.UserID] = struct{}{}
+		if row.GroupID != "" {
+			groupSet[row.GroupID] = struct{}{}
+		}
 		projectSet[row.ProjectID] = struct{}{}
 		summary.TotalCPUHours += row.CPUHours
 		summary.TotalGPUHours += row.GPUHours
 		summary.TotalMemoryGBHours += row.MemoryGBHours
 	}
 	summary.UniqueUsers = len(userSet)
+	summary.UniqueGroups = len(groupSet)
 	summary.UniqueProjects = len(projectSet)
-	return http.StatusOK, AdminUsageResponse{
-		Rows:    filtered,
-		Summary: summary,
-		Since:   since.Format(dateLayout),
-		Filters: map[string]string{
-			"user_id":    userIDFilter,
-			"username":   usernameFilter,
-			"project_id": projectIDFilter,
-			"finalized":  finalizedFilterRaw,
-		},
-		RowCount: len(filtered),
-	}, nil
+	return summary
+}
+
+func (filters adminUsageFilters) values() map[string]string {
+	return map[string]string{
+		"user_id":    filters.UserID,
+		"username":   filters.Username,
+		"group_id":   filters.GroupID,
+		"project_id": filters.ProjectID,
+		"finalized":  filters.FinalizedRaw,
+	}
 }
 
 func usageRows(app *platform.App, r *http.Request, since time.Time) []UserResourceHours {
@@ -145,6 +195,8 @@ func rowFromMap(data map[string]any) UserResourceHours {
 	return UserResourceHours{
 		UserID:         textValue(data, "user_id", "userId", "UserID"),
 		Username:       textValue(data, "username", "Username"),
+		GroupID:        textValue(data, "group_id", "groupId", "GroupID"),
+		GroupName:      textValue(data, "group_name", "groupName", "GroupName"),
 		ProjectID:      textValue(data, "project_id", "projectId", "ProjectID"),
 		ProjectName:    textValue(data, "project_name", "projectName", "ProjectName"),
 		JobID:          textValue(data, "job_id", "jobId", "JobID"),

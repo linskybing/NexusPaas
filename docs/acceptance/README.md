@@ -80,3 +80,4 @@ readiness, rollback, and smoke evidence.
 - [iteration-plan.md](iteration-plan.md) — milestones M0–M8 (vertical slices).
 - [ga-checklist.md](ga-checklist.md) — GA release checklist + final GA definition.
 - [gap-analysis.md](gap-analysis.md) — **v1-readiness review + proposed extra ACs.**
+- [ga-acceptance-trace-matrix.md](ga-acceptance-trace-matrix.md) — compact status trace for GA families and blockers.

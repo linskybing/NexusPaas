@@ -19,6 +19,10 @@ import (
 
 const (
 	defaultMaxPreemptions = 5
+
+	internalPreemptionIdempotencyKeyHash = "internal_preemption_idempotency_key_hash"
+	internalPreemptionFingerprintHash    = "internal_preemption_fingerprint_hash"
+	internalPreemptionRecordID           = "internal_preemption_record_id"
 )
 
 type preemptionRequest struct {
@@ -99,15 +103,16 @@ func handlePreemption(app *platform.App, r *http.Request, _ platform.RouteSpec) 
 		return preemptionErrorStatus(err), data, nil
 	}
 	status, data := executePreemption(preemptionExecution{
-		app:      app,
-		request:  r,
-		client:   client,
-		repo:     repo,
-		recordID: record.ID,
-		req:      req,
-		victims:  victims,
-		freedGPU: freedGPU,
-		freedCPU: freedCPU,
+		app:                app,
+		request:            r,
+		client:             client,
+		repo:               repo,
+		recordID:           record.ID,
+		publicPreemptionID: shared.TextValue(record.Data, "preemption_id", "preemptionId"),
+		req:                req,
+		victims:            victims,
+		freedGPU:           freedGPU,
+		freedCPU:           freedCPU,
 	})
 	return status, data, nil
 }
@@ -252,15 +257,16 @@ func preflightPreemptionVictims(app *platform.App, r *http.Request, client inter
 }
 
 type preemptionExecution struct {
-	app      *platform.App
-	request  *http.Request
-	client   internalWorkloadPreemptionClient
-	repo     *recordStoreSchedulerPreemptionPriorityRepository
-	recordID string
-	req      preemptionRequest
-	victims  []preemptionTarget
-	freedGPU float64
-	freedCPU float64
+	app                *platform.App
+	request            *http.Request
+	client             internalWorkloadPreemptionClient
+	repo               *recordStoreSchedulerPreemptionPriorityRepository
+	recordID           string
+	publicPreemptionID string
+	req                preemptionRequest
+	victims            []preemptionTarget
+	freedGPU           float64
+	freedCPU           float64
 }
 
 func executePreemption(exec preemptionExecution) (int, map[string]any) {
@@ -287,7 +293,7 @@ func executePreemption(exec preemptionExecution) (int, map[string]any) {
 			return http.StatusConflict, data
 		}
 		_, err = exec.client.Preempt(exec.request.Context(), victim.ID, workloadPreemptRequest{
-			PreemptionID:   exec.recordID,
+			PreemptionID:   exec.publicPreemptionID,
 			RequesterJobID: exec.req.RequesterJobID,
 			Reason:         reason,
 			Cleanup:        cleanupData,
@@ -302,7 +308,7 @@ func executePreemption(exec preemptionExecution) (int, map[string]any) {
 		}
 		completed = append(completed, victimData)
 		eventData := map[string]any{
-			"preemption_id":    exec.recordID,
+			"preemption_id":    exec.publicPreemptionID,
 			"requester_job_id": exec.req.RequesterJobID,
 			"victim_job_id":    victim.JobID,
 			"project_id":       victim.ProjectID,
@@ -314,7 +320,9 @@ func executePreemption(exec preemptionExecution) (int, map[string]any) {
 			if err := exec.repo.AppendPreemptionVictimTx(exec.request.Context(), tx, exec.recordID, victimData); err != nil {
 				return err
 			}
-			tx.Emit(schedulerEvent(exec.request, "JobPreempted", "preempted", eventData))
+			event := schedulerEvent(exec.request, "JobPreempted", "preempted", eventData)
+			event.IdempotencyKey = ""
+			tx.Emit(event)
 			return nil
 		}); err != nil {
 			data := finishPreemptionRecord(exec.request.Context(), exec.repo, exec.recordID, "failed", map[string]any{
@@ -336,19 +344,20 @@ func executePreemption(exec preemptionExecution) (int, map[string]any) {
 
 func initialPreemptionRecord(id string, req preemptionRequest) map[string]any {
 	return map[string]any{
-		"id":               id,
-		"preemption_id":    id,
-		"status":           "in_progress",
-		"accepted":         false,
-		"idempotency_key":  req.IdempotencyKey,
-		"fingerprint":      req.Fingerprint,
-		"requester_job_id": req.RequesterJobID,
-		"project_id":       req.ProjectID,
-		"queue_name":       req.QueueName,
-		"required_gpu":     req.RequiredGPU,
-		"required_cpu":     req.RequiredCPU,
-		"max_preemptions":  req.MaxPreemptions,
-		"started_at":       time.Now().UTC().Format(time.RFC3339),
+		"id":                                 id,
+		internalPreemptionRecordID:           id,
+		"preemption_id":                      platform.NewUUID(),
+		"status":                             "in_progress",
+		"accepted":                           false,
+		internalPreemptionIdempotencyKeyHash: preemptionHash(req.IdempotencyKey),
+		internalPreemptionFingerprintHash:    req.Fingerprint,
+		"requester_job_id":                   req.RequesterJobID,
+		"project_id":                         req.ProjectID,
+		"queue_name":                         req.QueueName,
+		"required_gpu":                       req.RequiredGPU,
+		"required_cpu":                       req.RequiredCPU,
+		"max_preemptions":                    req.MaxPreemptions,
+		"started_at":                         time.Now().UTC().Format(time.RFC3339),
 	}
 }
 
@@ -362,9 +371,9 @@ func finishPreemptionRecord(
 		update := shared.CloneMap(updates)
 		update["status"] = status
 		update["completed_at"] = time.Now().UTC().Format(time.RFC3339)
-		return update
+		return publicPreemptionRecordData(update)
 	}
-	return repo.FinishPreemptionRecord(ctx, id, status, updates, time.Now().UTC())
+	return publicPreemptionRecordData(repo.FinishPreemptionRecord(ctx, id, status, updates, time.Now().UTC()))
 }
 
 func appendVictimResult(ctx context.Context, repo *recordStoreSchedulerPreemptionPriorityRepository, id string, victim map[string]any) {
@@ -382,18 +391,43 @@ func preemptionRecordVictims(ctx context.Context, repo *recordStoreSchedulerPree
 }
 
 func replayPreemptionRecord(data map[string]any, req preemptionRequest) (int, any, *platform.Degraded) {
-	if shared.TextValue(data, "fingerprint") != req.Fingerprint {
+	fingerprintHash := shared.FirstNonEmpty(shared.TextValue(data, internalPreemptionFingerprintHash), shared.TextValue(data, "fingerprint"))
+	if fingerprintHash != req.Fingerprint {
 		return http.StatusConflict, shared.ErrorData("idempotency key is already used by a different preemption request"), nil
 	}
 	if shared.TextValue(data, "status") == "in_progress" {
 		return http.StatusConflict, shared.ErrorData("preemption request is already in progress"), nil
 	}
-	return http.StatusOK, data, nil
+	return http.StatusOK, publicPreemptionRecordData(data), nil
 }
 
 func preemptionRecordID(key string) string {
 	sum := sha256.Sum256([]byte(key))
 	return "PRE-" + hex.EncodeToString(sum[:8])
+}
+
+func preemptionHash(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func publicPreemptionRecordData(data map[string]any) map[string]any {
+	out := shared.CloneMap(data)
+	publicID := shared.TextValue(out, "preemption_id", "preemptionId")
+	privateID := shared.TextValue(out, "id")
+	if publicID != "" && publicID != privateID {
+		out["id"] = publicID
+	} else {
+		delete(out, "id")
+		delete(out, "preemption_id")
+	}
+	delete(out, "idempotency_key")
+	delete(out, "idempotencyKey")
+	delete(out, "fingerprint")
+	delete(out, internalPreemptionIdempotencyKeyHash)
+	delete(out, internalPreemptionFingerprintHash)
+	delete(out, internalPreemptionRecordID)
+	return out
 }
 
 func preemptionFingerprint(req preemptionRequest) string {

@@ -64,13 +64,14 @@ var imageProjectionDriftPairs = []imageProjectionDriftPair{
 
 func registryEvent(r *http.Request, name string, data map[string]any) contracts.Event {
 	return contracts.Event{
-		EventID:       platform.NewUUID(),
-		Name:          name,
-		Source:        serviceName,
-		OccurredAt:    time.Now().UTC(),
-		TraceID:       shared.FirstNonBlank(r.Header.Get("X-Trace-ID"), r.Header.Get("X-Request-ID"), platform.NewUUID()),
-		SchemaVersion: 1,
-		Data:          data,
+		EventID:        platform.NewUUID(),
+		Name:           name,
+		Source:         serviceName,
+		OccurredAt:     time.Now().UTC(),
+		TraceID:        shared.FirstNonBlank(r.Header.Get("X-Trace-ID"), r.Header.Get("X-Request-ID"), platform.NewUUID()),
+		SchemaVersion:  1,
+		IdempotencyKey: strings.TrimSpace(r.Header.Get(idempotencyKeyHeader)),
+		Data:           sanitizeImageEventData(data),
 	}
 }
 
@@ -122,9 +123,21 @@ func imageRows(app *platform.App, r *http.Request, resource string) []map[string
 		if row["id"] == nil {
 			row["id"] = record.ID
 		}
+		if resource == imageBuildsResource {
+			row = publicImageBuildData(row)
+		}
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+func sanitizeImageEventData(data map[string]any) map[string]any {
+	out := shared.CloneMap(data)
+	delete(out, internalImageBuildIdempotencyKeyHash)
+	delete(out, internalImageBuildIdempotencyFingerprintHash)
+	delete(out, internalImageBuildCancelIdempotencyKeyHash)
+	delete(out, internalImageBuildCancelIdempotencyFingerprintHash)
+	return out
 }
 
 func imageAccessRows(app *platform.App, r *http.Request, localResource, sourceResource string) []map[string]any {
@@ -487,11 +500,20 @@ func hasImageRuleIdentifier(data map[string]any, id string) bool {
 
 func findBuild(app *platform.App, r *http.Request, id string) (imageRecord, bool) {
 	for _, record := range app.Store.List(r.Context(), imageBuildsResource) {
-		if record.ID == id || idFrom(record.Data, "id", "job_name", "jobName", "build_id", "buildId") == id {
+		if record.ID == id || hasAnyIdentifier(record.Data, id, "id", "job_name", "jobName", "build_id", "buildId") {
 			return imageRecord{ID: record.ID, Data: record.Data}, true
 		}
 	}
 	return imageRecord{}, false
+}
+
+func hasAnyIdentifier(data map[string]any, id string, keys ...string) bool {
+	for _, key := range keys {
+		if idFrom(data, key) == id {
+			return true
+		}
+	}
+	return false
 }
 
 func uniqueHarborProjects(app *platform.App, r *http.Request) []string {
