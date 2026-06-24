@@ -263,6 +263,7 @@ func TestRegisterAllCoHostedOwnsAllMaintenanceSideEffects(t *testing.T) {
 	assertMaintenanceTasks(t, app, []string{
 		"audit-log-retention",
 		"cluster-resource-collector",
+		"gpu-reservation-drift",
 		"gpu-usage-telemetry-collector",
 		"harbor-catalog-sync",
 		"harbor-health",

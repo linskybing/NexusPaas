@@ -168,3 +168,18 @@ Production Beta still needs:
   PrometheusRule, and CronJob resources.
 - Staging rehearsal for deploy, smoke, rollback, and re-deploy.
 - GA replacement of static service keys with mTLS or workload identity.
+
+## GPU MPS sharing caveat (admin)
+
+NVIDIA MPS gives density and cooperative sharing, **not hard isolation**. Treat
+it accordingly when approving GPU plans (see
+`docs/acceptance/gpu-dra-mps.md` for the full policy table):
+
+- MPS is allowed within the same user/Project by default (if the Queue permits).
+- MPS sharing **across Projects is blocked** by admission unless a platform admin
+  sets `allow_cross_project_mps` on the plan (GPU-012). Setting
+  `mps_forbidden` on the plan blocks MPS entirely for high-security tenants.
+- Per-process SM utilisation is generally **not measurable** on this NVIDIA
+  stack. The GPU usage API therefore labels MPS SM with
+  `SMAttribution: "allocation-based"` (estimated), never as measured (GPU-018).
+  Bill on reserved SM-hours, not on a "measured" per-process SM number.

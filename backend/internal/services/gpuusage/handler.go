@@ -70,6 +70,7 @@ type MPSGPUSlot struct {
 	GPUMemoryBytes       int64
 	SMUtilization        float64
 	SMUtilizationSource  string
+	SMAttribution        string
 	MemUtilization       float64
 	MemUtilizationSource string
 	MemoryUsedBytes      int64
