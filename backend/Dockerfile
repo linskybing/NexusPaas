@@ -1,11 +1,3 @@
-FROM node:24.15.0-alpine AS web-build
-WORKDIR /src/frontend
-COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
-COPY frontend/index.html frontend/tsconfig.json frontend/vite.config.ts ./
-COPY frontend/src ./src
-RUN npm run build
-
 FROM golang:1.25.11-alpine AS build
 WORKDIR /src/backend
 COPY backend/go.mod backend/go.sum ./
@@ -20,7 +12,6 @@ RUN apk add --no-cache --upgrade ca-certificates libcrypto3 libssl3 \
     && adduser -S -D -H -u 10001 -G app app
 COPY --from=build /out/microservice /usr/local/bin/microservice
 WORKDIR /app
-COPY --from=web-build --chown=app:app /src/frontend/dist ./web
 COPY --chown=app:app backend/audit-compliance-service/migrations ./audit-compliance-service/migrations
 COPY --chown=app:app backend/authorization-policy-service/migrations ./authorization-policy-service/migrations
 COPY --chown=app:app backend/ide-service/migrations ./ide-service/migrations
@@ -38,6 +29,5 @@ COPY --chown=app:app backend/usage-observability-service/migrations ./usage-obse
 COPY --chown=app:app backend/workload-service/migrations ./workload-service/migrations
 USER app:app
 ENV HTTP_ADDR=:8080
-ENV WEB_UI_DIR=/app/web
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/microservice"]

@@ -52,8 +52,8 @@ jobs:
       integration: ${{ steps.filter.outputs.backend_go == 'true' || steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_migrations == 'true' || steps.filter.outputs.backend_docker == 'true' || steps.filter.outputs.backend_deploy == 'true' || steps.filter.outputs.backend_compose == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
       govulncheck: ${{ steps.filter.outputs.backend_go == 'true' || steps.filter.outputs.backend_deps == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
       osv: ${{ steps.filter.outputs.backend_deps == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
-      trivy_fs: ${{ steps.filter.outputs.workflow == 'true' || steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_docker == 'true' || steps.filter.outputs.backend_deploy == 'true' || steps.filter.outputs.backend_scripts == 'true' || steps.filter.outputs.frontend == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
-      image_scan: ${{ steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_migrations == 'true' || steps.filter.outputs.backend_docker == 'true' || steps.filter.outputs.backend_deploy == 'true' || steps.filter.outputs.frontend == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
+      trivy_fs: ${{ steps.filter.outputs.workflow == 'true' || steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_docker == 'true' || steps.filter.outputs.backend_deploy == 'true' || steps.filter.outputs.backend_scripts == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
+      image_scan: ${{ steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_migrations == 'true' || steps.filter.outputs.backend_docker == 'true' || steps.filter.outputs.backend_deploy == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
 
     steps:
       - name: Checkout
@@ -80,8 +80,6 @@ jobs:
               - 'backend/.dockerignore'
               - '.dockerignore'
               - 'backend/*/Dockerfile'
-            frontend:
-              - 'frontend/**'
             backend_deploy:
               - 'backend/deploy/**'
               - 'backend/*/k8s/**'

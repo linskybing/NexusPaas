@@ -64,7 +64,6 @@ readiness, rollback, and smoke evidence.
 | C. Plan, Queue, Quota, Preemption | QUEUE | [plan-queue-quota.md](plan-queue-quota.md) |
 | D. GPU DRA + NVIDIA MPS | GPU | [gpu-dra-mps.md](gpu-dra-mps.md) |
 | E. Container/PID/process/GPU usage attribution | USAGE | [usage-attribution.md](usage-attribution.md) |
-| F. WebRTC GUI workloads | RTC | [webrtc.md](webrtc.md) |
 | G. Image build, Harbor, allow list | IMG | [image-build.md](image-build.md) |
 | H. NexusPaaS CLI | CLI | [cli.md](cli.md) |
 | I. RBAC, Group, Project, Personal Project | RBAC | [rbac.md](rbac.md) |

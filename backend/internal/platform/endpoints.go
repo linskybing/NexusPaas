@@ -32,7 +32,6 @@ func (a *App) registerCommonEndpoints() {
 			"status": "ok",
 		})
 	})
-	a.registerWebUI()
 	// Non-production dev-token mint endpoint: the secure bootstrap for signed local
 	// development tokens, registered only when a dev signing key is configured.
 	if a.devTokenSigner != nil {

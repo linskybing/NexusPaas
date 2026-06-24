@@ -78,3 +78,16 @@ MPS must not be represented as hard isolation across mutually untrusted tenants.
 | GPU-016 | Live E2E test proves DRA ResourceClaimTemplate + MPS injection on a GPU cluster. |
 | GPU-017 | GPU usage dashboard shows reserved GPU fraction and observed GPU usage separately. |
 | GPU-018 | If true per-process SM usage is unavailable on the target NVIDIA stack, UI must label SM attribution as estimated or allocation-based, not measured. |
+
+## Frontend-deferred note
+
+The web frontend has been removed (backend-only phase). GPU-017 and GPU-018 are
+UI-facing: their **UI rendering** is deferred until a frontend is rebuilt. The
+backend satisfies the data side now — the GPU usage API exposes the reserved GPU
+fraction and observed usage as **separate** fields, and labels SM attribution
+with `sm_attribution: "allocation-based" | "estimated"` so SM is never reported
+as measured. The `RTC` (WebRTC GUI) acceptance area is likewise deferred with the
+frontend; backend Selkies sidecar streaming dispatch remains in the codebase.
+
+GPU-001…016 are verifiable on a GPU-less machine via the `dra-example-driver`
+harness — see `backend/docs/e2e-testing.md`.
