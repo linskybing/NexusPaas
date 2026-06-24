@@ -11,7 +11,6 @@ original document structure; follow the per-area docs linked from the
 | Root requires platform admin approval | Section 6 ([project-capabilities](project-capabilities.md)) | CAP-001, CAP-002, CAP-011 |
 | External network requires platform admin approval | Section 6 | CAP-004, CAP-006, CAP-011 |
 | HostPath requires platform admin approval | Section 6 | CAP-007, CAP-008, CAP-009, CAP-011 |
-| WebRTC GUI container through browser | Section 10 ([webrtc](webrtc.md)) | RTC-001 to RTC-018 |
 | GPU uses DRA claim primarily | Section 8 ([gpu-dra-mps](gpu-dra-mps.md)) | GPU-001 to GPU-006 |
 | MPS for fine-grained GPU control | Section 8, 9 | GPU-007 to GPU-018, USAGE-008 to USAGE-018 |
 | All deployments go through Queue | Section 7 ([plan-queue-quota](plan-queue-quota.md)) | QUEUE-001 to QUEUE-022 |

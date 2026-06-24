@@ -593,8 +593,8 @@ func TestIdentityOIDCCallbackIssuesSessionCookies(t *testing.T) {
 		t.Fatalf("callback status=%d degraded=%v data=%#v, want 302", code, degraded, data)
 	}
 	raw := data.(platform.RawResponse)
-	if raw.Headers["Location"] != "/ui/?auth=oidc" {
-		t.Fatalf("Location = %q, want /ui/?auth=oidc", raw.Headers["Location"])
+	if raw.Headers["Location"] != "/?auth=oidc" {
+		t.Fatalf("Location = %q, want /?auth=oidc", raw.Headers["Location"])
 	}
 	cookies := strings.Join(raw.HeaderValues["Set-Cookie"], "\n")
 	for _, name := range []string{"token=", "refresh_token=", oidcStateCookieName + "="} {

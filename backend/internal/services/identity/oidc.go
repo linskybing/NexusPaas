@@ -129,7 +129,7 @@ func oidcCallback(app *platform.App, r *http.Request, _ platform.RouteSpec) (int
 	}
 	cookies := append(authCookies(r, textValue(data, "token"), textValue(data, "refresh_token")), clearOIDCStateCookie(r))
 	return http.StatusFound, platform.RawResponse{
-		Headers:      map[string]string{"Location": "/ui/?auth=oidc"},
+		Headers:      map[string]string{"Location": "/?auth=oidc"},
 		HeaderValues: map[string][]string{"Set-Cookie": cookies},
 	}, nil
 }

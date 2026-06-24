@@ -25,7 +25,6 @@ type Config struct {
 	APIKeyPrincipals            map[string]APIKeyPrincipal
 	AllowedOrigins              map[string]bool
 	TrustedProxyCIDRs           []*net.IPNet
-	WebUIDir                    string
 	JWKSURL                     string
 	JWTIssuer                   string
 	JWTAudiences                map[string]bool
@@ -184,7 +183,6 @@ const (
 	envProduction                  = "PRODUCTION"
 	envRequireAuth                 = "REQUIRE_AUTH"
 	envTrustedProxyCIDRs           = "TRUSTED_PROXY_CIDRS"
-	envWebUIDir                    = "WEB_UI_DIR"
 	envMaxAPIBodyBytes             = "MAX_API_BODY_BYTES"
 	envMaxConfigFileBytes          = "MAX_CONFIGFILE_BYTES"
 	envMaxConfigFileDocuments      = "MAX_CONFIGFILE_DOCUMENTS"
@@ -255,7 +253,6 @@ type configEnvParser struct {
 const (
 	defaultProductName  = "NexusPaaS"
 	defaultCLICACertPEM = "-----BEGIN CERTIFICATE-----\nNEXUSPAAS-LOCAL-CLI-CA\n-----END CERTIFICATE-----\n"
-	defaultWebUIDir     = "/app/web"
 )
 
 func (p *configEnvParser) addDiagnostic(envName, kind string) {
@@ -292,7 +289,6 @@ func ConfigFromEnv() Config {
 		APIKeyPrincipals:            parser.parseAPIKeyPrincipals(os.Getenv(envAPIKeyUsers)),
 		AllowedOrigins:              allowedOrigins,
 		TrustedProxyCIDRs:           trustedProxyCIDRs,
-		WebUIDir:                    strings.TrimSpace(env(envWebUIDir, defaultWebUIDir)),
 		JWKSURL:                     strings.TrimSpace(os.Getenv(envJWTJWKSURL)),
 		JWTIssuer:                   strings.TrimSpace(os.Getenv(envJWTIssuer)),
 		JWTAudiences:                parseJWTAudiences(),
