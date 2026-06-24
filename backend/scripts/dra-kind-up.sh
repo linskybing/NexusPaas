@@ -26,7 +26,7 @@ for tool in docker kind kubectl helm git; do
 done
 docker info >/dev/null 2>&1 || { echo "error: docker daemon is not running" >&2; exit 1; }
 
-if [ ! -d "${DRA_EXAMPLE_DIR}/.git" ]; then
+if [[ ! -d "${DRA_EXAMPLE_DIR}/.git" ]]; then
   echo ">> cloning dra-example-driver ${DRA_EXAMPLE_REF} into ${DRA_EXAMPLE_DIR}"
   git clone --depth 1 --branch "${DRA_EXAMPLE_REF}" "${DRA_EXAMPLE_REPO}" "${DRA_EXAMPLE_DIR}"
 fi
@@ -46,7 +46,7 @@ for _ in $(seq 1 60); do
   if kubectl get deviceclass "${DRA_DEVICE_CLASS}" >/dev/null 2>&1; then ready=1; break; fi
   sleep 5
 done
-[ "${ready}" = 1 ] || { echo "error: DeviceClass ${DRA_DEVICE_CLASS} did not appear in time" >&2; exit 1; }
+[[ "${ready}" == 1 ]] || { echo "error: DeviceClass ${DRA_DEVICE_CLASS} did not appear in time" >&2; exit 1; }
 kubectl wait --for=condition=Ready pods -n "${DRA_NAMESPACE}" --all --timeout=180s || true
 
 cat <<EOF
