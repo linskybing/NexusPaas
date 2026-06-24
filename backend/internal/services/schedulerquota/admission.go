@@ -186,13 +186,10 @@ func evaluateSubmitAdmission(ctx context.Context, reader admissionReader, req su
 		review.RuntimeLimit = shared.IntValue(queue.Data, "max_runtime_seconds", "maxRuntimeSeconds", "runtime_limit_seconds", "runtimeLimitSeconds")
 	}
 
-	if err := enforceAdmissionDeviceClass(plan, &req); err != nil {
+	if err := enforceAdmissionGPUPolicy(plan, &req); err != nil {
 		return review, err
 	}
 	review.DeviceClassName = req.DeviceClassName
-	if err := enforceAdmissionMPSPolicy(plan, req); err != nil {
-		return review, err
-	}
 
 	floor, err := admissionResourceFloorFromRequest(req)
 	if err != nil {

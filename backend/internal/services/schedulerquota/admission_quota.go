@@ -108,6 +108,15 @@ func enforceAdmissionDeviceClass(plan contracts.Record[map[string]any], req *sub
 	return deny(http.StatusForbidden, fmt.Sprintf("GPU model %q is not allowed by the plan", deviceClass))
 }
 
+// enforceAdmissionGPUPolicy applies the GPU admission policy: the allowed
+// DeviceClass (GPU-010) and the MPS cross-project sharing rule (GPU-012).
+func enforceAdmissionGPUPolicy(plan contracts.Record[map[string]any], req *submitAdmissionRequest) error {
+	if err := enforceAdmissionDeviceClass(plan, req); err != nil {
+		return err
+	}
+	return enforceAdmissionMPSPolicy(plan, *req)
+}
+
 // enforceAdmissionMPSPolicy implements GPU-012: MPS GPU sharing across projects
 // is blocked unless a platform admin explicitly allows it on the plan. MPS is
 // requested when the job declares an SM percentage below 100 (fractional GPU
