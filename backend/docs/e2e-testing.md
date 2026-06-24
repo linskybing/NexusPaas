@@ -76,7 +76,34 @@ The dispatch code expects driver `gpu.nvidia.com` and MPS opaque config
 `resource.nvidia.com/v1beta1`
 (`internal/services/workload/dispatcher_dra.go`). On Kubernetes >= 1.34 the
 `resource.k8s.io/v1` APIs are GA and on by default; the DeviceClass appears only
-after the NVIDIA DRA driver is installed.
+after a DRA driver is installed.
+
+### GPU-less DRA testing (dra-example-driver)
+
+You do **not** need a real GPU to run the DRA E2E. The upstream
+[`dra-example-driver`](https://github.com/kubernetes-sigs/dra-example-driver)
+advertises *simulated* GPUs through a `gpu.example.com` DeviceClass +
+ResourceSlices on a local `kind` cluster. That is sufficient because
+`TestLiveK8sConfigFileDRADispatchE2E` asserts on the **generated
+ResourceClaimTemplate / Pod object shape** against a real `resource.k8s.io/v1`
+API server — it discovers the DeviceClass dynamically (it prefers
+`gpu.nvidia.com`, else the first available class, i.e. `gpu.example.com`) and
+does not depend on real GPU hardware or on the Pod actually being scheduled.
+
+Prerequisites: `docker` (daemon running), `kind`, `kubectl`, `helm`, `git`, `go`.
+
+```sh
+make -C backend dra-up      # clones dra-example-driver (v0.3.0 -> kindest/node v1.36.0),
+                            # creates the kind cluster, builds+loads the driver, installs it
+make -C backend dra-e2e     # runs TestLiveK8sConfigFileDRADispatchE2E (sets TEST_LIVE_K8S_CONFIGFILE_DRA=1)
+make -C backend dra-down    # deletes the kind cluster when finished
+```
+
+`dra-up` points `kubectl` at the new kind cluster, so `cluster.NewFromEnv` (which
+reads `KUBECONFIG`, else `~/.kube/config`) targets it automatically. Override the
+pinned driver version with `DRA_EXAMPLE_REF`, or the DeviceClass the test should
+expect with `DRA_DEVICE_CLASS`. The first `dra-up` builds the driver image and is
+slow; the cluster is reused across runs until you `dra-down`.
 
 ## Start Local Backing Services
 

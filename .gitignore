@@ -4,6 +4,7 @@ references/
 backend/coverage.out
 backend/.tmp/
 backend/.e2e-gate/
+backend/.cache/
 frontend/node_modules/
 frontend/dist/
 frontend/coverage/
