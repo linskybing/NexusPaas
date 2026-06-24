@@ -605,6 +605,10 @@ func (h *e2eHarness) doInternalJSON(serviceName, method, path string, payload an
 }
 
 func (h *e2eHarness) doURLJSON(baseURL, method, path string, payload any, apiKey string, want int) testResponse {
+	return h.doURLJSONWithIdempotencyKey(baseURL, method, path, payload, apiKey, "", want)
+}
+
+func (h *e2eHarness) doURLJSONWithIdempotencyKey(baseURL, method, path string, payload any, apiKey string, idempotencyKey string, want int) testResponse {
 	h.t.Helper()
 	var body io.Reader
 	if payload != nil {
@@ -626,7 +630,10 @@ func (h *e2eHarness) doURLJSON(baseURL, method, path string, payload any, apiKey
 	}
 	req.Header.Set("X-Request-ID", "req-"+h.runID)
 	req.Header.Set("X-Trace-ID", "trace-"+h.runID)
-	req.Header.Set("Idempotency-Key", "idem-"+h.runID+"-"+sanitizeID(method+path))
+	if idempotencyKey == "" {
+		idempotencyKey = "idem-" + h.runID + "-" + sanitizeID(method+path)
+	}
+	req.Header.Set("Idempotency-Key", idempotencyKey)
 	return h.do(req, want)
 }
 

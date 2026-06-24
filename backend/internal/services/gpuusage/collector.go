@@ -134,7 +134,7 @@ func normalizePodGPUUsage(data map[string]any, jobs map[string]map[string]any) (
 
 func gpuSnapshotMetrics(data map[string]any, gpuUUID string) map[string]any {
 	metrics := mapValue(data, "metrics", "Metrics")
-	out := shared.CloneMap(metrics)
+	out := sanitizeRetainedGPUMetrics(metrics)
 	if gpuUUID != "" {
 		out["gpu_uuid"] = gpuUUID
 	}
@@ -157,6 +157,45 @@ func gpuSnapshotMetrics(data map[string]any, gpuUUID string) map[string]any {
 	copyTextMetric(out, data, "gpu_mem_util_source", "gpu_mem_util_source", "gpuMemUtilSource", "GPUMemUtilSource")
 	copyTextMetric(out, data, "gpu_memory_used_source", "gpu_memory_used_source", "gpuMemoryUsedSource", "GPUMemoryUsedSource")
 	return out
+}
+
+func sanitizeRetainedGPUMetrics(metrics map[string]any) map[string]any {
+	out := make(map[string]any, len(metrics))
+	for key, value := range metrics {
+		if highCardinalityProcessMetricKey(key) {
+			continue
+		}
+		out[key] = value
+	}
+	return out
+}
+
+func highCardinalityProcessMetricKey(key string) bool {
+	switch canonicalProcessMetricKey(key) {
+	case "pid",
+		"processid",
+		"processname",
+		"command",
+		"cmd",
+		"cmdline",
+		"args",
+		"argv",
+		"containerid",
+		"poduid",
+		"cgroup",
+		"cgrouppath",
+		"processstarttime":
+		return true
+	default:
+		return false
+	}
+}
+
+func canonicalProcessMetricKey(key string) string {
+	key = strings.TrimSpace(strings.ToLower(key))
+	key = strings.ReplaceAll(key, "_", "")
+	key = strings.ReplaceAll(key, "-", "")
+	return key
 }
 
 func copyMetric(out, data map[string]any, target string, keys ...string) {

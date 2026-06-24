@@ -3,6 +3,7 @@ package workload
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,11 +21,12 @@ import (
 )
 
 const (
-	testSchedulerQueuesResource     = "scheduler-quota-service:queues"
-	testSchedulerPlansResource      = "scheduler-quota-service:plans"
-	testSchedulerAdmissionsResource = "scheduler-quota-service:submit_admissions"
-	testOrgProjectsResource         = "org-project-service:projects"
-	testOrgProjectMembersResource   = "org-project-service:project_members"
+	testSchedulerQueuesResource      = "scheduler-quota-service:queues"
+	testSchedulerPlansResource       = "scheduler-quota-service:plans"
+	testSchedulerAdmissionsResource  = "scheduler-quota-service:submit_admissions"
+	testSchedulerPreemptionsResource = "scheduler-quota-service:preemption_records"
+	testOrgProjectsResource          = "org-project-service:projects"
+	testOrgProjectMembersResource    = "org-project-service:project_members"
 )
 
 func TestSubmitJobCallsAdmissionAndPersistsSubmittedJob(t *testing.T) {
@@ -265,6 +267,71 @@ func TestSubmitJobRejectsMalformedJSONWithoutWrites(t *testing.T) {
 	}
 	if got := len(app.Store.List(context.Background(), testSchedulerAdmissionsResource)); got != 0 {
 		t.Fatalf("admission count = %d, want 0", got)
+	}
+}
+
+func TestSubmitJobIdempotencyKeyReplaysSameRequest(t *testing.T) {
+	app := newJobSubmitTestApp()
+	seedJobAdmissionProject(t, app, map[string]any{})
+	key := "workload-submit-idempotency-key"
+	body := `{"project_id":"P1","user_id":"U1","queue_name":"default-batch","required_cpu":1,"required_memory":1024}`
+
+	first := serveSubmitJobWithHeaders(t, app, body, "U1", map[string]string{"Idempotency-Key": key}, http.StatusCreated)
+	firstJob := responseRecordData(t, first)
+	jobID := firstJob["job_id"]
+	if jobID == "" || firstJob["status"] != "submitted" {
+		t.Fatalf("first submit job = %#v, want generated submitted job", firstJob)
+	}
+	keyHash, fingerprintHash := storedSubmitIdempotencyHashes(t, app, fmt.Sprint(jobID))
+	assertNoWorkloadSubmitIdempotencyMaterial(t, firstJob, key, keyHash, fingerprintHash)
+	assertWorkloadSubmitSideEffects(t, app, 1, 1, 0, 1)
+
+	replay := serveSubmitJobWithHeaders(t, app, body, "U1", map[string]string{"Idempotency-Key": key}, http.StatusCreated)
+	replayJob := responseRecordData(t, replay)
+	if replayJob["job_id"] != jobID || replayJob["id"] != firstJob["id"] || replayJob["status"] != "submitted" {
+		t.Fatalf("replay job = %#v, want original job id/status %#v", replayJob, firstJob)
+	}
+	assertNoWorkloadSubmitIdempotencyMaterial(t, replayJob, key, keyHash, fingerprintHash)
+	assertWorkloadSubmitSideEffects(t, app, 1, 1, 0, 1)
+
+	code, data, _ := listJobs(app, workloadRequest(http.MethodGet, "/api/v1/jobs", ""), platform.RouteSpec{})
+	assertWorkloadStatus(t, code, data, http.StatusOK)
+	assertNoWorkloadSubmitIdempotencyMaterial(t, data, key, keyHash, fingerprintHash)
+
+	getReq := workloadRequest(http.MethodGet, "/api/v1/jobs/"+fmt.Sprint(jobID), "")
+	getReq.SetPathValue("id", fmt.Sprint(jobID))
+	code, data, _ = getJob(app, getReq, platform.RouteSpec{})
+	assertWorkloadStatus(t, code, data, http.StatusOK)
+	assertNoWorkloadSubmitIdempotencyMaterial(t, data, key, keyHash, fingerprintHash)
+
+	events := workloadEventsByName(app, "JobSubmitted")
+	if events[0].IdempotencyKey != key {
+		t.Fatalf("JobSubmitted IdempotencyKey = %q, want synthetic test key", events[0].IdempotencyKey)
+	}
+	assertNoWorkloadSubmitIdempotencyMaterial(t, events[0].Data, key, keyHash, fingerprintHash)
+}
+
+func TestSubmitJobIdempotencyKeyRejectsDifferentPayload(t *testing.T) {
+	app := newJobSubmitTestApp()
+	seedJobAdmissionProject(t, app, map[string]any{})
+	key := "workload-submit-conflict-key"
+
+	first := serveSubmitJobWithHeaders(t, app, `{"project_id":"P1","user_id":"U1","queue_name":"default-batch","required_cpu":1,"required_memory":1024}`, "U1", map[string]string{"Idempotency-Key": key}, http.StatusCreated)
+	firstJob := responseRecordData(t, first)
+	keyHash, fingerprintHash := storedSubmitIdempotencyHashes(t, app, fmt.Sprint(firstJob["job_id"]))
+	assertWorkloadSubmitSideEffects(t, app, 1, 1, 0, 1)
+
+	conflict := serveSubmitJobWithHeaders(t, app, `{"project_id":"P1","user_id":"U1","queue_name":"default-batch","required_cpu":2,"required_memory":1024}`, "U1", map[string]string{"Idempotency-Key": key}, http.StatusConflict)
+	conflictData := responseEnvelopeData(t, conflict)
+	assertNoWorkloadSubmitIdempotencyMaterial(t, conflictData, key, keyHash, fingerprintHash)
+	assertWorkloadSubmitSideEffects(t, app, 1, 1, 0, 1)
+
+	record, found := app.Store.Get(context.Background(), jobsResource, fmt.Sprint(firstJob["job_id"]))
+	if !found {
+		t.Fatalf("first submitted job record missing")
+	}
+	if record.Data["status"] != "submitted" {
+		t.Fatalf("first submitted job status = %#v, want submitted", record.Data["status"])
 	}
 }
 
@@ -628,4 +695,63 @@ func responseEnvelopeData(t *testing.T, rec *httptest.ResponseRecorder) map[stri
 		t.Fatal(err)
 	}
 	return data
+}
+
+func storedSubmitIdempotencyHashes(t *testing.T, app *platform.App, jobID string) (string, string) {
+	t.Helper()
+	record, found := app.Store.Get(context.Background(), jobsResource, jobID)
+	if !found {
+		t.Fatalf("submitted job %s not found", jobID)
+	}
+	keyHash, _ := record.Data[internalSubmitIdempotencyKeyHash].(string)
+	fingerprintHash, _ := record.Data[internalSubmitIdempotencyFingerprintHash].(string)
+	if keyHash == "" || fingerprintHash == "" {
+		t.Fatalf("stored submit idempotency hashes missing from internal job record")
+	}
+	return keyHash, fingerprintHash
+}
+
+func workloadEventsByName(app *platform.App, name string) []contracts.Event {
+	events := []contracts.Event{}
+	for _, event := range app.Events.Outbox() {
+		if event.Name == name {
+			events = append(events, event)
+		}
+	}
+	return events
+}
+
+func assertWorkloadSubmitSideEffects(t *testing.T, app *platform.App, jobs, admissions, preemptions, events int) {
+	t.Helper()
+	if got := len(app.Store.List(context.Background(), jobsResource)); got != jobs {
+		t.Fatalf("workload jobs = %d, want %d", got, jobs)
+	}
+	if got := len(app.Store.List(context.Background(), testSchedulerAdmissionsResource)); got != admissions {
+		t.Fatalf("scheduler admissions = %d, want %d", got, admissions)
+	}
+	if got := len(app.Store.List(context.Background(), testSchedulerPreemptionsResource)); got != preemptions {
+		t.Fatalf("scheduler preemptions = %d, want %d", got, preemptions)
+	}
+	if got := len(workloadEventsByName(app, "JobSubmitted")); got != events {
+		t.Fatalf("JobSubmitted events = %d, want %d", got, events)
+	}
+}
+
+func assertNoWorkloadSubmitIdempotencyMaterial(t *testing.T, value any, forbidden ...string) {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal value for leak check: %v", err)
+	}
+	text := string(raw)
+	for _, token := range append(forbidden,
+		internalSubmitIdempotencyKeyHash,
+		internalSubmitIdempotencyFingerprintHash,
+		"idempotency_key_hash",
+		"fingerprint_hash",
+	) {
+		if token != "" && strings.Contains(text, token) {
+			t.Fatalf("submit idempotency material leaked")
+		}
+	}
 }

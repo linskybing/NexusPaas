@@ -26,6 +26,7 @@ const (
 	jobStatusFailed       = "failed"
 
 	defaultDispatcherSchedulerName = "default-scheduler"
+	dispatcherMaxJobsPerRun        = 32
 	volcanoSchedulerName           = "volcano"
 	dispatcherRetryMaxAttempts     = 20
 	dispatcherRetryBaseDelay       = 30 * time.Second
@@ -66,6 +67,9 @@ func dispatchSubmittedWorkloadsWithStorageMountClient(ctx context.Context, cl *c
 		return nil
 	}
 	candidates := jobs.ListDispatchCandidates(ctx, now)
+	if len(candidates) > dispatcherMaxJobsPerRun {
+		candidates = candidates[:dispatcherMaxJobsPerRun]
+	}
 	for _, candidate := range candidates {
 		dispatchJob(ctx, cl, store, storageMounts, candidate.record, now)
 	}

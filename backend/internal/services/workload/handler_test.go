@@ -2,8 +2,10 @@ package workload
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -210,6 +212,34 @@ func TestWorkloadConfigVersionRejectsTooManyManifestDocuments(t *testing.T) {
 	}
 }
 
+func TestConfigFileAdmissionRejectionMetrics(t *testing.T) {
+	app := newWorkloadTestApp()
+	app.Config.MaxConfigFileBytes = 8
+	code, data, _ := createConfigFile(app, workloadRequest(http.MethodPost, "/api/v1/configfiles?project_id=P1", `{"id":"cfg-big","name":"big.yaml","content":"kind: Deployment"}`), platform.RouteSpec{})
+	assertWorkloadStatus(t, code, data, http.StatusRequestEntityTooLarge)
+
+	app.Config.MaxConfigFileBytes = 1024
+	app.Config.MaxConfigFileDocuments = 1
+	createWorkloadRecord(t, app, configsResource, map[string]any{"id": "cfg1", "project_id": "P1", "name": "one.yaml"})
+	req := workloadRequest(http.MethodPost, "/api/v1/configfiles/cfg1/versions", `{"content":"kind: Pod\n---\nkind: Service"}`)
+	req.SetPathValue("id", "cfg1")
+	code, data, _ = commitConfigFileVersion(app, req, platform.RouteSpec{})
+	assertWorkloadStatus(t, code, data, http.StatusUnprocessableEntity)
+
+	body := workloadMetricsBody(t, app)
+	if got := workloadMetricSampleInt(t, body, platform.MetricConfigFileAdmissionRejections, `reason="manifest_size"`); got != 1 {
+		t.Fatalf("manifest size rejection metric = %d, want 1", got)
+	}
+	if got := workloadMetricSampleInt(t, body, platform.MetricConfigFileAdmissionRejections, `reason="manifest_document_count"`); got != 1 {
+		t.Fatalf("manifest document count rejection metric = %d, want 1", got)
+	}
+	for _, forbidden := range []string{"cfg-big", "cfg1", "Deployment", "Service"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("metrics body leaked ConfigFile value %q:\n%s", forbidden, body)
+		}
+	}
+}
+
 func TestWorkloadConfigProjectAccessAllowsMemberAndAdmin(t *testing.T) {
 	app := newAuthWorkloadTestApp()
 	seedWorkloadProject(t, app, "P1")
@@ -351,6 +381,85 @@ func TestWorkloadConfigInstanceRoutesRequireProjectAccess(t *testing.T) {
 	}
 }
 
+func TestCancelJobIdempotencyKeyReplaysSameCommand(t *testing.T) {
+	app := newAuthWorkloadTestApp()
+	seedWorkloadProject(t, app, "P1")
+	seedWorkloadProjectMember(t, app, "P1", "U1")
+	createWorkloadRecord(t, app, jobsResource, map[string]any{"id": "job-record-1", "job_id": "job-one", "project_id": "P1", "user_id": "U1", "status": "running"})
+	key := "workload-cancel-replay-key"
+
+	first := cancelCommandRecord(t, serveCancelJob(t, cancelJobRequestFixture{
+		app:    app,
+		jobID:  "job-one",
+		userID: "U1",
+		body:   `{}`,
+		key:    key,
+		want:   http.StatusAccepted,
+	}))
+	if first.Data["job_id"] != "job-one" || first.Data["status"] != "accepted" || first.Data["operation"] != "workload_job_cancel" {
+		t.Fatalf("first cancel command = %#v, want accepted canonical cancel", first.Data)
+	}
+	keyHash, fingerprintHash := storedCancelIdempotencyHashes(t, app, first.ID)
+	assertNoWorkloadCancelIdempotencyMaterial(t, first, key, keyHash, fingerprintHash)
+	assertWorkloadCancelSideEffects(t, app, 1, 1)
+
+	replay := cancelCommandRecord(t, serveCancelJob(t, cancelJobRequestFixture{
+		app:    app,
+		jobID:  "job-record-1",
+		userID: "U1",
+		body:   `{}`,
+		key:    key,
+		want:   http.StatusAccepted,
+	}))
+	if replay.ID != first.ID || replay.Data["job_id"] != first.Data["job_id"] || replay.Data["operation"] != first.Data["operation"] {
+		t.Fatalf("replay cancel command = %#v, want original command %#v", replay, first)
+	}
+	assertNoWorkloadCancelIdempotencyMaterial(t, replay, key, keyHash, fingerprintHash)
+	assertWorkloadCancelSideEffects(t, app, 1, 1)
+
+	events := workloadEventsByName(app, "JobCancelRequested")
+	if len(events) != 1 {
+		t.Fatalf("JobCancelRequested events = %d, want 1", len(events))
+	}
+	assertNoWorkloadCancelIdempotencyMaterial(t, events[0].Data, key, keyHash, fingerprintHash)
+}
+
+func TestCancelJobIdempotencyKeyRejectsDifferentCommand(t *testing.T) {
+	app := newAuthWorkloadTestApp()
+	seedWorkloadProject(t, app, "P1")
+	seedWorkloadProjectMember(t, app, "P1", "U1")
+	createWorkloadRecord(t, app, jobsResource, map[string]any{"id": "job-record-1", "job_id": "job-one", "project_id": "P1", "user_id": "U1", "status": "running"})
+	createWorkloadRecord(t, app, jobsResource, map[string]any{"id": "job-record-2", "job_id": "job-two", "project_id": "P1", "user_id": "U1", "status": "running"})
+	key := "workload-cancel-conflict-key"
+
+	first := cancelCommandRecord(t, serveCancelJob(t, cancelJobRequestFixture{
+		app:    app,
+		jobID:  "job-one",
+		userID: "U1",
+		body:   `{}`,
+		key:    key,
+		want:   http.StatusAccepted,
+	}))
+	keyHash, fingerprintHash := storedCancelIdempotencyHashes(t, app, first.ID)
+	assertWorkloadCancelSideEffects(t, app, 1, 1)
+
+	conflict := serveCancelJob(t, cancelJobRequestFixture{
+		app:    app,
+		jobID:  "job-two",
+		userID: "U1",
+		body:   `{}`,
+		key:    key,
+		want:   http.StatusConflict,
+	})
+	assertNoWorkloadCancelIdempotencyMaterial(t, conflict, key, keyHash, fingerprintHash)
+	assertWorkloadCancelSideEffects(t, app, 1, 1)
+	for _, command := range app.Store.List(context.Background(), jobCommandsResource) {
+		if command.Data["job_id"] == "job-two" {
+			t.Fatalf("conflicting cancel created command for second job")
+		}
+	}
+}
+
 func TestWorkloadProjectAccessUsesOrgProjectOwnerReadWhenIsolated(t *testing.T) {
 	serviceKey := "service-secret"
 	owner := platform.NewApp(platform.Config{ServiceName: "org-project-service", HTTPAddr: ":0", ServiceAPIKey: serviceKey})
@@ -434,6 +543,113 @@ func assertWorkloadStatus(t *testing.T, code int, data any, want int) {
 	if code != want {
 		t.Fatalf("status=%d data=%#v, want %d", code, data, want)
 	}
+}
+
+type cancelJobRequestFixture struct {
+	app    *platform.App
+	jobID  string
+	userID string
+	body   string
+	key    string
+	route  platform.RouteSpec
+	want   int
+}
+
+func serveCancelJob(t *testing.T, fixture cancelJobRequestFixture) any {
+	t.Helper()
+	req := workloadAuthRequest(http.MethodPost, "/api/v1/jobs/"+fixture.jobID+"/cancel", fixture.body, fixture.userID, "user")
+	if fixture.key == "" {
+		req.Header.Del("Idempotency-Key")
+	} else {
+		req.Header.Set("Idempotency-Key", fixture.key)
+	}
+	req.SetPathValue("id", fixture.jobID)
+	code, data, _ := cancelJob(fixture.app, req, fixture.route)
+	assertWorkloadStatus(t, code, data, fixture.want)
+	return data
+}
+
+func cancelCommandRecord(t *testing.T, data any) contracts.Record[map[string]any] {
+	t.Helper()
+	record, ok := data.(contracts.Record[map[string]any])
+	if !ok {
+		t.Fatalf("cancel command response = %T, want record", data)
+	}
+	return record
+}
+
+func storedCancelIdempotencyHashes(t *testing.T, app *platform.App, commandID string) (string, string) {
+	t.Helper()
+	record, found := app.Store.Get(context.Background(), jobCommandsResource, commandID)
+	if !found {
+		t.Fatalf("cancel command record missing")
+	}
+	keyHash, _ := record.Data[internalCancelIdempotencyKeyHash].(string)
+	fingerprintHash, _ := record.Data[internalCancelIdempotencyFingerprintHash].(string)
+	if keyHash == "" || fingerprintHash == "" {
+		t.Fatalf("stored cancel idempotency hashes missing from internal command record")
+	}
+	if _, ok := record.Data["idempotency_key"]; ok {
+		t.Fatalf("raw cancel idempotency field stored on internal command record")
+	}
+	return keyHash, fingerprintHash
+}
+
+func assertWorkloadCancelSideEffects(t *testing.T, app *platform.App, commands, events int) {
+	t.Helper()
+	if got := len(app.Store.List(context.Background(), jobCommandsResource)); got != commands {
+		t.Fatalf("workload cancel commands = %d, want %d", got, commands)
+	}
+	if got := len(workloadEventsByName(app, "JobCancelRequested")); got != events {
+		t.Fatalf("JobCancelRequested events = %d, want %d", got, events)
+	}
+}
+
+func assertNoWorkloadCancelIdempotencyMaterial(t *testing.T, value any, forbidden ...string) {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal value for cancel idempotency leak check: %v", err)
+	}
+	text := string(raw)
+	for _, token := range append(forbidden,
+		internalCancelIdempotencyKeyHash,
+		internalCancelIdempotencyFingerprintHash,
+		"idempotency_key",
+		"idempotencyKey",
+		"key_hash",
+		"fingerprint_hash",
+	) {
+		if token != "" && strings.Contains(text, token) {
+			t.Fatalf("cancel idempotency material leaked")
+		}
+	}
+}
+
+func workloadMetricsBody(t *testing.T, app *platform.App) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/metrics status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	return rec.Body.String()
+}
+
+func workloadMetricSampleInt(t *testing.T, body, metric, labels string) int {
+	t.Helper()
+	prefix := metric + "{" + labels + "} "
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			value, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, prefix)))
+			if err != nil {
+				t.Fatalf("%s{%s} value is not an int: %v", metric, labels, err)
+			}
+			return value
+		}
+	}
+	t.Fatalf("metrics body missing %s{%s}:\n%s", metric, labels, body)
+	return 0
 }
 
 func serveJobLogs(t *testing.T, app *platform.App, jobID, userID string, want int) []contracts.Record[map[string]any] {

@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "contract_name": "image-registry.dockerfile_build",
+  "contract_name": "image-registry.storage_build",
   "owner_service": "image-registry-service",
   "api_surface": "external_rest",
   "consumer": "authenticated-user-client",
   "resource": "image-registry-service:image_builds",
   "action": "command",
   "method": "POST",
-  "path": "/api/v1/images/build/dockerfile",
+  "path": "/api/v1/images/build/from-storage",
   "auth": "user",
   "auth_required": true,
   "service_key_required": false,
@@ -20,9 +20,7 @@
     "max_build_time_seconds"
   ],
   "optional_request_fields": [
-    "dockerfile",
-    "context",
-    "build_args",
+    "storage_path",
     "tag",
     "registry",
     "repository",
@@ -35,15 +33,11 @@
   ],
   "request_example": {
     "project_id": "project-ga-001",
-    "image_reference": "registry.example.test/nexuspaas/api:2026-06-22",
+    "image_reference": "registry.example.test/nexuspaas/storage-api:2026-06-24",
     "cpu_cores": 2,
     "memory_gib": 4,
     "max_build_time_seconds": 600,
-    "dockerfile": "FROM scratch",
-    "context": ".",
-    "build_args": {
-      "APP_ENV": "staging"
-    }
+    "storage_path": "images/context.tar"
   },
   "success_statuses": [
     202
@@ -60,19 +54,19 @@
     "ImageBuildStarted"
   ],
   "response_example": {
-    "id": "build-ga-001",
-    "job_name": "build-ga-001",
-    "build_id": "build-ga-001",
+    "id": "storage-build-ga-001",
+    "job_name": "storage-build-ga-001",
+    "build_id": "storage-build-ga-001",
     "project_id": "project-ga-001",
-    "image_reference": "registry.example.test/nexuspaas/api:2026-06-22",
-    "build_type": "dockerfile",
+    "image_reference": "registry.example.test/nexuspaas/storage-api:2026-06-24",
+    "build_type": "storage",
     "cpu_cores": 2,
     "memory_gib": 4,
     "max_build_time_seconds": 600,
     "status": "queued",
     "requested_by": "user-ga-builder",
-    "created_at": "2026-06-22T00:00:00Z",
-    "updated_at": "2026-06-22T00:00:00Z",
+    "created_at": "2026-06-24T00:00:00Z",
+    "updated_at": "2026-06-24T00:00:00Z",
     "logs": "build queued\n"
   },
   "compatibility": {

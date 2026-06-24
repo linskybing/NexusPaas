@@ -64,6 +64,7 @@ func createConfigFile(app *platform.App, r *http.Request, _ platform.RouteSpec) 
 		return http.StatusBadRequest, shared.ErrorData(err.Error()), nil
 	}
 	if err := validateConfigFileManifestLimits(app.Config, config); err != nil {
+		recordConfigFileManifestRejection(app, err)
 		return platform.InputLimitStatus(err, http.StatusBadRequest), shared.ErrorData(platform.InputLimitMessage(err, err.Error())), nil
 	}
 	if status, data, ok := requireProjectAccess(app, r, shared.TextValue(config, "project_id", "projectId")); !ok {
@@ -103,6 +104,7 @@ func updateConfigFile(app *platform.App, r *http.Request, _ platform.RouteSpec) 
 	}
 	update := normalizeConfigUpdate(payload)
 	if err := validateConfigFileManifestLimits(app.Config, update); err != nil {
+		recordConfigFileManifestRejection(app, err)
 		return platform.InputLimitStatus(err, http.StatusBadRequest), shared.ErrorData(platform.InputLimitMessage(err, err.Error())), nil
 	}
 	currentProjectID := configProjectID(existing)
@@ -223,6 +225,7 @@ func commitConfigFileVersion(app *platform.App, r *http.Request, _ platform.Rout
 		return decodeBodyError(err)
 	}
 	if err := validateConfigFileManifestLimits(app.Config, payload); err != nil {
+		recordConfigFileManifestRejection(app, err)
 		return platform.InputLimitStatus(err, http.StatusBadRequest), shared.ErrorData(platform.InputLimitMessage(err, err.Error())), nil
 	}
 	record, err := configRepository(app).CommitVersionWithEvent(r.Context(), app, configID, payload, time.Now().UTC(), func(record contracts.Record[map[string]any]) contracts.Event {
@@ -330,6 +333,23 @@ func validateConfigFileManifestLimits(cfg platform.Config, payload map[string]an
 	return nil
 }
 
+func recordConfigFileManifestRejection(app *platform.App, err error) {
+	if app == nil || app.Metrics == nil {
+		return
+	}
+	reason := ""
+	switch platform.InputLimitStatus(err, 0) {
+	case http.StatusRequestEntityTooLarge:
+		reason = "manifest_size"
+	case http.StatusUnprocessableEntity:
+		reason = "manifest_document_count"
+	}
+	if reason == "" {
+		return
+	}
+	app.Metrics.IncLabeledCounter(platform.MetricConfigFileAdmissionRejections, map[string]string{"reason": reason})
+}
+
 func decodeBodyError(err error) (int, any, *platform.Degraded) {
 	return platform.InputLimitStatus(err, http.StatusBadRequest), shared.ErrorData(platform.InputLimitMessage(err, msgInvalidBody)), nil
 }
@@ -360,6 +380,13 @@ func pathValue(r *http.Request, name string) string {
 }
 
 func buildEvent(r *http.Request, name, action string, data map[string]any) contracts.Event {
+	eventData := shared.CloneMap(data)
+	delete(eventData, internalSubmitIdempotencyKeyHash)
+	delete(eventData, internalSubmitIdempotencyFingerprintHash)
+	delete(eventData, "idempotency_key")
+	delete(eventData, "idempotencyKey")
+	delete(eventData, internalCancelIdempotencyKeyHash)
+	delete(eventData, internalCancelIdempotencyFingerprintHash)
 	event := contracts.Event{
 		EventID:        platform.NewUUID(),
 		Name:           name,
@@ -368,7 +395,7 @@ func buildEvent(r *http.Request, name, action string, data map[string]any) contr
 		TraceID:        shared.FirstNonEmpty(r.Header.Get("X-Trace-ID"), "workload-local"),
 		SchemaVersion:  1,
 		IdempotencyKey: r.Header.Get("Idempotency-Key"),
-		Data:           shared.CloneMap(data),
+		Data:           eventData,
 	}
 	event.Data["action"] = action
 	return event

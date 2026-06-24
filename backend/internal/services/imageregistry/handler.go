@@ -1,7 +1,12 @@
 package imageregistry
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,7 +41,19 @@ const (
 	msgProjectMemberAccess      = "project member access required"
 	defaultRegistry             = "docker.io"
 	defaultTag                  = "latest"
+	idempotencyKeyHeader        = "Idempotency-Key"
+
+	internalImageBuildIdempotencyKeyHash               = "internal_idempotency_key_hash"
+	internalImageBuildIdempotencyFingerprintHash       = "internal_idempotency_fingerprint_hash"
+	internalImageBuildCancelIdempotencyKeyHash         = "internal_cancel_idempotency_key_hash"
+	internalImageBuildCancelIdempotencyFingerprintHash = "internal_cancel_idempotency_fingerprint_hash"
 )
+
+type imageBuildResources struct {
+	cpuCores            float64
+	memoryGiB           float64
+	maxBuildTimeSeconds int
+}
 
 func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/harbor-status", getHarborStatus)
@@ -526,7 +543,32 @@ func getBuildLogs(app *platform.App, r *http.Request, _ platform.RouteSpec) (int
 		return status, data, nil
 	}
 	logs := shared.FirstNonBlank(shared.TextValue(build.Data, "logs"), "build logs are not available yet\n")
-	return http.StatusOK, platform.RawResponse{ContentType: "text/plain; charset=utf-8", Body: []byte(logs)}, nil
+	return http.StatusOK, platform.RawResponse{ContentType: "text/plain; charset=utf-8", Body: []byte(redactImageBuildLogs(logs))}, nil
+}
+
+const imageBuildLogRedaction = "[REDACTED]"
+
+var (
+	imageBuildLogBearerRE = regexp.MustCompile(`(?i)\b(authorization\s*:\s*bearer\s+)([^\s"'\\]+)`)
+	imageBuildLogSecretRE = regexp.MustCompile(`(?i)\b([A-Za-z0-9_.-]*(?:password|passwd|secret|token|api_key|apikey|access_key|private_key|credential)[A-Za-z0-9_.-]*)(\s*[:=]\s*)(?:"([^"\r\n]*)"|'([^'\r\n]*)'|([^\s,;]+))`)
+)
+
+func redactImageBuildLogs(logs string) string {
+	redacted := imageBuildLogBearerRE.ReplaceAllString(logs, `${1}`+imageBuildLogRedaction)
+	return imageBuildLogSecretRE.ReplaceAllStringFunc(redacted, func(match string) string {
+		parts := imageBuildLogSecretRE.FindStringSubmatch(match)
+		if len(parts) == 0 {
+			return match
+		}
+		value := imageBuildLogRedaction
+		switch {
+		case parts[3] != "":
+			value = `"` + imageBuildLogRedaction + `"`
+		case parts[4] != "":
+			value = `'` + imageBuildLogRedaction + `'`
+		}
+		return parts[1] + parts[2] + value
+	})
 }
 
 func cancelProjectBuild(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
@@ -543,13 +585,22 @@ func cancelProjectBuild(app *platform.App, r *http.Request, _ platform.RouteSpec
 	if !found || shared.TextValue(build.Data, "project_id", "projectId") != projectID {
 		return http.StatusNotFound, shared.ErrorData("build not found"), nil
 	}
-	updated, ok, err := app.UpdateRecordWithEvent(r.Context(), imageBuildsResource, build.ID, map[string]any{"status": "cancelled", "updated_at": time.Now().UTC()}, func(rec contracts.Record[map[string]any]) contracts.Event {
+	keyHash, fingerprintHash := imageBuildCancelIdempotencyHashes(r, userID, projectID, build)
+	if status, data := imageBuildCancelIdempotencyResult(app, r, keyHash, fingerprintHash); status != 0 {
+		return status, data, nil
+	}
+	update := map[string]any{"status": "cancelled", "updated_at": time.Now().UTC()}
+	if keyHash != "" {
+		update[internalImageBuildCancelIdempotencyKeyHash] = keyHash
+		update[internalImageBuildCancelIdempotencyFingerprintHash] = fingerprintHash
+	}
+	updated, ok, err := app.UpdateRecordWithEvent(r.Context(), imageBuildsResource, build.ID, update, func(rec contracts.Record[map[string]any]) contracts.Event {
 		return registryEvent(r, "ImageBuildCancelled", rec.Data)
 	})
 	if err != nil || !ok {
 		return http.StatusInternalServerError, shared.ErrorData("build update failed"), nil
 	}
-	return http.StatusOK, updated.Data, nil
+	return http.StatusOK, publicImageBuildData(updated.Data), nil
 }
 
 func createBuild(app *platform.App, r *http.Request, route platform.RouteSpec, buildType string) (int, any, *platform.Degraded) {
@@ -565,27 +616,59 @@ func createBuild(app *platform.App, r *http.Request, route platform.RouteSpec, b
 	if projectID == "" {
 		return http.StatusBadRequest, shared.ErrorData("project_id is required"), nil
 	}
-	if _, status, data, ok := requireProjectManager(app, r, projectID, userID); !ok {
+	project, status, data, ok := requireProjectManager(app, r, projectID, userID)
+	if !ok {
 		return status, data, nil
 	}
 	imageRef := imageReference(payload)
 	if imageRef == "" {
 		return http.StatusBadRequest, shared.ErrorData("image reference is required"), nil
 	}
-	id := shared.FirstNonBlank(shared.TextValue(payload, "id", "job_name", "jobName", "build_id", "buildId"), app.Store.NextID(imageBuildsResource, "build-", 1, 6))
+	resources, ok := imageBuildResourcesFromPayload(payload)
+	if !ok {
+		return http.StatusBadRequest, shared.ErrorData("cpu_cores, memory_gib, and max_build_time_seconds are required"), nil
+	}
+	if status, data, ok := admitImageBuildPolicy(project, resources); !ok {
+		return status, data, nil
+	}
+	requestedID := imageBuildRequestedID(payload)
+	keyHash, fingerprintHash := imageBuildIdempotencyHashes(r, imageBuildIdempotencyFingerprint{
+		RequestedID:         requestedID,
+		UserID:              userID,
+		BuildType:           buildType,
+		ProjectID:           projectID,
+		ImageReference:      imageRef,
+		CPU:                 resources.cpuCores,
+		MemoryGiB:           resources.memoryGiB,
+		MaxBuildTimeSeconds: resources.maxBuildTimeSeconds,
+	})
+	if status, data, degraded := imageBuildIdempotencyResult(app, r, route, keyHash, fingerprintHash); status != 0 {
+		return status, data, degraded
+	}
+	if status, data, ok := admitImageBuildConcurrency(app, r, projectID, project); !ok {
+		return status, data, nil
+	}
+	id := shared.FirstNonBlank(requestedID, app.Store.NextID(imageBuildsResource, "build-", 1, 6))
 	now := time.Now().UTC()
 	build := map[string]any{
-		"id":              id,
-		"job_name":        id,
-		"build_id":        id,
-		"project_id":      projectID,
-		"image_reference": imageRef,
-		"build_type":      buildType,
-		"status":          "queued",
-		"requested_by":    userID,
-		"created_at":      now,
-		"updated_at":      now,
-		"logs":            "build queued\n",
+		"id":                     id,
+		"job_name":               id,
+		"build_id":               id,
+		"project_id":             projectID,
+		"image_reference":        imageRef,
+		"build_type":             buildType,
+		"cpu_cores":              resources.cpuCores,
+		"memory_gib":             resources.memoryGiB,
+		"max_build_time_seconds": resources.maxBuildTimeSeconds,
+		"status":                 "queued",
+		"requested_by":           userID,
+		"created_at":             now,
+		"updated_at":             now,
+		"logs":                   "build queued\n",
+	}
+	if keyHash != "" {
+		build[internalImageBuildIdempotencyKeyHash] = keyHash
+		build[internalImageBuildIdempotencyFingerprintHash] = fingerprintHash
 	}
 	record, err := app.CreateRecordWithEvent(r.Context(), imageBuildsResource, build, func(rec contracts.Record[map[string]any]) contracts.Event {
 		return registryEvent(r, "ImageBuildStarted", rec.Data)
@@ -593,5 +676,258 @@ func createBuild(app *platform.App, r *http.Request, route platform.RouteSpec, b
 	if err != nil {
 		return http.StatusInternalServerError, shared.ErrorData("image build could not be created"), nil
 	}
-	return http.StatusAccepted, record.Data, harborDegraded(app, r, route, "createBuild")
+	return http.StatusAccepted, publicImageBuildData(record.Data), harborDegraded(app, r, route, "createBuild")
+}
+
+func imageBuildIdempotencyResult(app *platform.App, r *http.Request, route platform.RouteSpec, keyHash, fingerprintHash string) (int, any, *platform.Degraded) {
+	if keyHash == "" {
+		return 0, nil, nil
+	}
+	existing, found := findImageBuildByIdempotencyKeyHash(app, r, keyHash)
+	if !found {
+		return 0, nil, nil
+	}
+	if shared.TextValue(existing.Data, internalImageBuildIdempotencyFingerprintHash) != fingerprintHash {
+		return http.StatusConflict, shared.ErrorData("idempotency key is already used by a different image build request"), nil
+	}
+	return http.StatusAccepted, publicImageBuildData(existing.Data), harborDegraded(app, r, route, "createBuild")
+}
+
+func imageBuildResourcesFromPayload(payload map[string]any) (imageBuildResources, bool) {
+	cpu, ok := positiveNumberValue(payload, "cpu_cores", "cpu")
+	if !ok {
+		return imageBuildResources{}, false
+	}
+	memory, ok := positiveNumberValue(payload, "memory_gib", "memory_gb")
+	if !ok {
+		return imageBuildResources{}, false
+	}
+	maxBuildSeconds, ok := positiveNumberValue(payload, "max_build_seconds", "max_build_time_seconds")
+	if !ok {
+		return imageBuildResources{}, false
+	}
+	maxBuildTimeSeconds := int(maxBuildSeconds)
+	if maxBuildTimeSeconds <= 0 || float64(maxBuildTimeSeconds) != maxBuildSeconds {
+		return imageBuildResources{}, false
+	}
+	return imageBuildResources{
+		cpuCores:            cpu,
+		memoryGiB:           memory,
+		maxBuildTimeSeconds: maxBuildTimeSeconds,
+	}, true
+}
+
+func admitImageBuild(app *platform.App, r *http.Request, projectID string, project map[string]any, resources imageBuildResources) (int, any, bool) {
+	if status, data, ok := admitImageBuildPolicy(project, resources); !ok {
+		return status, data, false
+	}
+	return admitImageBuildConcurrency(app, r, projectID, project)
+}
+
+func admitImageBuildPolicy(project map[string]any, resources imageBuildResources) (int, any, bool) {
+	if !shared.BoolValue(project, "allow_image_build", "allowImageBuild") {
+		return http.StatusForbidden, shared.ErrorData("image builds are not enabled for this project"), false
+	}
+	if exceededBuildLimit(resources.cpuCores, project, "build_cpu_limit") {
+		return http.StatusConflict, shared.ErrorData("build CPU request exceeds project limit"), false
+	}
+	if exceededBuildLimit(resources.memoryGiB, project, "build_memory_gib_limit") {
+		return http.StatusConflict, shared.ErrorData("build memory request exceeds project limit"), false
+	}
+	if exceededBuildLimit(float64(resources.maxBuildTimeSeconds), project, "build_time_limit_seconds") {
+		return http.StatusConflict, shared.ErrorData("build time request exceeds project limit"), false
+	}
+	return 0, nil, true
+}
+
+func admitImageBuildConcurrency(app *platform.App, r *http.Request, projectID string, project map[string]any) (int, any, bool) {
+	if exceededActiveBuildLimit(app, r, projectID, project) {
+		return http.StatusConflict, shared.ErrorData("project active image build limit reached"), false
+	}
+	return 0, nil, true
+}
+
+type imageBuildIdempotencyFingerprint struct {
+	RequestedID         string  `json:"requested_id"`
+	UserID              string  `json:"user_id"`
+	BuildType           string  `json:"build_type"`
+	ProjectID           string  `json:"project_id"`
+	ImageReference      string  `json:"image_reference"`
+	CPU                 float64 `json:"cpu_cores"`
+	MemoryGiB           float64 `json:"memory_gib"`
+	MaxBuildTimeSeconds int     `json:"max_build_time_seconds"`
+}
+
+type imageBuildCancelIdempotencyFingerprint struct {
+	Command   string `json:"command"`
+	UserID    string `json:"user_id"`
+	ProjectID string `json:"project_id"`
+	RecordID  string `json:"record_id"`
+	ID        string `json:"id"`
+	JobName   string `json:"job_name"`
+	BuildID   string `json:"build_id"`
+}
+
+func imageBuildRequestedID(payload map[string]any) string {
+	return shared.FirstNonBlank(shared.TextValue(payload, "id", "job_name", "jobName", "build_id", "buildId"))
+}
+
+func imageBuildIdempotencyHashes(r *http.Request, fingerprint imageBuildIdempotencyFingerprint) (string, string) {
+	key := strings.TrimSpace(r.Header.Get(idempotencyKeyHeader))
+	if key == "" {
+		return "", ""
+	}
+	rawFingerprint, _ := json.Marshal(fingerprint)
+	return imageBuildHash(key), imageBuildHash(string(rawFingerprint))
+}
+
+func imageBuildCancelIdempotencyHashes(r *http.Request, userID, projectID string, build imageRecord) (string, string) {
+	key := strings.TrimSpace(r.Header.Get(idempotencyKeyHeader))
+	if key == "" {
+		return "", ""
+	}
+	fingerprint := imageBuildCancelIdempotencyFingerprint{
+		Command:   "image_build_cancel",
+		UserID:    userID,
+		ProjectID: projectID,
+		RecordID:  build.ID,
+		ID:        shared.FirstNonBlank(shared.TextValue(build.Data, "id"), build.ID),
+		JobName:   shared.FirstNonBlank(shared.TextValue(build.Data, "job_name", "jobName"), build.ID),
+		BuildID:   shared.FirstNonBlank(shared.TextValue(build.Data, "build_id", "buildId"), build.ID),
+	}
+	rawFingerprint, _ := json.Marshal(fingerprint)
+	return imageBuildHash(key), imageBuildHash(string(rawFingerprint))
+}
+
+func imageBuildHash(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func findImageBuildByIdempotencyKeyHash(app *platform.App, r *http.Request, keyHash string) (imageRecord, bool) {
+	if app == nil || app.Store == nil || keyHash == "" {
+		return imageRecord{}, false
+	}
+	for _, record := range app.Store.List(r.Context(), imageBuildsResource) {
+		if shared.TextValue(record.Data, internalImageBuildIdempotencyKeyHash) == keyHash {
+			return imageRecord{ID: record.ID, Data: record.Data}, true
+		}
+	}
+	return imageRecord{}, false
+}
+
+func imageBuildCancelIdempotencyResult(app *platform.App, r *http.Request, keyHash, fingerprintHash string) (int, any) {
+	if keyHash == "" {
+		return 0, nil
+	}
+	existing, found := findImageBuildByCancelIdempotencyKeyHash(app, r, keyHash)
+	if !found {
+		return 0, nil
+	}
+	if shared.TextValue(existing.Data, internalImageBuildCancelIdempotencyFingerprintHash) != fingerprintHash {
+		return http.StatusConflict, shared.ErrorData("idempotency key is already used by a different image build cancel request")
+	}
+	return http.StatusOK, publicImageBuildData(existing.Data)
+}
+
+func findImageBuildByCancelIdempotencyKeyHash(app *platform.App, r *http.Request, keyHash string) (imageRecord, bool) {
+	if app == nil || app.Store == nil || keyHash == "" {
+		return imageRecord{}, false
+	}
+	for _, record := range app.Store.List(r.Context(), imageBuildsResource) {
+		if shared.TextValue(record.Data, internalImageBuildCancelIdempotencyKeyHash) == keyHash {
+			return imageRecord{ID: record.ID, Data: record.Data}, true
+		}
+	}
+	return imageRecord{}, false
+}
+
+func publicImageBuildData(data map[string]any) map[string]any {
+	out := shared.CloneMap(data)
+	delete(out, internalImageBuildIdempotencyKeyHash)
+	delete(out, internalImageBuildIdempotencyFingerprintHash)
+	delete(out, internalImageBuildCancelIdempotencyKeyHash)
+	delete(out, internalImageBuildCancelIdempotencyFingerprintHash)
+	return out
+}
+
+func exceededBuildLimit(requested float64, project map[string]any, keys ...string) bool {
+	limit, ok := optionalNumberValue(project, keys...)
+	return ok && requested > limit
+}
+
+func exceededActiveBuildLimit(app *platform.App, r *http.Request, projectID string, project map[string]any) bool {
+	limit, ok := activeBuildLimit(project)
+	return ok && activeProjectImageBuilds(app, r, projectID) >= limit
+}
+
+func activeBuildLimit(project map[string]any) (int, bool) {
+	limit, ok := optionalNumberValue(project, "max_running_builds")
+	if concurrent, found := optionalNumberValue(project, "max_concurrent_builds"); found && (!ok || concurrent < limit) {
+		limit = concurrent
+		ok = true
+	}
+	return int(limit), ok
+}
+
+func activeProjectImageBuilds(app *platform.App, r *http.Request, projectID string) int {
+	if app == nil || app.Store == nil {
+		return 0
+	}
+	active := 0
+	for _, record := range app.Store.List(r.Context(), imageBuildsResource) {
+		if shared.TextValue(record.Data, "project_id", "projectId") != projectID {
+			continue
+		}
+		if activeImageBuildStatus(shared.TextValue(record.Data, "status")) {
+			active++
+		}
+	}
+	return active
+}
+
+func activeImageBuildStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "queued", "pending", "running", "building":
+		return true
+	default:
+		return false
+	}
+}
+
+func positiveNumberValue(data map[string]any, keys ...string) (float64, bool) {
+	value, ok := optionalNumberValue(data, keys...)
+	return value, ok && value > 0
+}
+
+func optionalNumberValue(data map[string]any, keys ...string) (float64, bool) {
+	for _, key := range keys {
+		value, exists := data[key]
+		if !exists {
+			continue
+		}
+		if number, ok := numberValue(value); ok {
+			return number, true
+		}
+		return 0, false
+	}
+	return 0, false
+}
+
+func numberValue(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case float32:
+		return float64(typed), true
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
 }

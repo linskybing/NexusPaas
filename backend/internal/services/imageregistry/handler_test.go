@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -64,7 +65,7 @@ func TestImageRegistryCatalogRequestsAndBuildWorkflow(t *testing.T) {
 		t.Fatalf("project image requests = %#v, want one", requests)
 	}
 
-	buildReq := imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", `{"id":"build-1","project_id":"P1","image_reference":"registry.local/team/app:dev"}`, "U1")
+	buildReq := imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", imageBuildBody("build-1", "P1", "registry.local/team/app:dev"), "U1")
 	code, data, _ = startDockerfileImageBuild(app, buildReq, platform.RouteSpec{})
 	assertImageStatus(t, code, data, http.StatusAccepted)
 	if build := data.(map[string]any); build["build_type"] != "dockerfile" || build["status"] != "queued" {
@@ -99,6 +100,91 @@ func TestImageRegistryCatalogRequestsAndBuildWorkflow(t *testing.T) {
 	}
 }
 
+func TestImageBuildLogsRedactCommonSecrets(t *testing.T) {
+	app := newImageRegistryTestApp(t)
+	secrets := []struct {
+		name  string
+		value string
+	}{
+		{name: "authorization bearer", value: "synthetic-bearer-value-redact-me"},
+		{name: "password", value: "synthetic-password-value-redact-me"},
+		{name: "passwd", value: "synthetic-passwd-value-redact-me"},
+		{name: "token", value: "synthetic-token-value-redact-me"},
+		{name: "api key", value: "synthetic-api-key-value-redact-me"},
+		{name: "access key", value: "synthetic-access-key-value-redact-me"},
+		{name: "private key", value: "synthetic-private-key-value-redact-me"},
+		{name: "credential", value: "synthetic-credential-value-redact-me"},
+	}
+	originalLogs := strings.Join([]string{
+		"step 1: pulling base image",
+		"Authorization: Bearer " + secrets[0].value,
+		"password=" + secrets[1].value,
+		"db_passwd: '" + secrets[2].value + "'",
+		"registry_token=" + secrets[3].value,
+		`api_key="` + secrets[4].value + `"`,
+		"access_key: " + secrets[5].value,
+		"private_key=" + secrets[6].value,
+		"credential: " + secrets[7].value,
+		"non-secret line remains visible",
+	}, "\n") + "\n"
+	createImageRecords(t, app, imageBuildsResource, []map[string]any{
+		{
+			"id":              "redact-build",
+			"build_id":        "redact-build",
+			"job_name":        "redact-build",
+			"project_id":      "P1",
+			"image_reference": "registry.local/team/app:redact",
+			"build_type":      "dockerfile",
+			"status":          "running",
+			"logs":            originalLogs,
+		},
+	})
+
+	req := imageRequest(http.MethodGet, "/api/v1/images/build/redact-build/logs", "", "U2")
+	req.SetPathValue("buildId", "redact-build")
+	code, data, _ := getBuildLogs(app, req, platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusOK)
+	raw, ok := data.(platform.RawResponse)
+	if !ok {
+		t.Fatalf("build logs response type = %T, want platform.RawResponse", data)
+	}
+	if raw.ContentType != "text/plain; charset=utf-8" {
+		t.Fatalf("build logs content type = %q, want text/plain; charset=utf-8", raw.ContentType)
+	}
+	body := string(raw.Body)
+	for _, secret := range secrets {
+		if strings.Contains(body, secret.value) {
+			t.Fatalf("redacted build logs leaked %s value", secret.name)
+		}
+	}
+	if count := strings.Count(body, imageBuildLogRedaction); count < len(secrets) {
+		t.Fatalf("redacted build logs placeholders = %d, want at least %d", count, len(secrets))
+	}
+	if !strings.Contains(body, "Authorization: Bearer "+imageBuildLogRedaction) {
+		t.Fatalf("redacted build logs missing authorization bearer placeholder")
+	}
+	if !strings.Contains(body, `api_key="`+imageBuildLogRedaction+`"`) {
+		t.Fatalf("redacted build logs missing quoted key/value placeholder")
+	}
+	if !strings.Contains(body, "non-secret line remains visible") {
+		t.Fatalf("redacted build logs removed ordinary log line")
+	}
+
+	stored, found := app.Store.Get(context.Background(), imageBuildsResource, "redact-build")
+	if !found {
+		t.Fatalf("stored build missing")
+	}
+	storedLogs, _ := stored.Data["logs"].(string)
+	if storedLogs != originalLogs {
+		t.Fatalf("stored build logs were mutated")
+	}
+	for _, secret := range secrets {
+		if !strings.Contains(storedLogs, secret.value) {
+			t.Fatalf("stored build logs lost original %s value", secret.name)
+		}
+	}
+}
+
 func TestImageRegistryBuildAndListRoutesSurfaceHarborDegradedAdditively(t *testing.T) {
 	app := newImageRegistryTestApp(t)
 	app.Adapters["harbor"] = fakeImageHarborAdapter{result: contracts.AdapterResult{Adapter: "harbor"}}
@@ -109,7 +195,7 @@ func TestImageRegistryBuildAndListRoutesSurfaceHarborDegradedAdditively(t *testi
 	assertImageNoDegraded(t, degraded)
 
 	buildRoute := platform.RouteSpec{Method: http.MethodPost, OperationID: "imageBuild"}
-	buildReq := imageRequest(http.MethodPost, "/api/v1/images/build", `{"id":"build-harbor-ok","project_id":"P1","image_reference":"registry.local/team/app:ok"}`, "U1")
+	buildReq := imageRequest(http.MethodPost, "/api/v1/images/build", imageBuildBody("build-harbor-ok", "P1", "registry.local/team/app:ok"), "U1")
 	code, data, degraded = startImageBuild(app, buildReq, buildRoute)
 	assertImageStatus(t, code, data, http.StatusAccepted)
 	assertImageNoDegraded(t, degraded)
@@ -148,7 +234,7 @@ func TestImageRegistryBuildAndListRoutesSurfaceHarborDegradedAdditively(t *testi
 	assertHarborDegraded(t, degraded)
 	assertProjectBuildPayload(t, data, "build-harbor-ok")
 
-	degradedBuildReq := imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", `{"id":"build-harbor-down","project_id":"P1","image_reference":"registry.local/team/app:down"}`, "U1")
+	degradedBuildReq := imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", imageBuildBody("build-harbor-down", "P1", "registry.local/team/app:down"), "U1")
 	code, data, degraded = startDockerfileImageBuild(app, degradedBuildReq, buildRoute)
 	assertImageStatus(t, code, data, http.StatusAccepted)
 	assertHarborDegraded(t, degraded)
@@ -157,7 +243,7 @@ func TestImageRegistryBuildAndListRoutesSurfaceHarborDegradedAdditively(t *testi
 	assertImageMapValue(t, data, "status", "queued")
 
 	storageBuildRoute := platform.RouteSpec{Method: http.MethodPost, OperationID: "imageBuildFromStorage"}
-	storageBuildReq := imageRequest(http.MethodPost, "/api/v1/images/build/from-storage", `{"id":"build-harbor-storage-down","project_id":"P1","image_reference":"registry.local/team/app:storage-down"}`, "U1")
+	storageBuildReq := imageRequest(http.MethodPost, "/api/v1/images/build/from-storage", imageBuildBody("build-harbor-storage-down", "P1", "registry.local/team/app:storage-down"), "U1")
 	code, data, degraded = startStorageImageBuild(app, storageBuildReq, storageBuildRoute)
 	assertImageStatus(t, code, data, http.StatusAccepted)
 	assertHarborDegraded(t, degraded)
@@ -613,15 +699,327 @@ func TestImageRegistryRequestAdministrationAndBuildTypes(t *testing.T) {
 	code, data, _ = removeProjectImage(app, removeReq, platform.RouteSpec{})
 	assertImageStatus(t, code, data, http.StatusOK)
 
-	contextBuild := imageRequest(http.MethodPost, "/api/v1/images/build", `{"id":"ctx-build","project_id":"P1","repository":"team/app","tag":"ctx"}`, "U1")
+	contextBuild := imageRequest(http.MethodPost, "/api/v1/images/build", `{"id":"ctx-build","project_id":"P1","repository":"team/app","tag":"ctx","cpu":2,"memory_gb":4,"max_build_time_seconds":600}`, "U1")
 	code, data, _ = startImageBuild(app, contextBuild, platform.RouteSpec{})
 	assertImageStatus(t, code, data, http.StatusAccepted)
 	assertImageMapValue(t, data, "build_type", "context")
 
-	storageBuild := imageRequest(http.MethodPost, "/api/v1/images/build/from-storage", `{"id":"storage-build","project_id":"P1","image_reference":"registry.local/team/app:storage"}`, "U1")
+	storageBuild := imageRequest(http.MethodPost, "/api/v1/images/build/from-storage", imageBuildBody("storage-build", "P1", "registry.local/team/app:storage"), "U1")
 	code, data, _ = startStorageImageBuild(app, storageBuild, platform.RouteSpec{})
 	assertImageStatus(t, code, data, http.StatusAccepted)
 	assertImageMapValue(t, data, "build_type", "storage")
+}
+
+func TestImageBuildLocalQuotaTimeoutAndConcurrencyPolicy(t *testing.T) {
+	t.Run("requires build resources", func(t *testing.T) {
+		cases := []struct {
+			name string
+			body string
+		}{
+			{name: "missing cpu", body: `{"id":"missing-cpu","project_id":"P1","image_reference":"registry.local/team/app:missing-cpu","memory_gib":4,"max_build_seconds":600}`},
+			{name: "zero memory", body: `{"id":"zero-memory","project_id":"P1","image_reference":"registry.local/team/app:zero-memory","cpu_cores":2,"memory_gib":0,"max_build_seconds":600}`},
+			{name: "negative time", body: `{"id":"negative-time","project_id":"P1","image_reference":"registry.local/team/app:negative-time","cpu_cores":2,"memory_gib":4,"max_build_seconds":-1}`},
+			{name: "nonnumeric cpu", body: `{"id":"bad-cpu","project_id":"P1","image_reference":"registry.local/team/app:bad-cpu","cpu_cores":"fast","memory_gib":4,"max_build_seconds":600}`},
+		}
+		for _, tt := range cases {
+			t.Run(tt.name, func(t *testing.T) {
+				app := newImageRegistryTestApp(t)
+				code, data, _ := startDockerfileImageBuild(app, imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", tt.body, "U1"), platform.RouteSpec{})
+				assertImageStatus(t, code, data, http.StatusBadRequest)
+				if got := len(app.Store.List(context.Background(), imageBuildsResource)); got != 0 {
+					t.Fatalf("build records = %d, want none after rejected resource request", got)
+				}
+			})
+		}
+	})
+
+	t.Run("requires project opt-in", func(t *testing.T) {
+		app := newImageRegistryTestApp(t)
+		updateImageProject(t, app, "P1", map[string]any{"allow_image_build": false})
+		code, data, _ := startDockerfileImageBuild(app, imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", imageBuildBody("disabled", "P1", "registry.local/team/app:disabled"), "U1"), platform.RouteSpec{})
+		assertImageStatus(t, code, data, http.StatusForbidden)
+
+		createImageRecords(t, app, orgProjectsResource, []map[string]any{
+			{"id": "P2", "project_name": "missing-build-policy", "owner_id": "G1"},
+		})
+		code, data, _ = startDockerfileImageBuild(app, imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", imageBuildBody("missing", "P2", "registry.local/team/app:missing"), "U1"), platform.RouteSpec{})
+		assertImageStatus(t, code, data, http.StatusForbidden)
+	})
+
+	t.Run("enforces project limits", func(t *testing.T) {
+		cases := []struct {
+			name   string
+			update map[string]any
+			body   string
+		}{
+			{name: "cpu", update: map[string]any{"build_cpu_limit": 1.5}, body: imageBuildBody("cpu-limit", "P1", "registry.local/team/app:cpu-limit")},
+			{name: "memory", update: map[string]any{"build_memory_gib_limit": 3.5}, body: imageBuildBody("memory-limit", "P1", "registry.local/team/app:memory-limit")},
+			{name: "time", update: map[string]any{"build_time_limit_seconds": 300}, body: imageBuildBody("time-limit", "P1", "registry.local/team/app:time-limit")},
+		}
+		for _, tt := range cases {
+			t.Run(tt.name, func(t *testing.T) {
+				app := newImageRegistryTestApp(t)
+				updateImageProject(t, app, "P1", tt.update)
+				code, data, _ := startDockerfileImageBuild(app, imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", tt.body, "U1"), platform.RouteSpec{})
+				assertImageStatus(t, code, data, http.StatusConflict)
+			})
+		}
+	})
+
+	t.Run("enforces active same-project concurrency only", func(t *testing.T) {
+		app := newImageRegistryTestApp(t)
+		updateImageProject(t, app, "P1", map[string]any{"max_running_builds": 10, "max_concurrent_builds": 4})
+		seedImageBuildStatuses(t, app, "P1", "queued", "pending", "running", "building", "cancelled", "failed", "completed", "timed_out")
+		seedImageBuildStatuses(t, app, "other-project", "running")
+		code, data, _ := startDockerfileImageBuild(app, imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", imageBuildBody("blocked-concurrency", "P1", "registry.local/team/app:blocked"), "U1"), platform.RouteSpec{})
+		assertImageStatus(t, code, data, http.StatusConflict)
+
+		open := newImageRegistryTestApp(t)
+		updateImageProject(t, open, "P1", map[string]any{"max_running_builds": 1})
+		seedImageBuildStatuses(t, open, "P1", "cancelled", "canceled", "failed", "succeeded", "completed", "timed_out", "rejected")
+		code, data, _ = startDockerfileImageBuild(open, imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", imageBuildBody("accepted-after-terminal", "P1", "registry.local/team/app:accepted"), "U1"), platform.RouteSpec{})
+		assertImageStatus(t, code, data, http.StatusAccepted)
+		assertImageMapValue(t, data, "status", "queued")
+		assertImageMapValue(t, data, "cpu_cores", 2.0)
+		assertImageMapValue(t, data, "memory_gib", 4.0)
+		assertImageMapValue(t, data, "max_build_time_seconds", 600)
+	})
+}
+
+func TestImageBuildCancelAndTimeoutReleaseActiveBuildSlotLocally(t *testing.T) {
+	t.Run("cancel releases active build slot", assertImageBuildCancelReleasesActiveBuildSlotLocally)
+	t.Run("timeout terminal statuses release active build slot", assertImageBuildTimeoutStatusesReleaseActiveBuildSlotLocally)
+}
+
+func assertImageBuildCancelReleasesActiveBuildSlotLocally(t *testing.T) {
+	app := newImageRegistryTestApp(t)
+	updateImageProject(t, app, "P1", map[string]any{"max_running_builds": 1})
+
+	code, data, _ := startDockerfileImageBuild(app, imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", imageBuildBody("cancel-slot-first", "P1", "registry.local/team/app:cancel-first"), "U1"), platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusAccepted)
+	assertImageMapValue(t, data, "id", "cancel-slot-first")
+	assertImageMapValue(t, data, "status", "queued")
+
+	code, data, _ = startDockerfileImageBuild(app, imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", imageBuildBody("cancel-slot-blocked", "P1", "registry.local/team/app:cancel-blocked"), "U1"), platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusConflict)
+
+	cancelReq := imageProjectRequest(http.MethodDelete, "/api/v1/projects/P1/builds/cancel-slot-first", "", "U1", "P1")
+	cancelReq.SetPathValue("jobName", "cancel-slot-first")
+	code, data, _ = cancelProjectBuild(app, cancelReq, platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusOK)
+	assertImageMapValue(t, data, "id", "cancel-slot-first")
+	assertImageMapValue(t, data, "status", "cancelled")
+
+	stored, found := app.Store.Get(context.Background(), imageBuildsResource, "cancel-slot-first")
+	if !found {
+		t.Fatalf("cancelled build record missing")
+	}
+	if status, _ := stored.Data["status"].(string); status != "cancelled" {
+		t.Fatalf("stored cancelled build status = %q, want cancelled", status)
+	}
+
+	cancelEvents := imageEventsByName(app, "ImageBuildCancelled")
+	if len(cancelEvents) != 1 {
+		t.Fatalf("ImageBuildCancelled events = %#v, want exactly one", cancelEvents)
+	}
+	if cancelEvents[0].Data["id"] != "cancel-slot-first" && cancelEvents[0].Data["build_id"] != "cancel-slot-first" {
+		t.Fatalf("ImageBuildCancelled event data = %#v, want cancelled build id", cancelEvents[0].Data)
+	}
+
+	code, data, _ = startDockerfileImageBuild(app, imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", imageBuildBody("cancel-slot-after", "P1", "registry.local/team/app:cancel-after"), "U1"), platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusAccepted)
+	assertImageMapValue(t, data, "id", "cancel-slot-after")
+	assertImageMapValue(t, data, "status", "queued")
+}
+
+func assertImageBuildTimeoutStatusesReleaseActiveBuildSlotLocally(t *testing.T) {
+	app := newImageRegistryTestApp(t)
+	updateImageProject(t, app, "P1", map[string]any{"max_running_builds": 1})
+	seedImageBuildStatuses(t, app, "P1", "timed_out", "timeout")
+	terminalStatuses := map[string]string{
+		"P1-build-00-timed_out": "timed_out",
+		"P1-build-01-timeout":   "timeout",
+	}
+
+	code, data, _ := startDockerfileImageBuild(app, imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", imageBuildBody("timeout-slot-after", "P1", "registry.local/team/app:timeout-after"), "U1"), platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusAccepted)
+	assertImageMapValue(t, data, "id", "timeout-slot-after")
+	assertImageMapValue(t, data, "status", "queued")
+
+	for id, want := range terminalStatuses {
+		record, found := app.Store.Get(context.Background(), imageBuildsResource, id)
+		if !found {
+			t.Fatalf("terminal build record %s missing", id)
+		}
+		if status, _ := record.Data["status"].(string); status != want {
+			t.Fatalf("terminal build %s status = %q, want %q", id, status, want)
+		}
+	}
+}
+
+func TestImageBuildIdempotencyKeyReplaysSameRequest(t *testing.T) {
+	app := newImageRegistryTestApp(t)
+	updateImageProject(t, app, "P1", map[string]any{"max_running_builds": 1})
+	key := "image-build-idempotency-key"
+	body := imageBuildBody("idem-build", "P1", "registry.local/team/app:idem")
+
+	createReq := imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", body, "U1")
+	createReq.Header.Set(idempotencyKeyHeader, key)
+	code, data, _ := startDockerfileImageBuild(app, createReq, platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusAccepted)
+	assertImageMapValue(t, data, "id", "idem-build")
+	assertImageMapValue(t, data, "status", "queued")
+	keyHash, fingerprintHash := storedImageBuildIdempotencyHashes(t, app, "idem-build")
+	assertNoImageIdempotencyMaterial(t, data, key, keyHash, fingerprintHash)
+
+	replayReq := imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", body, "U1")
+	replayReq.Header.Set(idempotencyKeyHeader, key)
+	code, data, _ = startDockerfileImageBuild(app, replayReq, platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusAccepted)
+	assertImageMapValue(t, data, "id", "idem-build")
+	assertImageMapValue(t, data, "status", "queued")
+	assertNoImageIdempotencyMaterial(t, data, key, keyHash, fingerprintHash)
+
+	if records := app.Store.List(context.Background(), imageBuildsResource); len(records) != 1 {
+		t.Fatalf("image build records = %d, want one idempotent build", len(records))
+	}
+	events := imageEventsByName(app, "ImageBuildStarted")
+	if len(events) != 1 {
+		t.Fatalf("ImageBuildStarted events = %#v, want one", events)
+	}
+	if events[0].IdempotencyKey != key {
+		t.Fatalf("ImageBuildStarted IdempotencyKey = %q, want synthetic test key", events[0].IdempotencyKey)
+	}
+	assertNoImageIdempotencyMaterial(t, events[0].Data, key, keyHash, fingerprintHash)
+
+	listReq := imageProjectRequest(http.MethodGet, "/api/v1/projects/P1/builds", "", "U2", "P1")
+	code, data, _ = listProjectBuilds(app, listReq, platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusOK)
+	assertProjectBuildPayload(t, data, "idem-build")
+	assertNoImageIdempotencyMaterial(t, data, key, keyHash, fingerprintHash)
+
+	cancelReq := imageProjectRequest(http.MethodDelete, "/api/v1/projects/P1/builds/idem-build", "", "U1", "P1")
+	cancelReq.SetPathValue("jobName", "idem-build")
+	code, data, _ = cancelProjectBuild(app, cancelReq, platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusOK)
+	assertImageMapValue(t, data, "status", "cancelled")
+	assertNoImageIdempotencyMaterial(t, data, key, keyHash, fingerprintHash)
+}
+
+func TestImageBuildIdempotencyKeyRejectsDifferentPayload(t *testing.T) {
+	app := newImageRegistryTestApp(t)
+	key := "image-build-conflict-key"
+	firstReq := imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", imageBuildBody("idem-conflict", "P1", "registry.local/team/app:first"), "U1")
+	firstReq.Header.Set(idempotencyKeyHeader, key)
+	code, data, _ := startDockerfileImageBuild(app, firstReq, platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusAccepted)
+	assertImageMapValue(t, data, "id", "idem-conflict")
+
+	secondReq := imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", imageBuildBody("idem-conflict", "P1", "registry.local/team/app:second"), "U1")
+	secondReq.Header.Set(idempotencyKeyHeader, key)
+	code, data, _ = startDockerfileImageBuild(app, secondReq, platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusConflict)
+
+	if records := app.Store.List(context.Background(), imageBuildsResource); len(records) != 1 {
+		t.Fatalf("image build records = %d, want no duplicate after idempotency conflict", len(records))
+	}
+	if events := imageEventsByName(app, "ImageBuildStarted"); len(events) != 1 {
+		t.Fatalf("ImageBuildStarted events = %#v, want one after idempotency conflict", events)
+	}
+}
+
+func TestImageBuildCancelIdempotencyKeyReplaysSameTarget(t *testing.T) {
+	app := newImageRegistryTestApp(t)
+	key := "image-build-cancel-idempotency-key"
+
+	createReq := imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", imageBuildBody("cancel-idem", "P1", "registry.local/team/app:cancel-idem"), "U1")
+	code, data, _ := startDockerfileImageBuild(app, createReq, platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusAccepted)
+	assertImageMapValue(t, data, "id", "cancel-idem")
+	if _, ok := app.Store.Update(context.Background(), imageBuildsResource, "cancel-idem", map[string]any{"job_name": "cancel-idem-job", "build_id": "cancel-idem-build"}); !ok {
+		t.Fatalf("build cancel-idem alias update failed")
+	}
+
+	cancelReq := imageProjectRequest(http.MethodDelete, "/api/v1/projects/P1/builds/cancel-idem-job", "", "U1", "P1")
+	cancelReq.SetPathValue("jobName", "cancel-idem-job")
+	cancelReq.Header.Set(idempotencyKeyHeader, key)
+	code, data, _ = cancelProjectBuild(app, cancelReq, platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusOK)
+	assertImageMapValue(t, data, "id", "cancel-idem")
+	assertImageMapValue(t, data, "status", "cancelled")
+	keyHash, fingerprintHash := storedImageBuildCancelIdempotencyHashes(t, app, "cancel-idem")
+	assertNoImageIdempotencyMaterial(t, data, key, keyHash, fingerprintHash)
+
+	replayReq := imageProjectRequest(http.MethodDelete, "/api/v1/projects/P1/builds/cancel-idem-job", "", "U1", "P1")
+	replayReq.SetPathValue("jobName", "cancel-idem-job")
+	replayReq.Header.Set(idempotencyKeyHeader, key)
+	code, data, _ = cancelProjectBuild(app, replayReq, platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusOK)
+	assertImageMapValue(t, data, "id", "cancel-idem")
+	assertImageMapValue(t, data, "status", "cancelled")
+	assertNoImageIdempotencyMaterial(t, data, key, keyHash, fingerprintHash)
+
+	aliasReq := imageProjectRequest(http.MethodDelete, "/api/v1/projects/P1/image-builds/cancel-idem-build", "", "U1", "P1")
+	aliasReq.SetPathValue("buildId", "cancel-idem-build")
+	aliasReq.Header.Set(idempotencyKeyHeader, key)
+	code, data, _ = cancelProjectBuild(app, aliasReq, platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusOK)
+	assertImageMapValue(t, data, "id", "cancel-idem")
+	assertImageMapValue(t, data, "status", "cancelled")
+	assertNoImageIdempotencyMaterial(t, data, key, keyHash, fingerprintHash)
+
+	events := imageEventsByName(app, "ImageBuildCancelled")
+	if len(events) != 1 {
+		t.Fatalf("ImageBuildCancelled events = %#v, want one after idempotent cancel replays", events)
+	}
+	if events[0].IdempotencyKey != key {
+		t.Fatalf("ImageBuildCancelled IdempotencyKey = %q, want synthetic test key", events[0].IdempotencyKey)
+	}
+	assertNoImageIdempotencyMaterial(t, events[0].Data, key, keyHash, fingerprintHash)
+
+	listReq := imageProjectRequest(http.MethodGet, "/api/v1/projects/P1/builds", "", "U2", "P1")
+	code, data, _ = listProjectBuilds(app, listReq, platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusOK)
+	assertNoImageIdempotencyMaterial(t, data, key, keyHash, fingerprintHash)
+}
+
+func TestImageBuildCancelIdempotencyKeyRejectsDifferentTarget(t *testing.T) {
+	app := newImageRegistryTestApp(t)
+	key := "image-build-cancel-conflict-key"
+
+	firstReq := imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", imageBuildBody("cancel-conflict-first", "P1", "registry.local/team/app:cancel-conflict-first"), "U1")
+	code, data, _ := startDockerfileImageBuild(app, firstReq, platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusAccepted)
+	secondReq := imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", imageBuildBody("cancel-conflict-second", "P1", "registry.local/team/app:cancel-conflict-second"), "U1")
+	code, data, _ = startDockerfileImageBuild(app, secondReq, platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusAccepted)
+
+	cancelFirstReq := imageProjectRequest(http.MethodDelete, "/api/v1/projects/P1/builds/cancel-conflict-first", "", "U1", "P1")
+	cancelFirstReq.SetPathValue("jobName", "cancel-conflict-first")
+	cancelFirstReq.Header.Set(idempotencyKeyHeader, key)
+	code, data, _ = cancelProjectBuild(app, cancelFirstReq, platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusOK)
+	assertImageMapValue(t, data, "status", "cancelled")
+	keyHash, fingerprintHash := storedImageBuildCancelIdempotencyHashes(t, app, "cancel-conflict-first")
+	assertNoImageIdempotencyMaterial(t, data, key, keyHash, fingerprintHash)
+
+	cancelSecondReq := imageProjectRequest(http.MethodDelete, "/api/v1/projects/P1/builds/cancel-conflict-second", "", "U1", "P1")
+	cancelSecondReq.SetPathValue("jobName", "cancel-conflict-second")
+	cancelSecondReq.Header.Set(idempotencyKeyHeader, key)
+	code, data, _ = cancelProjectBuild(app, cancelSecondReq, platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusConflict)
+	assertNoImageIdempotencyMaterial(t, data, key, keyHash, fingerprintHash)
+
+	second, found := app.Store.Get(context.Background(), imageBuildsResource, "cancel-conflict-second")
+	if !found {
+		t.Fatalf("second build record missing")
+	}
+	if status, _ := second.Data["status"].(string); status == "cancelled" {
+		t.Fatalf("second build was cancelled after idempotency conflict")
+	}
+	if events := imageEventsByName(app, "ImageBuildCancelled"); len(events) != 1 {
+		t.Fatalf("ImageBuildCancelled events = %#v, want one after cancel idempotency conflict", events)
+	}
 }
 
 func TestImageRegistryProjectionUpsertAndDelete(t *testing.T) {
@@ -651,7 +1049,16 @@ func newImageRegistryTestApp(t *testing.T) *platform.App {
 		{"id": "U2", "username": "bob"},
 	})
 	createImageRecords(t, app, orgProjectsResource, []map[string]any{
-		{"id": "P1", "project_name": "vision", "owner_id": "G1"},
+		{
+			"id":                       "P1",
+			"project_name":             "vision",
+			"owner_id":                 "G1",
+			"allow_image_build":        true,
+			"build_cpu_limit":          8.0,
+			"build_memory_gib_limit":   16.0,
+			"build_time_limit_seconds": 3600,
+			"max_running_builds":       10,
+		},
 	})
 	createImageRecords(t, app, orgUserGroupsResource, []map[string]any{
 		{"id": "U1:G1", "user_id": "U1", "group_id": "G1", "role": "admin"},
@@ -670,6 +1077,38 @@ func createImageRecords(t *testing.T, app *platform.App, resource string, rows [
 			t.Fatal(err)
 		}
 	}
+}
+
+func imageBuildBody(id, projectID, imageRef string) string {
+	return fmt.Sprintf(`{"id":%q,"project_id":%q,"image_reference":%q,"cpu_cores":2,"memory_gib":4,"max_build_seconds":600}`, id, projectID, imageRef)
+}
+
+func updateImageProject(t *testing.T, app *platform.App, projectID string, data map[string]any) {
+	t.Helper()
+	if _, ok := app.Store.Update(context.Background(), orgProjectsResource, projectID, data); !ok {
+		t.Fatalf("project %s update failed", projectID)
+	}
+}
+
+func seedImageBuildStatuses(t *testing.T, app *platform.App, projectID string, statuses ...string) {
+	t.Helper()
+	rows := make([]map[string]any, 0, len(statuses))
+	for index, status := range statuses {
+		id := fmt.Sprintf("%s-build-%02d-%s", projectID, index, status)
+		rows = append(rows, map[string]any{
+			"id":                     id,
+			"build_id":               id,
+			"job_name":               id,
+			"project_id":             projectID,
+			"image_reference":        "registry.local/team/app:" + status,
+			"build_type":             "dockerfile",
+			"cpu_cores":              1.0,
+			"memory_gib":             2.0,
+			"max_build_time_seconds": 300,
+			"status":                 status,
+		})
+	}
+	createImageRecords(t, app, imageBuildsResource, rows)
 }
 
 func imageRequest(method, target, body, userID string) *http.Request {
@@ -739,6 +1178,65 @@ func assertProjectBuildPayload(t *testing.T, data any, buildID string) {
 	builds := data.([]map[string]any)
 	if len(builds) != 1 || builds[0]["id"] != buildID || builds[0]["project_id"] != "P1" || builds[0]["status"] != "queued" {
 		t.Fatalf("project builds = %#v, want one unchanged queued build %s", builds, buildID)
+	}
+}
+
+func storedImageBuildIdempotencyHashes(t *testing.T, app *platform.App, id string) (string, string) {
+	t.Helper()
+	record, found := app.Store.Get(context.Background(), imageBuildsResource, id)
+	if !found {
+		t.Fatalf("build %s not found", id)
+	}
+	keyHash, _ := record.Data[internalImageBuildIdempotencyKeyHash].(string)
+	fingerprintHash, _ := record.Data[internalImageBuildIdempotencyFingerprintHash].(string)
+	if keyHash == "" || fingerprintHash == "" {
+		t.Fatalf("stored idempotency hashes missing from internal record: %#v", record.Data)
+	}
+	return keyHash, fingerprintHash
+}
+
+func storedImageBuildCancelIdempotencyHashes(t *testing.T, app *platform.App, id string) (string, string) {
+	t.Helper()
+	record, found := app.Store.Get(context.Background(), imageBuildsResource, id)
+	if !found {
+		t.Fatalf("build %s not found", id)
+	}
+	keyHash, _ := record.Data[internalImageBuildCancelIdempotencyKeyHash].(string)
+	fingerprintHash, _ := record.Data[internalImageBuildCancelIdempotencyFingerprintHash].(string)
+	if keyHash == "" || fingerprintHash == "" {
+		t.Fatalf("stored cancel idempotency hashes missing from internal record")
+	}
+	return keyHash, fingerprintHash
+}
+
+func imageEventsByName(app *platform.App, name string) []contracts.Event {
+	events := []contracts.Event{}
+	for _, event := range app.Events.Outbox() {
+		if event.Name == name {
+			events = append(events, event)
+		}
+	}
+	return events
+}
+
+func assertNoImageIdempotencyMaterial(t *testing.T, value any, forbidden ...string) {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal value for leak check: %v", err)
+	}
+	text := string(raw)
+	for _, token := range append(forbidden,
+		internalImageBuildIdempotencyKeyHash,
+		internalImageBuildIdempotencyFingerprintHash,
+		internalImageBuildCancelIdempotencyKeyHash,
+		internalImageBuildCancelIdempotencyFingerprintHash,
+		"idempotency_key_hash",
+		"fingerprint_hash",
+	) {
+		if token != "" && strings.Contains(text, token) {
+			t.Fatalf("idempotency material %q leaked in %s", token, text)
+		}
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
 	"github.com/linskybing/nexuspaas/backend/internal/platform/cluster"
 	"github.com/linskybing/nexuspaas/backend/internal/services/workload"
@@ -95,6 +96,7 @@ func TestPreemptionSuccessUsesTransactionalEvent(t *testing.T) {
 }
 
 func TestPreemptionIdempotencyReplaysExistingDecision(t *testing.T) {
+	ctx := context.Background()
 	app := newPreemptionTestApp(t, cluster.New(fake.NewSimpleClientset(
 		preemptionPod("proj-p1", "victim-pod", "victim"),
 		preemptionPod("proj-p1", "victim2-pod", "victim2"),
@@ -109,12 +111,19 @@ func TestPreemptionIdempotencyReplaysExistingDecision(t *testing.T) {
 		"queue_name": "batch-low", "priority_value": 1000, "preemptible": true, "required_gpu": 1.0,
 	})
 
-	postPreemption(t, app, "same-key", `{"requester_job_id":"requester"}`, http.StatusOK)
+	first := postPreemption(t, app, "same-key", `{"requester_job_id":"requester"}`, http.StatusOK)
+	firstData := preemptionResponseData(t, first)
+	privateRecordID := preemptionRecordID("same-key")
+	stored, keyHash, fingerprintHash := storedPreemptionRecordHashes(t, app, privateRecordID)
+	publicID := assertPublicPreemptionID(t, firstData, privateRecordID)
+	assertStoredPreemptionRecordPrivateMaterial(t, stored)
+	assertNoPreemptionIdempotencyMaterial(t, firstData, "same-key", privateRecordID, keyHash, fingerprintHash)
 	seedPreemptionJob(t, app, map[string]any{
 		"id": "victim2", "job_id": "victim2", "status": "running", "namespace": "proj-p1",
 		"queue_name": "batch-low", "priority_value": 500, "preemptible": true, "required_gpu": 1.0,
 	})
 	beforeEvents := countEvents(app, "JobPreempted")
+	beforePods, _ := app.Cluster.Clientset().CoreV1().Pods("proj-p1").List(ctx, metav1.ListOptions{})
 
 	rec := postPreemption(t, app, "same-key", `{"requester_job_id":"requester"}`, http.StatusOK)
 	data := preemptionResponseData(t, rec)
@@ -122,12 +131,23 @@ func TestPreemptionIdempotencyReplaysExistingDecision(t *testing.T) {
 	if data["status"] != "completed" {
 		t.Fatalf("replayed data = %#v, want completed record", data)
 	}
-	victim2, _ := app.Store.Get(context.Background(), workloadJobsResource, "victim2")
+	if data["preemption_id"] != publicID || data["id"] != publicID {
+		t.Fatalf("replayed public preemption id changed")
+	}
+	assertNoPreemptionIdempotencyMaterial(t, data, "same-key", privateRecordID, keyHash, fingerprintHash)
+	victim2, _ := app.Store.Get(ctx, workloadJobsResource, "victim2")
 	if victim2.Data["status"] != "running" {
 		t.Fatalf("victim2 status = %#v, want unchanged running on replay", victim2.Data)
 	}
+	afterPods, _ := app.Cluster.Clientset().CoreV1().Pods("proj-p1").List(ctx, metav1.ListOptions{})
+	if len(afterPods.Items) != len(beforePods.Items) {
+		t.Fatalf("pods after replay = %d, want unchanged %d", len(afterPods.Items), len(beforePods.Items))
+	}
 	if after := countEvents(app, "JobPreempted"); after != beforeEvents {
 		t.Fatalf("JobPreempted events after replay = %d, want %d", after, beforeEvents)
+	}
+	if records := app.Store.List(ctx, preemptionRecordsResource); len(records) != 1 {
+		t.Fatalf("preemption records after replay = %d, want 1", len(records))
 	}
 }
 
@@ -281,6 +301,7 @@ func TestPreemptionZeroCleanupResourcesDoesNotMarkPreempted(t *testing.T) {
 }
 
 func TestPreemptionIdempotencyFingerprintMismatchDoesNotSelectVictims(t *testing.T) {
+	ctx := context.Background()
 	app := newPreemptionTestApp(t, cluster.New(fake.NewSimpleClientset(preemptionPod("proj-p1", "victim-pod", "victim")), "proj"))
 	seedPreemptionQueue(t, app, "q-low", "batch-low", true, 1000)
 	for _, id := range []string{"requester-a", "requester-b"} {
@@ -294,11 +315,77 @@ func TestPreemptionIdempotencyFingerprintMismatchDoesNotSelectVictims(t *testing
 		"queue_name": "batch-low", "priority_value": 1000, "preemptible": true, "required_gpu": 1.0,
 	})
 	postPreemption(t, app, "mismatch", `{"requester_job_id":"requester-a"}`, http.StatusOK)
+	privateRecordID := preemptionRecordID("mismatch")
+	_, keyHash, fingerprintHash := storedPreemptionRecordHashes(t, app, privateRecordID)
+	seedPreemptionJob(t, app, map[string]any{
+		"id": "victim2", "job_id": "victim2", "status": "running", "namespace": "proj-p1",
+		"queue_name": "batch-low", "priority_value": 500, "preemptible": true, "required_gpu": 1.0,
+	})
+	if _, err := app.Cluster.Clientset().CoreV1().Pods("proj-p1").Create(ctx, preemptionPod("proj-p1", "victim2-pod", "victim2"), metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	beforeEvents := countEvents(app, "JobPreempted")
+	beforeRecords := len(app.Store.List(ctx, preemptionRecordsResource))
 
 	rec := postPreemption(t, app, "mismatch", `{"requester_job_id":"requester-b"}`, http.StatusConflict)
 	data := preemptionResponseData(t, rec)
 	if !strings.Contains(data["message"].(string), "different preemption request") {
 		t.Fatalf("fingerprint mismatch = %#v, want conflict reason", data)
+	}
+	assertNoPreemptionIdempotencyMaterial(t, data, "mismatch", privateRecordID, keyHash, fingerprintHash)
+	if events := countEvents(app, "JobPreempted"); events != beforeEvents {
+		t.Fatalf("JobPreempted events after conflict = %d, want %d", events, beforeEvents)
+	}
+	if records := len(app.Store.List(ctx, preemptionRecordsResource)); records != beforeRecords {
+		t.Fatalf("preemption records after conflict = %d, want %d", records, beforeRecords)
+	}
+	victim2, _ := app.Store.Get(ctx, workloadJobsResource, "victim2")
+	if victim2.Data["status"] != "running" {
+		t.Fatalf("victim2 status after conflict = %#v, want running", victim2.Data)
+	}
+	pods, _ := app.Cluster.Clientset().CoreV1().Pods("proj-p1").List(ctx, metav1.ListOptions{})
+	if len(pods.Items) != 1 {
+		t.Fatalf("pods after conflict = %d, want untouched victim2 pod", len(pods.Items))
+	}
+}
+
+func TestPreemptionResponseAndEventsDoNotExposeIdempotencyMaterial(t *testing.T) {
+	ctx := context.Background()
+	app := newPreemptionTestApp(t, cluster.New(fake.NewSimpleClientset(preemptionPod("proj-p1", "victim-pod", "victim")), "proj"))
+	seedPreemptionQueue(t, app, "q-low", "batch-low", true, 1000)
+	seedPreemptionJob(t, app, map[string]any{
+		"id": "requester", "job_id": "requester", "status": "submitted", "namespace": "proj-p1",
+		"queue_name": "interactive", "priority_value": 10000, "required_gpu": 1.0, "required_cpu": 1.0,
+	})
+	seedPreemptionJob(t, app, map[string]any{
+		"id": "victim", "job_id": "victim", "status": "running", "namespace": "proj-p1",
+		"queue_name": "batch-low", "priority_value": 1000, "preemptible": true, "required_gpu": 1.0,
+	})
+	key := "material-check"
+
+	rec := postPreemption(t, app, key, `{"requester_job_id":"requester"}`, http.StatusOK)
+	data := preemptionResponseData(t, rec)
+	privateRecordID := preemptionRecordID(key)
+	stored, keyHash, fingerprintHash := storedPreemptionRecordHashes(t, app, privateRecordID)
+	publicID := assertPublicPreemptionID(t, data, privateRecordID)
+	assertStoredPreemptionRecordPrivateMaterial(t, stored)
+	assertNoPreemptionIdempotencyMaterial(t, data, key, privateRecordID, keyHash, fingerprintHash)
+
+	events := preemptionEventsByName(app, "JobPreempted")
+	if len(events) != 1 {
+		t.Fatalf("JobPreempted events = %d, want 1", len(events))
+	}
+	if events[0].Data["preemption_id"] != publicID {
+		t.Fatalf("JobPreempted event public preemption id mismatch")
+	}
+	if events[0].IdempotencyKey != "" {
+		t.Fatalf("JobPreempted event exposed preemption idempotency key")
+	}
+	assertNoPreemptionIdempotencyMaterial(t, events[0].Data, key, privateRecordID, keyHash, fingerprintHash)
+
+	victim, _ := app.Store.Get(ctx, workloadJobsResource, "victim")
+	if victim.Data["preemption_record_id"] != publicID {
+		t.Fatalf("victim preemption_record_id did not use public preemption id")
 	}
 }
 
@@ -478,4 +565,80 @@ func countEvents(app *platform.App, name string) int {
 		}
 	}
 	return count
+}
+
+func preemptionEventsByName(app *platform.App, name string) []contracts.Event {
+	events := []contracts.Event{}
+	for _, event := range app.Events.Outbox() {
+		if event.Name == name {
+			events = append(events, event)
+		}
+	}
+	return events
+}
+
+func storedPreemptionRecordHashes(t *testing.T, app *platform.App, privateRecordID string) (map[string]any, string, string) {
+	t.Helper()
+	record, found := app.Store.Get(context.Background(), preemptionRecordsResource, privateRecordID)
+	if !found {
+		t.Fatalf("stored preemption record missing")
+	}
+	keyHash, _ := record.Data[internalPreemptionIdempotencyKeyHash].(string)
+	fingerprintHash, _ := record.Data[internalPreemptionFingerprintHash].(string)
+	if keyHash == "" || fingerprintHash == "" {
+		t.Fatalf("stored preemption private hashes missing")
+	}
+	return record.Data, keyHash, fingerprintHash
+}
+
+func assertStoredPreemptionRecordPrivateMaterial(t *testing.T, data map[string]any) {
+	t.Helper()
+	if _, ok := data["idempotency_key"]; ok {
+		t.Fatalf("raw preemption idempotency key stored")
+	}
+	if _, ok := data["fingerprint"]; ok {
+		t.Fatalf("raw preemption fingerprint stored")
+	}
+	if data[internalPreemptionIdempotencyKeyHash] == "" || data[internalPreemptionFingerprintHash] == "" {
+		t.Fatalf("private preemption hashes missing")
+	}
+	if data["preemption_id"] == "" || data["preemption_id"] == data["id"] {
+		t.Fatalf("public preemption id must be generated and distinct from private record id")
+	}
+}
+
+func assertPublicPreemptionID(t *testing.T, data map[string]any, privateRecordID string) string {
+	t.Helper()
+	publicID, _ := data["preemption_id"].(string)
+	if publicID == "" {
+		t.Fatalf("public preemption_id missing")
+	}
+	if publicID == privateRecordID || data["id"] == privateRecordID {
+		t.Fatalf("preemption response exposed private record id")
+	}
+	if data["id"] != publicID {
+		t.Fatalf("preemption response id should match public preemption_id")
+	}
+	return publicID
+}
+
+func assertNoPreemptionIdempotencyMaterial(t *testing.T, value any, forbidden ...string) {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal preemption value for leak check: %v", err)
+	}
+	text := string(raw)
+	for _, token := range append(forbidden,
+		"idempotency_key",
+		"idempotencyKey",
+		"fingerprint",
+		internalPreemptionIdempotencyKeyHash,
+		internalPreemptionFingerprintHash,
+		internalPreemptionRecordID,
+	) {
+		if token != "" && strings.Contains(text, token) {
+			t.Fatalf("preemption idempotency material leaked")
+		}
+	}
 }

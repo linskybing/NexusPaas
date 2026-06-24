@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -177,6 +178,108 @@ func TestOperationalEndpointsExposeOutboxInboxRuntimeEvidence(t *testing.T) {
 	app.ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if got := metricSampleInt(t, second.Body.String(), metricProjectionApplied, `consumer="read-model"`); got != 2 {
 		t.Fatalf("read-model applied metric after second scrape = %d, want unchanged 2", got)
+	}
+}
+
+func TestOperationalEndpointExposesMonitoringAcceptanceMetrics(t *testing.T) {
+	app := NewApp(Config{ServiceName: "all", HTTPAddr: ":0", ExternalURLs: map[string]string{}})
+	ctx := context.Background()
+	records := []struct {
+		resource string
+		data     map[string]any
+	}{
+		{monitoringWorkloadJobsResource, map[string]any{"id": "job-submitted", "status": "submitted", "project_id": "P1", "user_id": "U1"}},
+		{monitoringWorkloadJobsResource, map[string]any{"id": "job-queued-stream", "status": "queued", "streaming_session": true, "stream_max_bitrate_kbps": 8000}},
+		{monitoringWorkloadJobsResource, map[string]any{"id": "job-running-stream", "status": "running", "streaming_session": true, "stream_max_bitrate_kbps": 12000}},
+		{monitoringWorkloadJobsResource, map[string]any{"id": "job-preempted", "status": "preempted"}},
+		{monitoringWorkloadJobsResource, map[string]any{"id": "job-rejected", "status": "rejected"}},
+		{monitoringWorkloadJobsResource, map[string]any{"id": "job-waiting-infra", "status": "waiting_infra", "status_reason": "waiting for workload infrastructure recovery"}},
+		{monitoringWorkloadJobsResource, map[string]any{"id": "job-permanent-apply", "status": "failed", "error_message": "unsupported Kubernetes manifest kind: CronJob"}},
+		{monitoringWorkloadJobsResource, map[string]any{"id": "job-runtime-failed", "status": "failed", "error_message": "runtime limit exceeded"}},
+		{monitoringImageBuildJobsResource, map[string]any{"id": "build-running", "status": "running", "image_reference": "registry.local/team/app:run"}},
+		{monitoringImageBuildJobsResource, map[string]any{"id": "build-building", "status": "building"}},
+		{monitoringImageBuildJobsResource, map[string]any{"id": "build-failed", "status": "failed"}},
+		{monitoringImageBuildJobsResource, map[string]any{"id": "build-succeeded", "status": "succeeded"}},
+		{monitoringImageBuildJobsResource, map[string]any{"id": "build-completed", "status": "completed"}},
+		{monitoringImageBuildJobsResource, map[string]any{"id": "build-timeout", "status": "timeout"}},
+		{monitoringImageBuildJobsResource, map[string]any{"id": "build-timed-out", "status": "timed_out"}},
+		{monitoringImageBuildJobsResource, map[string]any{"id": "build-cancelled", "status": "cancelled"}},
+	}
+	for _, record := range records {
+		if _, err := app.Store.Create(ctx, record.resource, record.data); err != nil {
+			t.Fatalf("seed %s/%s: %v", record.resource, record.data["id"], err)
+		}
+	}
+
+	body := metricsBody(t, app)
+	assertMonitoringMetricSamples(t, body, []monitoringMetricExpectation{
+		{metric: metricWorkloadQueueJobs, labels: `status="pending"`, want: 3},
+		{metric: metricWorkloadQueueJobs, labels: `status="running"`, want: 1},
+		{metric: metricWorkloadQueueJobs, labels: `status="preempted"`, want: 1},
+		{metric: metricWorkloadQueueJobs, labels: `status="rejected"`, want: 1},
+		{metric: metricImageBuildJobs, labels: `status="running"`, want: 2},
+		{metric: metricImageBuildJobs, labels: `status="failed"`, want: 1},
+		{metric: metricImageBuildJobs, labels: `status="succeeded"`, want: 2},
+		{metric: metricImageBuildJobs, labels: `status="timeout"`, want: 2},
+		{metric: metricWebRTCActiveSessions, want: 2},
+		{metric: metricWebRTCEgressBitrateKbps, want: 20000},
+		{metric: metricKubernetesApplyFailures, labels: `reason="infrastructure_recovery"`, want: 1},
+		{metric: metricKubernetesApplyFailures, labels: `reason="permanent_apply_failure"`, want: 1},
+	})
+	assertMonitoringMetricsDoNotContain(t, body, "job-running-stream", "P1", "U1", "registry.local/team/app:run", "CronJob")
+}
+
+func TestMonitoringAcceptanceMetricsStayWithinServiceOwnership(t *testing.T) {
+	app := NewApp(Config{ServiceName: "workload-service", HTTPAddr: ":0", ExternalURLs: map[string]string{}})
+	ctx := context.Background()
+	for _, record := range []struct {
+		resource string
+		data     map[string]any
+	}{
+		{monitoringWorkloadJobsResource, map[string]any{"id": "job-running", "status": "running"}},
+		{monitoringImageBuildJobsResource, map[string]any{"id": "build-running", "status": "running"}},
+	} {
+		if _, err := app.Store.Create(ctx, record.resource, record.data); err != nil {
+			t.Fatalf("seed %s/%s: %v", record.resource, record.data["id"], err)
+		}
+	}
+
+	body := metricsBody(t, app)
+	if got := metricSampleInt(t, body, metricWorkloadQueueJobs, `status="running"`); got != 1 {
+		t.Fatalf("workload running metric = %d, want 1", got)
+	}
+	if strings.Contains(body, metricImageBuildJobs) {
+		t.Fatalf("workload service metrics included image build metric:\n%s", body)
+	}
+}
+
+type monitoringMetricExpectation struct {
+	metric string
+	labels string
+	want   int
+}
+
+func assertMonitoringMetricSamples(t *testing.T, body string, samples []monitoringMetricExpectation) {
+	t.Helper()
+	for _, sample := range samples {
+		var got int
+		if sample.labels != "" {
+			got = metricSampleInt(t, body, sample.metric, sample.labels)
+		} else {
+			got = metricSampleNoLabelsInt(t, body, sample.metric)
+		}
+		if got != sample.want {
+			t.Fatalf("%s{%s} = %d, want %d", sample.metric, sample.labels, got, sample.want)
+		}
+	}
+}
+
+func assertMonitoringMetricsDoNotContain(t *testing.T, body string, values ...string) {
+	t.Helper()
+	for _, value := range values {
+		if strings.Contains(body, value) {
+			t.Fatalf("metrics body leaked high-cardinality value %q:\n%s", value, body)
+		}
 	}
 }
 

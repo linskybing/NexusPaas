@@ -2,6 +2,8 @@ package gpuusage
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,6 +80,49 @@ func TestCollectGPUUsageTelemetryUpdatesExistingSummaryByJobID(t *testing.T) {
 	}
 	if got := app.Store.List(context.Background(), summariesResource); len(got) != 1 || got[0].ID != "legacy-summary" {
 		t.Fatalf("summaries = %#v, want existing legacy record updated in place", got)
+	}
+}
+
+func TestGPUUsageCollectorSanitizesHighCardinalityProcessMetrics(t *testing.T) {
+	app := newGPUCollectorTestApp()
+	now := time.Date(2026, time.April, 5, 12, 0, 0, 0, time.UTC)
+	seedGPUCollectorReadModels(t, app, "succeeded")
+	rawMetrics, deniedValues := seedHighCardinalityGPUReadModel(t, app, now)
+
+	stats := collectGPUUsageTelemetry(context.Background(), app, now)
+	if stats.podRowsScanned != 4 || stats.snapshotsWritten != 4 || stats.snapshotsSkipped != 0 || stats.summariesComputed != 1 {
+		t.Fatalf("collector stats = %#v, want scanned=4 written=4 skipped=0 summaries=1", stats)
+	}
+	for _, metrics := range rawMetrics {
+		if textValue(metrics, "pid") == "" || textValue(metrics, "container_id") == "" {
+			t.Fatalf("incoming metrics mutated by sanitizer: %#v", metrics)
+		}
+	}
+
+	snapshots := app.Store.List(context.Background(), snapshotsResource)
+	if len(snapshots) != 4 {
+		t.Fatalf("snapshots = %#v, want 4 sanitized retained snapshots", snapshots)
+	}
+	for _, snapshot := range snapshots {
+		assertNoHighCardinalityProcessEvidence(t, "snapshot", snapshot.Data, deniedValues)
+		assertSanitizedSnapshotMetrics(t, mapValue(snapshot.Data, "metrics"))
+	}
+
+	summary, ok := summaryRecordForJob(context.Background(), app.Store, "JGPU")
+	if !ok {
+		t.Fatal("missing generated summary for terminal GPU job")
+	}
+	assertNoHighCardinalityProcessEvidence(t, "summary", summary.Data, deniedValues)
+	summaryMetrics := mapValue(summary.Data, "metrics")
+	if intValue(summaryMetrics, "sample_count") != 4 {
+		t.Fatalf("summary metrics = %#v, want sample_count=4", summaryMetrics)
+	}
+	breakdowns := anySlice(summary.Data, "breakdowns")
+	if len(breakdowns) != 1 {
+		t.Fatalf("breakdowns = %#v, want one sanitized GPU breakdown", breakdowns)
+	}
+	for _, breakdown := range breakdowns {
+		assertNoHighCardinalityProcessEvidence(t, "breakdown", breakdown, deniedValues)
 	}
 }
 
@@ -275,6 +320,130 @@ func seedGPUCollectorClusterReadModel(t *testing.T, app *platform.App, first, se
 			},
 		},
 	})
+}
+
+func seedHighCardinalityGPUReadModel(t *testing.T, app *platform.App, first time.Time) ([]map[string]any, []string) {
+	t.Helper()
+	rawMetrics := make([]map[string]any, 0, 4)
+	deniedValues := []string{}
+	rows := make([]any, 0, 4)
+	for sample := range 4 {
+		metrics := highCardinalityProcessMetrics(sample)
+		row := map[string]any{
+			"job_id":                  "JGPU",
+			"podName":                 "pod-cardinality",
+			"namespace":               "project-P1",
+			"node":                    "gpu-node-1",
+			"gpuIndex":                0,
+			"gpuUuid":                 "GPU-cardinality",
+			"mpsVirtualUnits":         100,
+			"timestamp":               first.Add(time.Duration(sample) * time.Minute),
+			"memoryBytes":             int64(8192),
+			"gpuSMUtilization":        50.0 + float64(sample),
+			"gpuMemoryUsedBytes":      int64(4096 + sample),
+			"gpuMemUtilization":       60.0 + float64(sample),
+			"gpuMemoryUsedSource":     "dcgm-rollup",
+			"cpuUsageCores":           1.5,
+			"memoryUsageBytes":        int64(2 * 1024 * 1024 * 1024),
+			"metrics":                 metrics,
+			"process_id":              fmt.Sprintf("top-process-id-%d", sample),
+			"processName":             fmt.Sprintf("top-process-name-%d", sample),
+			"containerID":             fmt.Sprintf("top-container-id-%d", sample),
+			"podUID":                  fmt.Sprintf("top-pod-uid-%d", sample),
+			"process_start_time":      fmt.Sprintf("top-process-start-%d", sample),
+			"process_sample_count":    100 + sample,
+			"orphan_process_count":    sample,
+			"unknown_container_count": sample + 1,
+		}
+		rawMetrics = append(rawMetrics, metrics)
+		deniedValues = append(deniedValues, deniedProcessMetricValues(metrics)...)
+		deniedValues = append(deniedValues, deniedProcessMetricValues(row)...)
+		rows = append(rows, row)
+	}
+	createGPUCollectorRecord(t, app, clusterReadModelsResource, map[string]any{
+		"id": "process-cardinality",
+		"summary": map[string]any{
+			"podGpuUsages": rows,
+		},
+	})
+	return rawMetrics, deniedValues
+}
+
+func highCardinalityProcessMetrics(sample int) map[string]any {
+	return map[string]any{
+		"pid":                     fmt.Sprintf("pid-%d", sample),
+		"process_id":              fmt.Sprintf("process-id-%d", sample),
+		"processId":               fmt.Sprintf("processId-%d", sample),
+		"processID":               fmt.Sprintf("processID-%d", sample),
+		"process_name":            fmt.Sprintf("process-name-%d", sample),
+		"processName":             fmt.Sprintf("processName-%d", sample),
+		"command":                 fmt.Sprintf("command-%d", sample),
+		"cmd":                     fmt.Sprintf("cmd-%d", sample),
+		"cmdline":                 fmt.Sprintf("cmdline-%d", sample),
+		"args":                    fmt.Sprintf("args-%d", sample),
+		"argv":                    fmt.Sprintf("argv-%d", sample),
+		"container_id":            fmt.Sprintf("container-id-%d", sample),
+		"containerId":             fmt.Sprintf("containerId-%d", sample),
+		"containerID":             fmt.Sprintf("containerID-%d", sample),
+		"pod_uid":                 fmt.Sprintf("pod-uid-%d", sample),
+		"podUID":                  fmt.Sprintf("podUID-%d", sample),
+		"podUid":                  fmt.Sprintf("podUid-%d", sample),
+		"cgroup":                  fmt.Sprintf("cgroup-%d", sample),
+		"cgroup_path":             fmt.Sprintf("cgroup-path-%d", sample),
+		"process_start_time":      fmt.Sprintf("process-start-time-%d", sample),
+		"processStartTime":        fmt.Sprintf("processStartTime-%d", sample),
+		"process_sample_count":    12 + sample,
+		"orphan_process_count":    2 + sample,
+		"unknown_container_count": 3 + sample,
+		"gpu_utilization":         0.75,
+		"gpu_sm_util_source":      "dcgm-rollup",
+	}
+}
+
+func deniedProcessMetricValues(metrics map[string]any) []string {
+	values := []string{}
+	for key, value := range metrics {
+		if highCardinalityProcessMetricKey(key) {
+			values = append(values, fmt.Sprint(value))
+		}
+	}
+	return values
+}
+
+func assertSanitizedSnapshotMetrics(t *testing.T, metrics map[string]any) {
+	t.Helper()
+	if metrics["gpu_uuid"] != "GPU-cardinality" || int64Value(metrics, "gpu_memory_bytes") != 8192 {
+		t.Fatalf("snapshot metrics = %#v, want retained normalized GPU identity and memory", metrics)
+	}
+	if floatValue(metrics, "gpu_sm_utilization") == 0 || textValue(metrics, "gpu_memory_used_source") != "dcgm-rollup" {
+		t.Fatalf("snapshot metrics = %#v, want retained GPU utilization/source metrics", metrics)
+	}
+	if intValue(metrics, "process_sample_count") == 0 || intValue(metrics, "orphan_process_count") == 0 || intValue(metrics, "unknown_container_count") == 0 {
+		t.Fatalf("snapshot metrics = %#v, want retained bounded aggregate process counts", metrics)
+	}
+}
+
+func assertNoHighCardinalityProcessEvidence(t *testing.T, scope string, value any, deniedValues []string) {
+	t.Helper()
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, item := range typed {
+			if highCardinalityProcessMetricKey(key) {
+				t.Fatalf("%s retained denied key %q in %#v", scope, key, typed)
+			}
+			assertNoHighCardinalityProcessEvidence(t, scope+"."+key, item, deniedValues)
+		}
+	case []any:
+		for index, item := range typed {
+			assertNoHighCardinalityProcessEvidence(t, fmt.Sprintf("%s[%d]", scope, index), item, deniedValues)
+		}
+	case string:
+		for _, denied := range deniedValues {
+			if strings.Contains(typed, denied) {
+				t.Fatalf("%s retained denied value %q in %q", scope, denied, typed)
+			}
+		}
+	}
 }
 
 func createGPUCollectorRecord(t *testing.T, app *platform.App, resource string, data map[string]any) {

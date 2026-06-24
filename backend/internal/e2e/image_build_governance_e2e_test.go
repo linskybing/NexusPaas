@@ -157,8 +157,13 @@ func (h *e2eHarness) requireImageGovernanceEvents(requestID, rejectID, catalogID
 func (h *e2eHarness) seedImageRegistryProjectAccess(userID, role string) {
 	h.t.Helper()
 	h.createRecord(imageProjectsResource, h.projectID(), map[string]any{
-		"p_id":         h.projectID(),
-		"project_name": "image-project-" + h.runID,
+		"p_id":                     h.projectID(),
+		"project_name":             "image-project-" + h.runID,
+		"allow_image_build":        true,
+		"build_cpu_limit":          8,
+		"build_memory_gib_limit":   16,
+		"build_time_limit_seconds": 3600,
+		"max_running_builds":       10,
 	})
 	h.createRecord(imageProjectMembersResource, h.projectID()+":"+userID, map[string]any{
 		"project_id": h.projectID(),
@@ -206,6 +211,9 @@ func (h *e2eHarness) createImageBuilds(token, suffix string) []string {
 	for _, build := range builds {
 		build.payload["id"] = build.id
 		build.payload["e2e_run_id"] = h.runID
+		build.payload["cpu_cores"] = 1
+		build.payload["memory_gib"] = 2
+		build.payload["max_build_time_seconds"] = 300
 		response := h.doJSONWithBearer(imageRegistryService, http.MethodPost, build.path, build.payload, token, http.StatusAccepted)
 		data := response.dataMap(h.t)
 		if data["id"] != build.id || data["status"] != "queued" || data["project_id"] != h.projectID() {

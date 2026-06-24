@@ -439,6 +439,35 @@ func TestSubmitAdmissionStreamingGuardrails(t *testing.T) {
 			},
 			want: "stream egress budget exceeded",
 		},
+		{
+			name: "active non-streaming jobs excluded from stream budgets",
+			jobs: []map[string]any{
+				{"id": "non-stream-1", "status": "running", "streaming_session": false, "stream_max_bitrate_kbps": 40000},
+				{"id": "non-stream-2", "status": "queued", "streaming_session": false, "stream_max_bitrate_kbps": 40000},
+				{"id": "non-stream-3", "status": "waiting_infra", "streaming_session": false, "stream_max_bitrate_kbps": 40000},
+			},
+			req: submitAdmissionRequest{
+				ProjectID: "P1", UserID: "U1", QueueName: "default-batch", RequiredCPU: 1, RequiredMemory: 1024,
+				StreamingSession: true, StreamMaxBitrateKbps: 12000, StreamBitrateCapKbps: 12000, StreamSessionCap: 1, StreamEgressBudgetKbps: 12000,
+			},
+			allowed: true,
+		},
+		{
+			name: "terminal streaming jobs excluded from stream budgets",
+			jobs: []map[string]any{
+				{"id": "stream-succeeded", "status": "succeeded", "streaming_session": true, "stream_max_bitrate_kbps": 40000},
+				{"id": "stream-failed", "status": "failed", "streaming_session": true, "stream_max_bitrate_kbps": 40000},
+				{"id": "stream-cancelled", "status": "cancelled", "streaming_session": true, "stream_max_bitrate_kbps": 40000},
+				{"id": "stream-canceled", "status": "canceled", "streaming_session": true, "stream_max_bitrate_kbps": 40000},
+				{"id": "stream-completed", "status": "completed", "streaming_session": true, "stream_max_bitrate_kbps": 40000},
+				{"id": "stream-timed-out", "status": "timed_out", "streaming_session": true, "stream_max_bitrate_kbps": 40000},
+			},
+			req: submitAdmissionRequest{
+				ProjectID: "P1", UserID: "U1", QueueName: "default-batch", RequiredCPU: 1, RequiredMemory: 1024,
+				StreamingSession: true, StreamMaxBitrateKbps: 12000, StreamBitrateCapKbps: 12000, StreamSessionCap: 1, StreamEgressBudgetKbps: 12000,
+			},
+			allowed: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -480,6 +509,10 @@ func requireStreamingAdmissionRejected(t *testing.T, err error, want string) {
 	t.Helper()
 	if err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("stream admission err = %v, want %q", err, want)
+	}
+	denial, ok := err.(admissionDeny)
+	if !ok || denial.status != http.StatusConflict {
+		t.Fatalf("stream admission err = %T(%v), want admissionDeny status 409", err, err)
 	}
 }
 
