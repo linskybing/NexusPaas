@@ -76,6 +76,11 @@ func validateAdmissionResourceAccounting(req submitAdmissionRequest) error {
 	if req.SMPercentage != nil && (*req.SMPercentage < 1 || *req.SMPercentage > 100) {
 		return fmt.Errorf("DRA SM percentage must be between 1 and 100")
 	}
+	if req.PinnedMemoryLimit != nil {
+		if _, err := resource.ParseQuantity(*req.PinnedMemoryLimit); err != nil {
+			return fmt.Errorf("invalid DRA pinned memory limit %q: %w", *req.PinnedMemoryLimit, err)
+		}
+	}
 	return nil
 }
 

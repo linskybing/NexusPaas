@@ -14,6 +14,7 @@ import (
 func TestEventEnvelopeFixturesAreValidV1(t *testing.T) {
 	fixtures := eventFixtureFiles(t)
 	want := []string{
+		"accelerator-profile-changed.json",
 		"audit-event.json",
 		"cache-binding-changed.json",
 		"data-plane-plan-built.json",
@@ -56,6 +57,7 @@ func TestEventEnvelopeFixturesAreValidV1(t *testing.T) {
 	}
 
 	wantTypes := map[string]string{
+		"AcceleratorProfileChanged": "scheduler-quota-service",
 		"AuditEvent":               "scheduler-quota-service",
 		"CacheBindingChanged":      "storage-service",
 		"DataPlanePlanBuilt":       "storage-service",

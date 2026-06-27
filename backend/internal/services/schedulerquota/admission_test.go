@@ -203,6 +203,111 @@ func TestSubmitAdmissionRejectsMissingOrDisabledPlacementProfile(t *testing.T) {
 	}
 }
 
+func TestSubmitAdmissionResolvesAcceleratorProfileMetadata(t *testing.T) {
+	app := newSchedulerQuotaTestApp()
+	seedAdmissionProject(t, app, admissionFixture{})
+
+	code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+		"project_id":          "P1",
+		"user_id":             "U1",
+		"queue_name":          "default-batch",
+		"required_cpu":        1,
+		"required_memory":     1024,
+		"accelerator_profile": "nvidia-gpu-default",
+	})), platform.RouteSpec{})
+
+	assertSchedulerStatus(t, code, data, http.StatusOK)
+	review := data.(map[string]any)
+	if review["accelerator_profile"] != "nvidia-gpu-default" {
+		t.Fatalf("accelerator review = %#v, want nvidia-gpu-default", review)
+	}
+	selector := review["accelerator_node_selector"].(map[string]any)
+	if selector["nexuspaas.io/gpu"] != "true" {
+		t.Fatalf("accelerator selector = %#v, want gpu selector", selector)
+	}
+	labels := review["accelerator_labels"].(map[string]any)
+	if labels["nexuspaas.io/accelerator-profile"] != "nvidia-gpu-default" {
+		t.Fatalf("accelerator labels = %#v, want profile label", labels)
+	}
+}
+
+func TestSubmitAdmissionAppliesAcceleratorMPSDefaults(t *testing.T) {
+	app := newSchedulerQuotaTestApp()
+	seedAdmissionProject(t, app, admissionFixture{})
+	createSchedulerRecord(t, app, acceleratorProfilesResource, map[string]any{
+		"id":                          "shared-mps",
+		"name":                        "Shared MPS",
+		"enabled":                     true,
+		"allowed_device_class_name":   defaultDeviceClassName,
+		"default_mps_sm_percentage":   50,
+		"default_pinned_memory_limit": "8Gi",
+		"node_selector":               map[string]any{},
+		"labels":                      map[string]any{},
+	})
+
+	code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+		"project_id":          "P1",
+		"user_id":             "U1",
+		"queue_name":          "default-batch",
+		"required_gpu":        0.5,
+		"required_cpu":        1,
+		"required_memory":     1024,
+		"gpu_count":           1,
+		"accelerator_profile": "shared-mps",
+	})), platform.RouteSpec{})
+
+	assertSchedulerStatus(t, code, data, http.StatusOK)
+	review := data.(map[string]any)
+	if review["sm_percentage"] != 50 || review["pinned_memory_limit"] != "8Gi" {
+		t.Fatalf("accelerator MPS review = %#v, want sm/pinned defaults", review)
+	}
+	usage := review["usage"].(map[string]any)
+	if usage["resource_floor_gpu"] != 0.5 {
+		t.Fatalf("resource floor = %#v, want 0.5", usage["resource_floor_gpu"])
+	}
+}
+
+func TestSubmitAdmissionRejectsMissingOrDisabledAcceleratorProfile(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile string
+		seed    map[string]any
+		want    string
+	}{
+		{name: "missing", profile: "missing-accelerator", want: "accelerator profile not found"},
+		{name: "disabled", profile: "disabled-accelerator", seed: map[string]any{
+			"id":       "disabled-accelerator",
+			"name":     "Disabled accelerator",
+			"enabled":  false,
+			"labels":   map[string]any{},
+			"selector": map[string]any{},
+		}, want: "accelerator profile is disabled"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := newSchedulerQuotaTestApp()
+			seedAdmissionProject(t, app, admissionFixture{})
+			if tt.seed != nil {
+				createSchedulerRecord(t, app, acceleratorProfilesResource, tt.seed)
+			}
+
+			code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+				"project_id":          "P1",
+				"user_id":             "U1",
+				"queue_name":          "default-batch",
+				"required_cpu":        1,
+				"required_memory":     1024,
+				"accelerator_profile": tt.profile,
+			})), platform.RouteSpec{})
+
+			assertSchedulerStatus(t, code, data, http.StatusUnprocessableEntity)
+			if !strings.Contains(data.(map[string]any)["reason"].(string), tt.want) {
+				t.Fatalf("accelerator denial = %#v, want %q", data, tt.want)
+			}
+		})
+	}
+}
+
 func TestSubmitAdmissionRejectsQueueOutsideProjectPlan(t *testing.T) {
 	app := newSchedulerQuotaTestApp()
 	seedAdmissionProject(t, app, admissionFixture{})
@@ -796,6 +901,7 @@ func TestAdmissionWindowAndListHelpers(t *testing.T) {
 }
 
 func TestAdmissionAccountingValidationAndRawResources(t *testing.T) {
+	badPinned := "not-a-quantity"
 	tests := []struct {
 		name string
 		req  submitAdmissionRequest
@@ -805,6 +911,7 @@ func TestAdmissionAccountingValidationAndRawResources(t *testing.T) {
 		{name: "negative memory", req: submitAdmissionRequest{RequiredMemory: -1}},
 		{name: "negative dra", req: submitAdmissionRequest{GPUCount: -1}},
 		{name: "bad sm", req: submitAdmissionRequest{SMPercentage: intPtr(0)}},
+		{name: "bad pinned", req: submitAdmissionRequest{PinnedMemoryLimit: &badPinned}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

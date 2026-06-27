@@ -52,6 +52,8 @@ type submitAdmissionRequest struct {
 	NICClass               string
 	TopologyRequirement    string
 	PlacementProfile       string
+	AcceleratorProfile     string
+	PinnedMemoryLimit      *string
 	Resources              []admissionResourcePayload
 }
 
@@ -89,6 +91,11 @@ type admissionReview struct {
 	GangMinAvailable     int
 	PlacementLabels      map[string]any
 	PlacementAnnotations map[string]any
+	AcceleratorProfile   string
+	AcceleratorSelector  map[string]any
+	AcceleratorLabels    map[string]any
+	SMPercentage         *int
+	PinnedMemoryLimit    string
 	Usage                admissionUsage
 }
 
@@ -205,11 +212,18 @@ func evaluateSubmitAdmission(ctx context.Context, reader admissionReader, req su
 	if err := resolveAdmissionPlacementProfile(ctx, reader, req, queueName, &review); err != nil {
 		return review, err
 	}
+	if err := resolveAdmissionAcceleratorProfile(ctx, reader, &req, &review); err != nil {
+		return review, err
+	}
 
 	if err := enforceAdmissionDeviceClass(plan, &req); err != nil {
 		return review, err
 	}
 	review.DeviceClassName = req.DeviceClassName
+	review.SMPercentage = req.SMPercentage
+	if req.PinnedMemoryLimit != nil {
+		review.PinnedMemoryLimit = strings.TrimSpace(*req.PinnedMemoryLimit)
+	}
 	if err := resolveAdmissionNetworkProfile(ctx, reader, req, &review); err != nil {
 		return review, err
 	}

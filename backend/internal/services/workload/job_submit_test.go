@@ -77,6 +77,41 @@ func TestSubmitJobPersistsAdmittedStreamingFields(t *testing.T) {
 	}
 }
 
+func TestJobAdmissionPayloadIncludesAcceleratorFields(t *testing.T) {
+	job := map[string]any{"job_id": "J1", "project_id": "P1", "user_id": "U1"}
+	payload := map[string]any{
+		"accelerator_profile": "nvidia-gpu-default",
+		"sm_percentage":       50,
+		"pinned_memory_limit": "8Gi",
+	}
+
+	admission := jobAdmissionPayload(job, payload)
+
+	if admission["accelerator_profile"] != "nvidia-gpu-default" || admission["sm_percentage"] != 50 || admission["pinned_memory_limit"] != "8Gi" {
+		t.Fatalf("admission payload = %#v, want accelerator fields", admission)
+	}
+}
+
+func TestApplyAdmissionReviewPersistsAcceleratorFields(t *testing.T) {
+	job := map[string]any{"job_id": "J1"}
+	review := map[string]any{
+		"accelerator_profile":       "nvidia-gpu-default",
+		"accelerator_node_selector": map[string]any{"nexuspaas.io/gpu": "true"},
+		"accelerator_labels":        map[string]any{"nexuspaas.io/accelerator-profile": "nvidia-gpu-default"},
+		"sm_percentage":             50,
+		"pinned_memory_limit":       "8Gi",
+	}
+
+	applyAdmissionReview(job, review)
+
+	if job["accelerator_profile"] != "nvidia-gpu-default" || job["sm_percentage"] != 50 || job["pinned_memory_limit"] != "8Gi" {
+		t.Fatalf("job = %#v, want accelerator fields", job)
+	}
+	if job["accelerator_node_selector"].(map[string]any)["nexuspaas.io/gpu"] != "true" {
+		t.Fatalf("job selector = %#v, want copied selector", job["accelerator_node_selector"])
+	}
+}
+
 func TestSubmitStreamingJobRejectedWithoutSidecarImage(t *testing.T) {
 	app := newJobSubmitTestApp()
 	app.Config.StreamSidecarImage = ""

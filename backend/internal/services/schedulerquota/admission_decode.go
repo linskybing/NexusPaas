@@ -26,11 +26,15 @@ func decodeSubmitAdmissionRequest(payload map[string]any) (submitAdmissionReques
 		NICClass:             shared.TextValue(payload, "nic_class", "nicClass", "NICClass"),
 		TopologyRequirement:  shared.TextValue(payload, "topology_requirement", "topologyRequirement", "TopologyRequirement"),
 		PlacementProfile:     shared.TextValue(payload, "placement_profile", "placementProfile", "PlacementProfile"),
+		AcceleratorProfile:   shared.TextValue(payload, "accelerator_profile", "acceleratorProfile", "AcceleratorProfile"),
 		Resources:            decodeAdmissionResources(payload["resources"]),
 	}
 	if rawSM, ok := firstPresent(payload, "sm_percentage", "smPercentage", "SMPercentage"); ok {
 		sm := int(getInt64(rawSM, 0))
 		req.SMPercentage = &sm
+	}
+	if pinned := shared.TextValue(payload, "pinned_memory_limit", "pinnedMemoryLimit", "pinned_memory", "pinnedMemory"); pinned != "" {
+		req.PinnedMemoryLimit = &pinned
 	}
 	return req, nil
 }
@@ -193,6 +197,21 @@ func admissionReviewData(review admissionReview) map[string]any {
 	}
 	if len(review.PlacementAnnotations) > 0 {
 		data["placement_annotations"] = shared.CloneMap(review.PlacementAnnotations)
+	}
+	if review.AcceleratorProfile != "" {
+		data["accelerator_profile"] = review.AcceleratorProfile
+	}
+	if len(review.AcceleratorSelector) > 0 {
+		data["accelerator_node_selector"] = shared.CloneMap(review.AcceleratorSelector)
+	}
+	if len(review.AcceleratorLabels) > 0 {
+		data["accelerator_labels"] = shared.CloneMap(review.AcceleratorLabels)
+	}
+	if review.SMPercentage != nil {
+		data["sm_percentage"] = *review.SMPercentage
+	}
+	if review.PinnedMemoryLimit != "" {
+		data["pinned_memory_limit"] = review.PinnedMemoryLimit
 	}
 	return data
 }

@@ -1,0 +1,26 @@
+{
+  "event_id": "77777777-7777-4777-8777-777777777777",
+  "schema_version": 1,
+  "event_type": "AcceleratorProfileChanged",
+  "producer": "scheduler-quota-service",
+  "occurred_at": "2026-06-27T00:00:00Z",
+  "trace_id": "trace-accelerator-profile-changed-v1",
+  "request_id": "req-accelerator-profile-changed-v1",
+  "aggregate_id": "nvidia-gpu-default",
+  "payload": {
+    "accelerator_profile_id": "nvidia-gpu-default",
+    "profile_id": "nvidia-gpu-default",
+    "name": "NVIDIA GPU default",
+    "enabled": true,
+    "accelerator_node_selector": {
+      "nexuspaas.io/gpu": "true"
+    },
+    "accelerator_labels": {
+      "nexuspaas.io/accelerator-profile": "nvidia-gpu-default"
+    },
+    "allowed_device_class_name": "gpu.nvidia.com",
+    "default_mps_sm_percentage": 0,
+    "default_pinned_memory_limit": "",
+    "action": "created"
+  }
+}

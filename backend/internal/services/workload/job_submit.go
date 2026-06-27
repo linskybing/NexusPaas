@@ -264,10 +264,14 @@ func jobAdmissionPayload(job, payload map[string]any) map[string]any {
 		"nic_class":               firstPayloadValue(payload, "nic_class", "nicClass", "NICClass"),
 		"topology_requirement":    firstPayloadValue(payload, "topology_requirement", "topologyRequirement", "TopologyRequirement"),
 		"placement_profile":       firstPayloadValue(payload, "placement_profile", "placementProfile", "PlacementProfile"),
+		"accelerator_profile":     firstPayloadValue(payload, "accelerator_profile", "acceleratorProfile", "AcceleratorProfile"),
 		"resources":               payload["resources"],
 	}
 	if value, ok := firstPresent(payload, "sm_percentage", "smPercentage", "SMPercentage"); ok {
 		admission["sm_percentage"] = value
+	}
+	if value, ok := firstPresent(payload, "pinned_memory_limit", "pinnedMemoryLimit", "pinned_memory", "pinnedMemory"); ok {
+		admission["pinned_memory_limit"] = value
 	}
 	return admission
 }
@@ -299,6 +303,11 @@ func applyAdmissionReview(job, review map[string]any) {
 		"gang_min_available",
 		"placement_labels",
 		"placement_annotations",
+		"accelerator_profile",
+		"accelerator_node_selector",
+		"accelerator_labels",
+		"sm_percentage",
+		"pinned_memory_limit",
 	} {
 		if value, ok := review[key]; ok {
 			job[key] = value
