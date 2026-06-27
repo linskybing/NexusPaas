@@ -116,6 +116,93 @@ func TestSubmitAdmissionRejectsMissingOrDisabledNetworkProfile(t *testing.T) {
 	}
 }
 
+func TestSubmitAdmissionResolvesPlacementProfileMetadata(t *testing.T) {
+	app := newSchedulerQuotaTestApp()
+	seedAdmissionProject(t, app, admissionFixture{})
+
+	code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+		"project_id":        "P1",
+		"user_id":           "U1",
+		"queue_name":        "default-batch",
+		"required_cpu":      1,
+		"required_memory":   1024,
+		"placement_profile": "kueue-batch",
+	})), platform.RouteSpec{})
+
+	assertSchedulerStatus(t, code, data, http.StatusOK)
+	review := data.(map[string]any)
+	if review["placement_profile"] != "kueue-batch" || review["scheduler_backend"] != "kueue" || review["scheduler_name"] != placementDefaultSchedulerName {
+		t.Fatalf("placement review = %#v, want kueue placement metadata", review)
+	}
+	labels := review["placement_labels"].(map[string]any)
+	if labels[kueueQueueNameLabel] != "default-batch" {
+		t.Fatalf("placement labels = %#v, want Kueue queue label", labels)
+	}
+}
+
+func TestSubmitAdmissionResolvesVolcanoPlacementProfile(t *testing.T) {
+	app := newSchedulerQuotaTestApp()
+	seedAdmissionProject(t, app, admissionFixture{})
+
+	code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+		"project_id":        "P1",
+		"user_id":           "U1",
+		"queue_name":        "default-batch",
+		"required_cpu":      1,
+		"required_memory":   1024,
+		"placement_profile": "volcano-gang",
+	})), platform.RouteSpec{})
+
+	assertSchedulerStatus(t, code, data, http.StatusOK)
+	review := data.(map[string]any)
+	if review["scheduler_backend"] != "volcano" || review["scheduler_name"] != placementVolcanoSchedulerName || review["gang_enabled"] != true {
+		t.Fatalf("volcano placement review = %#v, want volcano gang metadata", review)
+	}
+	if review["gang_min_available"] != 1 {
+		t.Fatalf("volcano gang_min_available = %#v, want 1", review["gang_min_available"])
+	}
+}
+
+func TestSubmitAdmissionRejectsMissingOrDisabledPlacementProfile(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile string
+		seed    map[string]any
+		want    string
+	}{
+		{name: "missing", profile: "missing-placement", want: "placement profile not found"},
+		{name: "disabled", profile: "disabled-placement", seed: map[string]any{
+			"id":                "disabled-placement",
+			"name":              "Disabled placement",
+			"scheduler_backend": "kueue",
+			"enabled":           false,
+		}, want: "placement profile is disabled"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := newSchedulerQuotaTestApp()
+			seedAdmissionProject(t, app, admissionFixture{})
+			if tt.seed != nil {
+				createSchedulerRecord(t, app, placementProfilesResource, tt.seed)
+			}
+
+			code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+				"project_id":        "P1",
+				"user_id":           "U1",
+				"queue_name":        "default-batch",
+				"required_cpu":      1,
+				"required_memory":   1024,
+				"placement_profile": tt.profile,
+			})), platform.RouteSpec{})
+
+			assertSchedulerStatus(t, code, data, http.StatusUnprocessableEntity)
+			if !strings.Contains(data.(map[string]any)["reason"].(string), tt.want) {
+				t.Fatalf("placement denial = %#v, want %q", data, tt.want)
+			}
+		})
+	}
+}
+
 func TestSubmitAdmissionRejectsQueueOutsideProjectPlan(t *testing.T) {
 	app := newSchedulerQuotaTestApp()
 	seedAdmissionProject(t, app, admissionFixture{})

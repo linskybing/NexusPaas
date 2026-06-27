@@ -263,6 +263,7 @@ func jobAdmissionPayload(job, payload map[string]any) map[string]any {
 		"rdma_required":           firstPayloadValue(payload, "rdma_required", "rdmaRequired", "RDMARequired"),
 		"nic_class":               firstPayloadValue(payload, "nic_class", "nicClass", "NICClass"),
 		"topology_requirement":    firstPayloadValue(payload, "topology_requirement", "topologyRequirement", "TopologyRequirement"),
+		"placement_profile":       firstPayloadValue(payload, "placement_profile", "placementProfile", "PlacementProfile"),
 		"resources":               payload["resources"],
 	}
 	if value, ok := firstPresent(payload, "sm_percentage", "smPercentage", "SMPercentage"); ok {
@@ -291,6 +292,13 @@ func applyAdmissionReview(job, review map[string]any) {
 		"topology_requirement",
 		"network_annotations",
 		"network_env",
+		"placement_profile",
+		"scheduler_backend",
+		"scheduler_name",
+		"gang_enabled",
+		"gang_min_available",
+		"placement_labels",
+		"placement_annotations",
 	} {
 		if value, ok := review[key]; ok {
 			job[key] = value

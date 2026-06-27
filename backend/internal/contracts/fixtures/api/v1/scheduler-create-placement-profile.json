@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "contract_name": "scheduler.create_placement_profile",
+  "owner_service": "scheduler-quota-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "scheduler-quota-service:placement_profiles",
+  "action": "create",
+  "method": "POST",
+  "path": "/api/v1/placement-profiles",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [],
+  "required_request_fields": [
+    "name",
+    "scheduler_backend"
+  ],
+  "optional_request_fields": [
+    "id",
+    "scheduler_name",
+    "gang_enabled",
+    "gang_min_available",
+    "queue_label_key",
+    "labels",
+    "annotations",
+    "enabled"
+  ],
+  "request_example": {
+    "id": "kueue-batch",
+    "name": "Kueue batch",
+    "scheduler_backend": "kueue",
+    "scheduler_name": "default-scheduler",
+    "queue_label_key": "kueue.x-k8s.io/queue-name",
+    "enabled": true
+  },
+  "success_statuses": [
+    201
+  ],
+  "error_statuses": [
+    400,
+    401,
+    403,
+    409,
+    500
+  ],
+  "emits_events": [
+    "PlacementProfileChanged"
+  ],
+  "response_example": {
+    "id": "kueue-batch",
+    "data": {
+      "id": "kueue-batch",
+      "name": "Kueue batch",
+      "scheduler_backend": "kueue",
+      "scheduler_name": "default-scheduler",
+      "queue_label_key": "kueue.x-k8s.io/queue-name"
+    },
+    "version": 1,
+    "created_at": "2026-06-27T00:00:00Z",
+    "updated_at": "2026-06-27T00:00:00Z"
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

@@ -37,6 +37,7 @@ type admissionReader interface {
 	Queue(ctx context.Context, queueID string) (admissionRecord, bool)
 	ListQueues(ctx context.Context) []admissionRecord
 	ListNetworkProfiles(ctx context.Context) []admissionRecord
+	ListPlacementProfiles(ctx context.Context) []admissionRecord
 	ProjectMember(ctx context.Context, key string) (admissionRecord, bool)
 	ListProjectMembers(ctx context.Context) []admissionRecord
 	ListUserGroups(ctx context.Context) []admissionRecord
@@ -122,6 +123,10 @@ func (rdr storeAdmissionReader) ListNetworkProfiles(ctx context.Context) []admis
 	return rdr.list(ctx, networkProfilesResource)
 }
 
+func (rdr storeAdmissionReader) ListPlacementProfiles(ctx context.Context) []admissionRecord {
+	return rdr.list(ctx, placementProfilesResource)
+}
+
 func (rdr storeAdmissionReader) ProjectMember(ctx context.Context, key string) (admissionRecord, bool) {
 	return rdr.get(ctx, projectMembersResource, key)
 }
@@ -174,6 +179,10 @@ func (rdr ownerReadAdmissionReader) ListQueues(ctx context.Context) []admissionR
 
 func (rdr ownerReadAdmissionReader) ListNetworkProfiles(ctx context.Context) []admissionRecord {
 	return rdr.local.ListNetworkProfiles(ctx)
+}
+
+func (rdr ownerReadAdmissionReader) ListPlacementProfiles(ctx context.Context) []admissionRecord {
+	return rdr.local.ListPlacementProfiles(ctx)
 }
 
 func (rdr ownerReadAdmissionReader) ProjectMember(ctx context.Context, key string) (admissionRecord, bool) {

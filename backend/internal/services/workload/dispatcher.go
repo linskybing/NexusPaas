@@ -186,6 +186,10 @@ func prepareDispatchManifests(job map[string]any, resources []dispatchResource, 
 	if err != nil {
 		return nil, err
 	}
+	resources, err = preparePlacementDispatchResources(job, resources)
+	if err != nil {
+		return nil, err
+	}
 	resources, err = prepareNetworkDispatchResources(job, resources)
 	if err != nil {
 		return nil, err

@@ -25,6 +25,7 @@ func decodeSubmitAdmissionRequest(payload map[string]any) (submitAdmissionReques
 		RDMARequired:         shared.BoolValue(payload, "rdma_required", "rdmaRequired", "RDMARequired"),
 		NICClass:             shared.TextValue(payload, "nic_class", "nicClass", "NICClass"),
 		TopologyRequirement:  shared.TextValue(payload, "topology_requirement", "topologyRequirement", "TopologyRequirement"),
+		PlacementProfile:     shared.TextValue(payload, "placement_profile", "placementProfile", "PlacementProfile"),
 		Resources:            decodeAdmissionResources(payload["resources"]),
 	}
 	if rawSM, ok := firstPresent(payload, "sm_percentage", "smPercentage", "SMPercentage"); ok {
@@ -171,6 +172,27 @@ func admissionReviewData(review admissionReview) map[string]any {
 	}
 	if len(review.NetworkEnv) > 0 {
 		data["network_env"] = shared.CloneMap(review.NetworkEnv)
+	}
+	if review.PlacementProfile != "" {
+		data["placement_profile"] = review.PlacementProfile
+	}
+	if review.SchedulerBackend != "" {
+		data["scheduler_backend"] = review.SchedulerBackend
+	}
+	if review.SchedulerName != "" {
+		data["scheduler_name"] = review.SchedulerName
+	}
+	if review.GangEnabled {
+		data["gang_enabled"] = true
+	}
+	if review.GangMinAvailable > 0 {
+		data["gang_min_available"] = review.GangMinAvailable
+	}
+	if len(review.PlacementLabels) > 0 {
+		data["placement_labels"] = shared.CloneMap(review.PlacementLabels)
+	}
+	if len(review.PlacementAnnotations) > 0 {
+		data["placement_annotations"] = shared.CloneMap(review.PlacementAnnotations)
 	}
 	return data
 }

@@ -51,6 +51,7 @@ type submitAdmissionRequest struct {
 	RDMARequired           bool
 	NICClass               string
 	TopologyRequirement    string
+	PlacementProfile       string
 	Resources              []admissionResourcePayload
 }
 
@@ -81,6 +82,13 @@ type admissionReview struct {
 	TopologyRequirement  string
 	NetworkAnnotations   map[string]any
 	NetworkEnv           map[string]any
+	PlacementProfile     string
+	SchedulerBackend     string
+	SchedulerName        string
+	GangEnabled          bool
+	GangMinAvailable     int
+	PlacementLabels      map[string]any
+	PlacementAnnotations map[string]any
 	Usage                admissionUsage
 }
 
@@ -193,6 +201,9 @@ func evaluateSubmitAdmission(ctx context.Context, reader admissionReader, req su
 		review.QueuePriority = shared.IntValue(queue.Data, "priority_value", "priorityValue", "priority")
 		review.QueuePreemptible = shared.BoolValue(queue.Data, "is_preemptible", "isPreemptible", "preemptible")
 		review.RuntimeLimit = shared.IntValue(queue.Data, "max_runtime_seconds", "maxRuntimeSeconds", "runtime_limit_seconds", "runtimeLimitSeconds")
+	}
+	if err := resolveAdmissionPlacementProfile(ctx, reader, req, queueName, &review); err != nil {
+		return review, err
 	}
 
 	if err := enforceAdmissionDeviceClass(plan, &req); err != nil {
