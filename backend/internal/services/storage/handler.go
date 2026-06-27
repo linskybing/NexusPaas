@@ -37,6 +37,7 @@ const (
 
 func Register(app *platform.App) {
 	app.RegisterRequiredFields(storageProfilesResource, "name", "provider", "tier", "access_mode")
+	app.RegisterRequiredFields(cacheBindingsResource, "project_id", "storage_binding_id", "cache_key", "scratch_profile")
 	if err := seedDefaultStorageProfiles(app); err != nil {
 		slog.Error("storage profile seed failed", "error", err)
 	}
@@ -66,6 +67,11 @@ func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/projects/{id}/storage/bindings", listProjectBindings)
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/projects/{id}/storage/bindings", createProjectBinding)
 	app.RegisterCustomHandler(http.MethodDelete, "/api/v1/projects/{id}/storage/bindings/{requestId}", deleteProjectBinding)
+	app.RegisterCustomHandler(http.MethodGet, "/api/v1/projects/{id}/storage/cache-bindings", listCacheBindings)
+	app.RegisterCustomHandler(http.MethodPost, "/api/v1/projects/{id}/storage/cache-bindings", createCacheBinding)
+	app.RegisterCustomHandler(http.MethodGet, "/api/v1/projects/{id}/storage/cache-bindings/{cacheBindingId}", getCacheBinding)
+	app.RegisterCustomHandler(http.MethodPut, "/api/v1/projects/{id}/storage/cache-bindings/{cacheBindingId}", updateCacheBinding)
+	app.RegisterCustomHandler(http.MethodDelete, "/api/v1/projects/{id}/storage/cache-bindings/{cacheBindingId}", deleteCacheBinding)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/projects/{id}/storage/bindings/{pvcId}/permissions", listProjectBindingPermissions)
 	app.RegisterCustomHandler(http.MethodPut, "/api/v1/projects/{id}/storage/bindings/{pvcId}/permissions", setProjectBindingPermission)
 	app.RegisterCustomHandler(http.MethodDelete, "/api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/{userId}", deleteProjectBindingPermission)

@@ -16,6 +16,7 @@ const (
 	storagePoliciesResource    = serviceName + ":storage_access_policies"
 	projectBindingsResource    = serviceName + ":storage_bindings"
 	projectPermissionsResource = serviceName + ":project_storage_permissions"
+	cacheBindingsResource      = serviceName + ":cache_bindings"
 	fastTransfersResource      = serviceName + ":fast_transfers"
 	userStorageResource        = serviceName + ":user_storage"
 )
@@ -224,6 +225,31 @@ func (r recordStoreStorageRepository) ListProjectPermissionsForPVC(ctx context.C
 	return r.listMatching(ctx, projectPermissionsResource, func(row map[string]any) bool {
 		return text(row, "project_id") == projectID && text(row, "pvc_id") == pvcID
 	})
+}
+
+func (r recordStoreStorageRepository) ListCacheBindings(ctx context.Context, projectID string) []map[string]any {
+	return r.listMatching(ctx, cacheBindingsResource, func(row map[string]any) bool {
+		return text(row, "project_id", "projectId") == projectID
+	})
+}
+
+func (r recordStoreStorageRepository) GetCacheBinding(ctx context.Context, projectID, id string) (map[string]any, bool) {
+	row, found := r.get(ctx, cacheBindingsResource, id)
+	if !found || text(row, "project_id", "projectId") != projectID {
+		return nil, false
+	}
+	return row, true
+}
+
+func (r recordStoreStorageRepository) UpsertCacheBindingWithEvent(ctx context.Context, app *platform.App, id string, data map[string]any, build func(map[string]any) contracts.Event) (map[string]any, error) {
+	return r.upsertWithEvent(ctx, app, cacheBindingsResource, id, data, build)
+}
+
+func (r recordStoreStorageRepository) DeleteCacheBindingWithEvent(ctx context.Context, app *platform.App, projectID, id string, build func(bool) contracts.Event) (bool, error) {
+	if row, found := r.GetCacheBinding(ctx, projectID, id); !found || text(row, "id") != id {
+		return false, nil
+	}
+	return r.deleteWithEvent(ctx, app, cacheBindingsResource, id, build)
 }
 
 func (r recordStoreStorageRepository) NextFastTransferName() string {

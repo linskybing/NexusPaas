@@ -27,6 +27,7 @@ type storageDataPlanePlanRequest struct {
 	JobID           string
 	UserID          string
 	Namespace       string
+	NodeClass       string
 	DatasetSources  []storageDataPlaneDatasetSource
 	ScratchProfile  string
 	Checkpoint      storageDataPlaneCheckpointRequest
@@ -73,6 +74,7 @@ type storageDataPlaneStageInOperation struct {
 	VolumeName       string
 	SourcePath       string
 	ScratchPath      string
+	CacheBindingID   string
 }
 
 type storageDataPlaneCheckpointPlan struct {
@@ -118,6 +120,7 @@ func storageDataPlanePlanRequestFromPayload(projectID string, payload map[string
 		JobID:          firstText(shared.TextValue(payload, "job_id"), shared.TextValue(payload, "jobId")),
 		UserID:         firstText(shared.TextValue(payload, "user_id"), shared.TextValue(payload, "userId")),
 		Namespace:      firstText(shared.TextValue(payload, "namespace"), shared.TextValue(payload, "target_namespace"), shared.TextValue(payload, "targetNamespace")),
+		NodeClass:      firstText(shared.TextValue(payload, "node_class"), shared.TextValue(payload, "nodeClass")),
 		ScratchProfile: firstText(shared.TextValue(payload, "scratch_profile"), shared.TextValue(payload, "scratchProfile"), defaultScratchProfileID),
 		Checkpoint: storageDataPlaneCheckpointRequest{
 			FlushTargetProfile: firstText(defaultCheckpointFlushProfileID),
@@ -252,17 +255,49 @@ func resolveStorageDataPlaneStageIn(app *platform.App, r *http.Request, req stor
 	}
 	targetPVC := shared.FirstNonEmpty(text(binding, "target_pvc", "targetPVC"), text(binding, "pvc_id", "pvcId"), source.StorageBindingID)
 	label := storagePlanName(firstText(source.CacheKey, source.StorageBindingID), "dataset")
+	cacheBinding, cacheHit := findDataPlaneCacheBinding(r.Context(), app, req, source)
 	return storageDataPlaneStageInOperation{
 		StorageBindingID: source.StorageBindingID,
 		CacheKey:         source.CacheKey,
-		CacheHit:         false,
+		CacheHit:         cacheHit,
 		SourceNamespace:  groupStorageNamespace(sourcePVC, groupID),
 		SourcePVC:        shared.FirstNonEmpty(text(sourcePVC, "source_pvc", "sourcePVC"), text(sourcePVC, "pvc_name", "pvcName"), text(sourcePVC, "pvc_id", "pvcId"), pvcID),
 		TargetPVC:        targetPVC,
 		VolumeName:       "stage-" + label,
 		SourcePath:       defaultStageSourceBasePath + "/" + label,
 		ScratchPath:      defaultScratchMountPath + "/datasets/" + label,
+		CacheBindingID:   shared.TextValue(cacheBinding, "id"),
 	}, http.StatusOK, nil
+}
+
+func findDataPlaneCacheBinding(ctx context.Context, app *platform.App, req storageDataPlanePlanRequest, source storageDataPlaneDatasetSource) (map[string]any, bool) {
+	if strings.TrimSpace(source.CacheKey) == "" {
+		return nil, false
+	}
+	for _, row := range storageRepo(app).ListCacheBindings(ctx, req.ProjectID) {
+		if text(row, "cache_key", "cacheKey") != source.CacheKey {
+			continue
+		}
+		if bindingID := text(row, "storage_binding_id", "storageBindingId"); bindingID != "" && bindingID != source.StorageBindingID {
+			continue
+		}
+		if scratch := text(row, "scratch_profile", "scratchProfile"); scratch != "" && scratch != req.ScratchProfile {
+			continue
+		}
+		if !cacheBindingNodeClassMatches(req.NodeClass, text(row, "node_class", "nodeClass")) {
+			continue
+		}
+		return row, true
+	}
+	return nil, false
+}
+
+func cacheBindingNodeClassMatches(requested, cached string) bool {
+	requested, cached = strings.TrimSpace(requested), strings.TrimSpace(cached)
+	if requested == "" {
+		return cached == ""
+	}
+	return cached == "" || cached == requested
 }
 
 func getStorageProfilePayload(ctx context.Context, app *platform.App, profileID string) (map[string]any, error) {
@@ -289,6 +324,7 @@ func storageDataPlanePlanPayload(plan storageDataPlanePlan) map[string]any {
 			"volume_name":        op.VolumeName,
 			"source_path":        op.SourcePath,
 			"scratch_path":       op.ScratchPath,
+			"cache_binding_id":   op.CacheBindingID,
 		})
 	}
 	return map[string]any{
