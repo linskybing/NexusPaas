@@ -330,6 +330,21 @@ and
 - explicit non-measured source labels such as `unavailable`, `unknown`, or
   `none` are not treated as measured.
 
+`USAGE-029` now has local control-plane evidence in the same branch, documented
+by
+[`2026-06-27-usage-telemetry-drift.md`](../plan/2026-06-27-usage-telemetry-drift.md):
+
+- `usage-observability-service` emits `UsageDriftDetected` when fresh GPU usage
+  snapshots show material divergence between reserved GPU fraction and observed
+  telemetry;
+- repeated equivalent drift is suppressed through persisted
+  `usage_drift_alerts` state rather than only relying on event idempotency keys;
+- missing or zero reserved evidence is skipped, so telemetry absence does not
+  grant extra quota or create divide-by-zero drift ratios;
+- local tests cover material drift emission, duplicate suppression, below-
+  threshold skips, missing-reserved skips, stale-telemetry skips, and the
+  `UsageDriftDetected` event fixture.
+
 This is local control-plane/UI evidence only. `USAGE-013`, `USAGE-014`,
 `USAGE-017`, `USAGE-018`, and `USAGE-035` through `USAGE-037` still require
 real node-level GPU/process evidence, including DCGM or NVIDIA tooling where

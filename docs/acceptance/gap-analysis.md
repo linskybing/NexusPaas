@@ -471,7 +471,14 @@ and load evidence remains tracked separately under PERF.
   `telemetry_age_seconds`, and `collected_at`, live `/api/v1/cluster/mps`
   returned degraded Prometheus adapter status `adapter_not_configured`, and
   live scheduler admission rejected an over-quota synthetic request with HTTP
-  `409` / `GPU quota exceeded` while Prometheus was not configured. Harbor
+  `409` / `GPU quota exceeded` while Prometheus was not configured. Local
+  USAGE-029 evidence also exists: usage-observability now emits
+  `UsageDriftDetected` for material reserved-vs-observed GPU telemetry drift,
+  persists `usage_drift_alerts` to suppress repeated equivalent alerts, and
+  skips missing/zero reserved evidence so telemetry absence does not grant
+  extra quota or create invalid drift ratios. This is local control-plane
+  evidence only; live GPU/process telemetry and stale-node-agent alert proof
+  remain open under the usage and monitoring rows. Harbor
   dependency failure-injection evidence also exists: runtime `HARBOR_URL`
   points at the Harbor API ping path, healthy `/api/v1/harbor-status` was
   proven, `harbor-core` was scaled from `1` to `0`, the product API returned
