@@ -23,6 +23,7 @@ type gpuCollectorStats struct {
 	snapshotsWritten      int
 	snapshotsSkipped      int
 	summariesComputed     int
+	usageDriftsDetected   int
 	snapshotsDeleted      int
 }
 
@@ -66,6 +67,7 @@ func collectGPUUsageTelemetry(ctx context.Context, app *platform.App, now time.T
 		}
 	}
 	stats.summariesComputed = computeGPUSummaries(ctx, app.Store, jobs, now)
+	stats.usageDriftsDetected = detectUsageDrift(ctx, app, jobs, now)
 	stats.snapshotsDeleted = cleanupOldGPUSnapshots(ctx, app.Store, retentionCutoff(now, app.Config.GPUUsageRetentionDays))
 	slog.Info("gpu usage collector completed",
 		"cluster_read_model_found", stats.clusterReadModelFound,
@@ -73,6 +75,7 @@ func collectGPUUsageTelemetry(ctx context.Context, app *platform.App, now time.T
 		"snapshots_written", stats.snapshotsWritten,
 		"snapshots_skipped", stats.snapshotsSkipped,
 		"summaries_computed", stats.summariesComputed,
+		"usage_drifts_detected", stats.usageDriftsDetected,
 		"snapshots_deleted", stats.snapshotsDeleted,
 	)
 	return stats

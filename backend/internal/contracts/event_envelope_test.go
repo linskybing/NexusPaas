@@ -30,6 +30,7 @@ func TestEventEnvelopeFixturesAreValidV1(t *testing.T) {
 		"reservation-drift-detected.json",
 		"storage-benchmark-recorded.json",
 		"storage-profile-changed.json",
+		"usage-drift-detected.json",
 		"user-updated.json",
 	}
 	if !reflect.DeepEqual(fixtures, want) {
@@ -74,6 +75,7 @@ func TestEventEnvelopeFixturesAreValidV1(t *testing.T) {
 		"ReservationDriftDetected":  "scheduler-quota-service",
 		"StorageBenchmarkRecorded":  "storage-service",
 		"StorageProfileChanged":     "storage-service",
+		"UsageDriftDetected":        "usage-observability-service",
 		"UserUpdated":               "identity-service",
 	}
 	if !reflect.DeepEqual(seenTypes, wantTypes) {
