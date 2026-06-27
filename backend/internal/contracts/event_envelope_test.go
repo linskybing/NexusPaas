@@ -18,6 +18,7 @@ func TestEventEnvelopeFixturesAreValidV1(t *testing.T) {
 		"job-submitted.json",
 		"project-updated.json",
 		"quota-reserved.json",
+		"storage-profile-changed.json",
 		"user-updated.json",
 	}
 	if !reflect.DeepEqual(fixtures, want) {
@@ -46,11 +47,12 @@ func TestEventEnvelopeFixturesAreValidV1(t *testing.T) {
 	}
 
 	wantTypes := map[string]string{
-		"AuditEvent":     "scheduler-quota-service",
-		"JobSubmitted":   "workload-service",
-		"ProjectUpdated": "org-project-service",
-		"QuotaReserved":  "scheduler-quota-service",
-		"UserUpdated":    "identity-service",
+		"AuditEvent":            "scheduler-quota-service",
+		"JobSubmitted":          "workload-service",
+		"ProjectUpdated":        "org-project-service",
+		"QuotaReserved":         "scheduler-quota-service",
+		"StorageProfileChanged": "storage-service",
+		"UserUpdated":           "identity-service",
 	}
 	if !reflect.DeepEqual(seenTypes, wantTypes) {
 		t.Fatalf("fixture event type/producers = %v, want %v", seenTypes, wantTypes)

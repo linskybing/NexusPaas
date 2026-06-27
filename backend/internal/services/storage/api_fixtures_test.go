@@ -36,6 +36,47 @@ func TestCreateStoragePermissionExternalAPIFixtureMatchesSpec(t *testing.T) {
 	assertCreateStoragePermissionExternalAPIRouteMetadata(t, route, fixture)
 }
 
+func TestCreateStorageProfileExternalAPIFixtureMatchesSpec(t *testing.T) {
+	fixture := readStorageExternalAPIFixture(t, "storage-create-profile.json")
+	spec := Spec()
+	route, ok := findStorageExternalRoute(spec.Routes, fixture.Method, fixture.Path)
+	if !ok {
+		t.Fatalf("route %s %s not found in Spec()", fixture.Method, fixture.Path)
+	}
+
+	if fixture.ContractName != "storage.create_profile" {
+		t.Fatalf("contract_name = %q, want storage.create_profile", fixture.ContractName)
+	}
+	if got, want := fixture.Resource, spec.Name+":"+route.Resource; got != want {
+		t.Fatalf("resource = %q, want %q", got, want)
+	}
+	if fixture.Action != route.Action || route.Resource != "storage_profiles" || route.Action != "create" {
+		t.Fatalf("route metadata = fixture action %q route %s/%s, want create storage_profiles", fixture.Action, route.Resource, route.Action)
+	}
+	if route.Method != http.MethodPost || route.Pattern != "/api/v1/storage-profiles" || !route.Admin || !route.AuthRequired || route.ServiceAuthRequired {
+		t.Fatalf("route = %#v, want admin POST /api/v1/storage-profiles", route)
+	}
+	if !reflect.DeepEqual(fixture.RequiredRequestFields, []string{"name", "provider", "tier", "access_mode"}) {
+		t.Fatalf("required_request_fields = %v, want [name provider tier access_mode]", fixture.RequiredRequestFields)
+	}
+	if !reflect.DeepEqual(fixture.OptionalRequestFields, []string{"id", "performance_class", "storage_class_name", "mount_mode", "mount_options", "node_selector", "topology_policy", "allow_cross_namespace", "allowed_project_scopes"}) {
+		t.Fatalf("optional_request_fields = %v, want storage profile optional fields", fixture.OptionalRequestFields)
+	}
+	if !reflect.DeepEqual(fixture.SuccessStatuses, []int{http.StatusCreated}) {
+		t.Fatalf("success_statuses = %v, want [201]", fixture.SuccessStatuses)
+	}
+	if !reflect.DeepEqual(fixture.EmitsEvents, []string{"StorageProfileChanged"}) || !storageServiceEmitsEvent(spec, "StorageProfileChanged") {
+		t.Fatalf("emits_events = %v and spec events = %v, want StorageProfileChanged", fixture.EmitsEvents, spec.Events)
+	}
+	data, ok := fixture.ResponseExample["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("response_example.data = %T, want object", fixture.ResponseExample["data"])
+	}
+	if got, want := data["storage_class_name"], "local-nvme-scratch"; got != want {
+		t.Fatalf("response_example.data.storage_class_name = %v, want %v", got, want)
+	}
+}
+
 func TestUpdateProjectStoragePermissionExternalAPIFixtureMatchesSpec(t *testing.T) {
 	fixture := readStorageExternalAPIFixture(t, "storage-update-project-permission.json")
 	spec := Spec()
