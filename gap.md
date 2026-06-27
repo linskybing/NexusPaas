@@ -133,6 +133,20 @@ P0.2-P0.5 launch evidence remains open.
 
 Reference: evidence id `2026-06-20-v1-launch-gap-gate`.
 
+2026-06-28 Identity auth/session typed API local/static fixture update:
+`backend/internal/contracts/fixtures/api/v1/identity-register.json`,
+`identity-login.json`, `identity-refresh.json`, and `identity-cli-login.json`
+now record typed external REST fixture coverage for `POST /api/v1/register`,
+`POST /api/v1/login`, `POST /api/v1/refresh`, and `POST /api/v1/cli/login`.
+The fixtures declare public auth posture, exact required credential fields,
+success statuses, and `UserCreated` only for registration. The shared fixture
+validator keeps password/refresh-token example allowances scoped to those four
+identity fixtures, and the identity service parity test checks the metadata
+against `identity.Spec()`. This is local/static typed external API fixture
+coverage only; it does not prove live auth availability, browser cookie
+behavior, OIDC/LDAP behavior, token rotation/revocation, all-critical API typed
+contract coverage, DATA GA, Full GA, or V1 external production launch readiness.
+
 2026-06-23 workload local/static fixture update:
 `backend/internal/contracts/fixtures/api/v1/workload-delete-configfile.json`
 now records typed external REST fixture coverage for

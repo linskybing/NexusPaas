@@ -14,12 +14,40 @@ import (
 
 func TestExternalAPIFixturesAreValidV1(t *testing.T) {
 	fixtures := externalAPIFixtureFiles(t)
-	want := []string{"image-registry-context-build.json", "image-registry-create-acceleration-profile.json", "image-registry-dockerfile-build.json", "image-registry-storage-build.json", "org-project-batch-delete-groups.json", "org-project-batch-delete-projects.json", "org-project-create-group.json", "org-project-create-project.json", "org-project-delete-group.json", "org-project-delete-project.json", "org-project-update-group.json", "org-project-update-project.json", "request-notification-create-form.json", "scheduler-create-accelerator-profile.json", "scheduler-create-network-profile.json", "scheduler-create-placement-profile.json", "storage-batch-delete-project-permissions.json", "storage-batch-update-project-permissions.json", "storage-create-benchmark-record.json", "storage-create-cache-binding.json", "storage-create-permission.json", "storage-create-profile.json", "storage-create-project-binding.json", "storage-delete-project-permission.json", "storage-list-benchmark-records.json", "storage-update-project-permission.json", "workload-cancel-job.json", "workload-commit-configfile-version.json", "workload-create-configfile.json", "workload-delete-configfile.json", "workload-get-configfile.json", "workload-patch-configfile.json", "workload-submit-job.json", "workload-update-configfile.json"}
+	want := []string{"identity-cli-login.json", "identity-login.json", "identity-refresh.json", "identity-register.json", "image-registry-context-build.json", "image-registry-create-acceleration-profile.json", "image-registry-dockerfile-build.json", "image-registry-storage-build.json", "org-project-batch-delete-groups.json", "org-project-batch-delete-projects.json", "org-project-create-group.json", "org-project-create-project.json", "org-project-delete-group.json", "org-project-delete-project.json", "org-project-update-group.json", "org-project-update-project.json", "request-notification-create-form.json", "scheduler-create-accelerator-profile.json", "scheduler-create-network-profile.json", "scheduler-create-placement-profile.json", "storage-batch-delete-project-permissions.json", "storage-batch-update-project-permissions.json", "storage-create-benchmark-record.json", "storage-create-cache-binding.json", "storage-create-permission.json", "storage-create-profile.json", "storage-create-project-binding.json", "storage-delete-project-permission.json", "storage-list-benchmark-records.json", "storage-update-project-permission.json", "workload-cancel-job.json", "workload-commit-configfile-version.json", "workload-create-configfile.json", "workload-delete-configfile.json", "workload-get-configfile.json", "workload-patch-configfile.json", "workload-submit-job.json", "workload-update-configfile.json"}
 	if !reflect.DeepEqual(fixtures, want) {
 		t.Fatalf("fixture files = %v, want %v", fixtures, want)
 	}
 
 	wantRoutes := map[string]externalAPIFixtureRoute{
+		"identity-cli-login.json": {
+			ownerService: "identity-service",
+			resource:     "identity-service:cli_sessions",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/cli/login",
+		},
+		"identity-login.json": {
+			ownerService: "identity-service",
+			resource:     "identity-service:sessions",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/login",
+		},
+		"identity-refresh.json": {
+			ownerService: "identity-service",
+			resource:     "identity-service:refresh_tokens",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/refresh",
+		},
+		"identity-register.json": {
+			ownerService: "identity-service",
+			resource:     "identity-service:users",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/register",
+		},
 		"image-registry-context-build.json": {
 			ownerService: "image-registry-service",
 			resource:     "image-registry-service:image_builds",
@@ -500,17 +528,20 @@ func validateExternalAPIFixture(fixture externalAPIContractFixture) error {
 	if !fixture.Compatibility.AdditiveFields || !fixture.Compatibility.TolerantReader {
 		return fmt.Errorf("external API fixture compatibility must allow additive fields and tolerant readers")
 	}
-	if err := validateExternalAPIExamplePayload("request_example", fixture.RequestExample); err != nil {
+	if err := validateExternalAPIExamplePayload(fixture, "request_example", fixture.RequestExample); err != nil {
 		return err
 	}
-	if err := validateExternalAPIExamplePayload("response_example", fixture.ResponseExample); err != nil {
+	if err := validateExternalAPIExamplePayload(fixture, "response_example", fixture.ResponseExample); err != nil {
 		return err
 	}
 	return nil
 }
 
 func allowsEmptyExternalAPIEvents(fixture externalAPIContractFixture) bool {
-	return fixture.Method == http.MethodGet && (fixture.Action == "get" || fixture.Action == "list")
+	if fixture.Method == http.MethodGet && (fixture.Action == "get" || fixture.Action == "list") {
+		return true
+	}
+	return isIdentityCredentialIssueFixture(fixture)
 }
 
 func validateExternalAPIRequiredMetadata(fixture externalAPIContractFixture) error {
@@ -567,7 +598,7 @@ func validateExternalAPIRoute(fixture externalAPIContractFixture) error {
 	if !strings.HasPrefix(fixture.Path, "/api/v1/") || strings.HasPrefix(fixture.Path, "/internal/") {
 		return fmt.Errorf("external API fixture path = %q, want external /api/v1 path", fixture.Path)
 	}
-	if fixture.Auth != "user" || !fixture.AuthRequired || fixture.ServiceKeyRequired {
+	if !isPublicIdentityAuthFixture(fixture) && (fixture.Auth != "user" || !fixture.AuthRequired || fixture.ServiceKeyRequired) {
 		return fmt.Errorf("external API fixture auth = %q auth_required=%v service_key_required=%v, want user/true/false", fixture.Auth, fixture.AuthRequired, fixture.ServiceKeyRequired)
 	}
 	if !externalAPIMethodAllowed(fixture.Method) {
@@ -632,26 +663,58 @@ func validateExternalAPIStatuses(fixture externalAPIContractFixture) error {
 	return nil
 }
 
-func validateExternalAPIExamplePayload(path string, value any) error {
+func validateExternalAPIExamplePayload(fixture externalAPIContractFixture, path string, value any) error {
 	switch typed := value.(type) {
 	case map[string]any:
 		for key, item := range typed {
 			fieldPath := path + "." + key
-			if forbiddenEventEnvelopePayloadKey(key) {
+			if forbiddenEventEnvelopePayloadKey(key) && !allowsIdentityCredentialExampleField(fixture, fieldPath) {
 				return fmt.Errorf("external API example key %q is forbidden", fieldPath)
 			}
-			if err := validateExternalAPIExamplePayload(fieldPath, item); err != nil {
+			if err := validateExternalAPIExamplePayload(fixture, fieldPath, item); err != nil {
 				return err
 			}
 		}
 	case []any:
 		for i, item := range typed {
-			if err := validateExternalAPIExamplePayload(fmt.Sprintf("%s[%d]", path, i), item); err != nil {
+			if err := validateExternalAPIExamplePayload(fixture, fmt.Sprintf("%s[%d]", path, i), item); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func isPublicIdentityAuthFixture(fixture externalAPIContractFixture) bool {
+	if fixture.OwnerService != "identity-service" || fixture.Auth != "public" || fixture.AuthRequired || fixture.ServiceKeyRequired {
+		return false
+	}
+	switch fixture.Path {
+	case "/api/v1/register", "/api/v1/login", "/api/v1/refresh", "/api/v1/cli/login":
+		return fixture.Method == http.MethodPost
+	default:
+		return false
+	}
+}
+
+func isIdentityCredentialIssueFixture(fixture externalAPIContractFixture) bool {
+	return isPublicIdentityAuthFixture(fixture) && fixture.Action == "create" && fixture.Path != "/api/v1/register"
+}
+
+func allowsIdentityCredentialExampleField(fixture externalAPIContractFixture, fieldPath string) bool {
+	if !isPublicIdentityAuthFixture(fixture) {
+		return false
+	}
+	switch fieldPath {
+	case "request_example.password":
+		return fixture.Path == "/api/v1/register" || fixture.Path == "/api/v1/login" || fixture.Path == "/api/v1/cli/login"
+	case "request_example.refresh_token":
+		return fixture.Path == "/api/v1/refresh"
+	case "response_example.refresh_token":
+		return fixture.Path == "/api/v1/login" || fixture.Path == "/api/v1/refresh"
+	default:
+		return false
+	}
 }
 
 func externalAPIFixtureFiles(t *testing.T) []string {

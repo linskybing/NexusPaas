@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "contract_name": "identity.register",
+  "owner_service": "identity-service",
+  "api_surface": "external_rest",
+  "consumer": "public-auth-client",
+  "resource": "identity-service:users",
+  "action": "create",
+  "method": "POST",
+  "path": "/api/v1/register",
+  "auth": "public",
+  "auth_required": false,
+  "service_key_required": false,
+  "path_parameters": [],
+  "required_request_fields": [
+    "username",
+    "password"
+  ],
+  "optional_request_fields": [
+    "email",
+    "full_name",
+    "name"
+  ],
+  "request_example": {
+    "username": "alice",
+    "password": "example-password-only",
+    "email": "alice@example.test",
+    "full_name": "Alice Example"
+  },
+  "success_statuses": [
+    200
+  ],
+  "error_statuses": [
+    400,
+    409,
+    500,
+    503
+  ],
+  "emits_events": [
+    "UserCreated"
+  ],
+  "response_example": {},
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

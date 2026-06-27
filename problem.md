@@ -124,8 +124,18 @@ cancel covers same-target replay across both cancel route aliases and
 different-target conflict without duplicate `ImageBuildCancelled` events. This
 is local image-build command evidence only and does not prove full DATA-014,
 deploy idempotency, live executor cancellation, live Harbor/Tekton/BuildKit or
-Kubernetes execution, full IMG/DATA, V1 external launch, or Full GA. Workload
-submit now also has partial local deterministic `DATA-014` evidence for
+Kubernetes execution, full IMG/DATA, V1 external launch, or Full GA. Identity
+auth/session routes now also have local/static typed external REST fixture
+coverage for `POST /api/v1/register`, `POST /api/v1/login`,
+`POST /api/v1/refresh`, and `POST /api/v1/cli/login`: the fixtures declare
+public auth posture, exact required credential fields, success statuses, and
+`UserCreated` only for registration, with credential-shaped example allowances
+scoped to those four identity fixtures and checked against `identity.Spec()`.
+This is local/static contract evidence only and does not prove live auth
+availability, browser cookie behavior, OIDC/LDAP behavior, token
+rotation/revocation, all-critical API typed coverage, DATA GA, Full GA, or V1
+external launch readiness. Workload submit now also has partial local
+deterministic `DATA-014` evidence for
 `POST /api/v1/jobs`: same-key same-semantic-payload replays return the existing
 submitted job without duplicate scheduler admission, auto-preemption, job record,
 or `JobSubmitted` event side effects, and same-key different-payload attempts

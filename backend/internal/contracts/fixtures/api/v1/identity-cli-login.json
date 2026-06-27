@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "contract_name": "identity.cli_login",
+  "owner_service": "identity-service",
+  "api_surface": "external_rest",
+  "consumer": "public-auth-client",
+  "resource": "identity-service:cli_sessions",
+  "action": "create",
+  "method": "POST",
+  "path": "/api/v1/cli/login",
+  "auth": "public",
+  "auth_required": false,
+  "service_key_required": false,
+  "path_parameters": [],
+  "required_request_fields": [
+    "username",
+    "password"
+  ],
+  "optional_request_fields": [
+    "name"
+  ],
+  "request_example": {
+    "username": "alice",
+    "password": "example-password-only",
+    "name": "nexuspaas-cli"
+  },
+  "success_statuses": [
+    200
+  ],
+  "error_statuses": [
+    400,
+    401,
+    429,
+    500,
+    503
+  ],
+  "emits_events": [],
+  "response_example": {
+    "token": "fake-api-token",
+    "token_id": "api-token-ga-001",
+    "expires_at": "2026-07-28T00:00:00Z",
+    "user": {
+      "id": "user-ga-alice",
+      "username": "alice",
+      "email": "alice@example.test",
+      "full_name": "Alice Example",
+      "name": "Alice Example",
+      "role": "user",
+      "role_id": "role-default",
+      "system_role": 2,
+      "permissions": [
+        "selfManage"
+      ]
+    }
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}
