@@ -47,6 +47,10 @@ type submitAdmissionRequest struct {
 	StreamBitrateCapKbps   int
 	StreamSessionCap       int
 	StreamEgressBudgetKbps int
+	NetworkProfile         string
+	RDMARequired           bool
+	NICClass               string
+	TopologyRequirement    string
 	Resources              []admissionResourcePayload
 }
 
@@ -71,6 +75,12 @@ type admissionReview struct {
 	RequiredMemory       int
 	StreamingSession     bool
 	StreamMaxBitrateKbps int
+	NetworkProfile       string
+	RDMARequired         bool
+	NICClass             string
+	TopologyRequirement  string
+	NetworkAnnotations   map[string]any
+	NetworkEnv           map[string]any
 	Usage                admissionUsage
 }
 
@@ -189,6 +199,9 @@ func evaluateSubmitAdmission(ctx context.Context, reader admissionReader, req su
 		return review, err
 	}
 	review.DeviceClassName = req.DeviceClassName
+	if err := resolveAdmissionNetworkProfile(ctx, reader, req, &review); err != nil {
+		return review, err
+	}
 
 	floor, err := admissionResourceFloorFromRequest(req)
 	if err != nil {

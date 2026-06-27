@@ -21,6 +21,10 @@ func decodeSubmitAdmissionRequest(payload map[string]any) (submitAdmissionReques
 		GPUCount:             shared.IntValue(payload, "gpu_count", "gpuCount", "GPUCount"),
 		StreamingSession:     shared.BoolValue(payload, "streaming_session", "streamingSession", "StreamingSession"),
 		StreamMaxBitrateKbps: shared.IntValue(payload, "stream_max_bitrate_kbps", "streamMaxBitrateKbps", "StreamMaxBitrateKbps"),
+		NetworkProfile:       shared.TextValue(payload, "network_profile", "networkProfile", "NetworkProfile"),
+		RDMARequired:         shared.BoolValue(payload, "rdma_required", "rdmaRequired", "RDMARequired"),
+		NICClass:             shared.TextValue(payload, "nic_class", "nicClass", "NICClass"),
+		TopologyRequirement:  shared.TextValue(payload, "topology_requirement", "topologyRequirement", "TopologyRequirement"),
 		Resources:            decodeAdmissionResources(payload["resources"]),
 	}
 	if rawSM, ok := firstPresent(payload, "sm_percentage", "smPercentage", "SMPercentage"); ok {
@@ -116,7 +120,7 @@ func admissionDeniedReview(req submitAdmissionRequest, review admissionReview, r
 }
 
 func admissionReviewData(review admissionReview) map[string]any {
-	return map[string]any{
+	data := map[string]any{
 		"allowed":                 review.Allowed,
 		"reason":                  review.Reason,
 		"project_id":              review.ProjectID,
@@ -150,6 +154,25 @@ func admissionReviewData(review admissionReview) map[string]any {
 			"stream_egress_budget_kbps":  review.Usage.StreamEgressBudgetKbps,
 		},
 	}
+	if review.NetworkProfile != "" {
+		data["network_profile"] = review.NetworkProfile
+	}
+	if review.RDMARequired {
+		data["rdma_required"] = true
+	}
+	if review.NICClass != "" {
+		data["nic_class"] = review.NICClass
+	}
+	if review.TopologyRequirement != "" {
+		data["topology_requirement"] = review.TopologyRequirement
+	}
+	if len(review.NetworkAnnotations) > 0 {
+		data["network_annotations"] = shared.CloneMap(review.NetworkAnnotations)
+	}
+	if len(review.NetworkEnv) > 0 {
+		data["network_env"] = shared.CloneMap(review.NetworkEnv)
+	}
+	return data
 }
 
 func persistAdmissionReview(ctx context.Context, repo *recordStoreSchedulerQuotaRepository, review admissionReview) {

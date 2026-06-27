@@ -259,6 +259,10 @@ func jobAdmissionPayload(job, payload map[string]any) map[string]any {
 		"gpu_count":               firstPayloadValue(payload, "gpu_count", "gpuCount", "GPUCount"),
 		"streaming_session":       firstPayloadValue(payload, "streaming_session", "streamingSession", "StreamingSession"),
 		"stream_max_bitrate_kbps": firstPayloadValue(payload, "stream_max_bitrate_kbps", "streamMaxBitrateKbps", "StreamMaxBitrateKbps"),
+		"network_profile":         firstPayloadValue(payload, "network_profile", "networkProfile", "NetworkProfile"),
+		"rdma_required":           firstPayloadValue(payload, "rdma_required", "rdmaRequired", "RDMARequired"),
+		"nic_class":               firstPayloadValue(payload, "nic_class", "nicClass", "NICClass"),
+		"topology_requirement":    firstPayloadValue(payload, "topology_requirement", "topologyRequirement", "TopologyRequirement"),
 		"resources":               payload["resources"],
 	}
 	if value, ok := firstPresent(payload, "sm_percentage", "smPercentage", "SMPercentage"); ok {
@@ -281,6 +285,12 @@ func applyAdmissionReview(job, review map[string]any) {
 		"required_memory",
 		"streaming_session",
 		"stream_max_bitrate_kbps",
+		"network_profile",
+		"rdma_required",
+		"nic_class",
+		"topology_requirement",
+		"network_annotations",
+		"network_env",
 	} {
 		if value, ok := review[key]; ok {
 			job[key] = value

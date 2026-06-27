@@ -36,6 +36,13 @@ const (
 )
 
 func Register(app *platform.App) {
+	app.RegisterRequiredFields(networkProfilesResource, "name", "primary_cni")
+	if err := seedDefaultNetworkProfiles(app); err != nil {
+		slog.Error("network profile seed failed", "error", err)
+	}
+	app.RegisterCustomHandler(http.MethodPost, "/api/v1/network-profiles", createNetworkProfile)
+	app.RegisterCustomHandler(http.MethodPut, "/api/v1/network-profiles/{id}", updateNetworkProfile)
+	app.RegisterCustomHandler(http.MethodDelete, "/api/v1/network-profiles/{id}", deleteNetworkProfile)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/queues", listQueues)
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/queues", createQueue)
 	app.RegisterCustomHandler(http.MethodGet, pathQueueID, getQueue)

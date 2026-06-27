@@ -42,6 +42,80 @@ func TestSubmitAdmissionAllowsPlanQueueAndResources(t *testing.T) {
 	}
 }
 
+func TestSubmitAdmissionResolvesNetworkProfileMetadata(t *testing.T) {
+	app := newSchedulerQuotaTestApp()
+	seedAdmissionProject(t, app, admissionFixture{})
+
+	code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+		"project_id":           "P1",
+		"user_id":              "U1",
+		"queue_name":           "default-batch",
+		"required_cpu":         1,
+		"required_memory":      1024,
+		"network_profile":      "rdma-fast-lane",
+		"rdma_required":        true,
+		"topology_requirement": "same-rack",
+		"resources":            []any{podAdmissionResource(t, "train", "0", "1", "1Gi")},
+	})), platform.RouteSpec{})
+
+	assertSchedulerStatus(t, code, data, http.StatusOK)
+	review := data.(map[string]any)
+	if review["network_profile"] != "rdma-fast-lane" || review["rdma_required"] != true {
+		t.Fatalf("admission network review = %#v, want rdma-fast-lane required", review)
+	}
+	if review["nic_class"] != "rdma" || review["topology_requirement"] != "same-rack" {
+		t.Fatalf("admission network hints = %#v, want rdma same-rack", review)
+	}
+	annotations := review["network_annotations"].(map[string]any)
+	if annotations[multusNetworksAnnotation] != "nexuspaas-system/rdma-net" {
+		t.Fatalf("network annotations = %#v, want rdma-net", annotations)
+	}
+	env := review["network_env"].(map[string]any)
+	if env["NCCL_SOCKET_IFNAME"] != "net1" || env["NCCL_IB_DISABLE"] != "0" {
+		t.Fatalf("network env = %#v, want NCCL defaults", env)
+	}
+}
+
+func TestSubmitAdmissionRejectsMissingOrDisabledNetworkProfile(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile string
+		seed    map[string]any
+		want    string
+	}{
+		{name: "missing", profile: "missing-net", want: "network profile not found"},
+		{name: "disabled", profile: "disabled-net", seed: map[string]any{
+			"id":          "disabled-net",
+			"name":        "Disabled net",
+			"primary_cni": "cilium",
+			"enabled":     false,
+		}, want: "network profile is disabled"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := newSchedulerQuotaTestApp()
+			seedAdmissionProject(t, app, admissionFixture{})
+			if tt.seed != nil {
+				createSchedulerRecord(t, app, networkProfilesResource, tt.seed)
+			}
+
+			code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+				"project_id":      "P1",
+				"user_id":         "U1",
+				"queue_name":      "default-batch",
+				"required_cpu":    1,
+				"required_memory": 1024,
+				"network_profile": tt.profile,
+			})), platform.RouteSpec{})
+
+			assertSchedulerStatus(t, code, data, http.StatusUnprocessableEntity)
+			if !strings.Contains(data.(map[string]any)["reason"].(string), tt.want) {
+				t.Fatalf("network denial = %#v, want %q", data, tt.want)
+			}
+		})
+	}
+}
+
 func TestSubmitAdmissionRejectsQueueOutsideProjectPlan(t *testing.T) {
 	app := newSchedulerQuotaTestApp()
 	seedAdmissionProject(t, app, admissionFixture{})

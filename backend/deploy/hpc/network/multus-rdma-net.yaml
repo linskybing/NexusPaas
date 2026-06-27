@@ -1,0 +1,26 @@
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: rdma-net
+  namespace: nexuspaas-system
+  annotations:
+    k8s.v1.cni.cncf.io/resourceName: rdma/rdma_shared_device_a
+spec:
+  config: |
+    {
+      "cniVersion": "0.3.1",
+      "name": "rdma-net",
+      "plugins": [
+        {
+          "type": "sriov",
+          "ipam": {
+            "type": "whereabouts",
+            "range": "192.168.100.0/24",
+            "gateway": "192.168.100.1"
+          }
+        },
+        {
+          "type": "rdma"
+        }
+      ]
+    }
