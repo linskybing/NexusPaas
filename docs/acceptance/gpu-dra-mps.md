@@ -101,5 +101,22 @@ node-level placement proof; live DRA/MPS hardware validation remains `GPU-016`.
   `ReservationDriftDetected` when an active reservation has a missing or terminal
   workload record.
 
+`GPU-017` and `GPU-018` now also have local read-model/UI coverage in the
+`storage-data-path` branch slice documented by
+[`2026-06-27-gpu-usage-reserved-observed.md`](../plan/2026-06-27-gpu-usage-reserved-observed.md)
+and synced by
+[`2026-06-27-gpu-usage-doc-sync.md`](../plan/2026-06-27-gpu-usage-doc-sync.md):
+
+- `/api/v1/projects/{id}/gpu-usage` keeps `used` for compatibility and adds
+  `observed_gpu_pods`, `observed_gpu_source`, `reserved_gpu_fraction`,
+  `reserved_gpu_source`, and `sm_attribution_source`;
+- reserved GPU fraction is derived from Project GPU read-model rows, fresh
+  usage-observability snapshots, then co-hosted workload job reservation data;
+- the first-party frontend Usage panel displays Observed GPU pods, Reserved GPU
+  fraction, and SM attribution separately;
+- MPS source labeling preserves measured source metadata and marks
+  allocation-derived or unavailable true per-process SM as
+  `estimated_mps_allocation` or `unavailable`, not measured.
+
 This does not close `GPU-016`; live DRA/MPS behavior still requires evidence
 from a real GPU cluster.

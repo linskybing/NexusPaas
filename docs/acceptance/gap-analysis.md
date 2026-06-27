@@ -239,21 +239,28 @@ This is frontend/local evidence only; Docker/live E2E, WebSocket/SSE tailing,
 full workload lifecycle status, and full WEB coverage remain open.
 WEB-007 frontend usage workflow is now strengthened in `frontend/src/App.tsx`
 with active-Project-filtered current-user usage and request-usage tables,
-compact visible row/resource totals, the existing Project GPU pods summary, and
-a Usage-local manual refresh button that re-runs only `/api/v1/me/usage`,
-`/api/v1/me/request-usage`, and `/api/v1/projects/{projectID}/gpu-usage`.
-Focused App test evidence passed, covering filtering/totals, manual refresh
-route counts, GPU-route failure isolation with non-secret text, no admin usage
-fallback, and no `localStorage`/`sessionStorage` credential persistence;
-`npm --prefix frontend run build` also passed. This is frontend/local evidence
-only; live usage attribution, real per-device GPU utilization, full WEB
-coverage, Full GA, and first-version completion remain open.
+compact visible row/resource totals, separated Project GPU observed pods,
+reserved GPU fraction, SM attribution source, and a Usage-local manual refresh
+button that re-runs only `/api/v1/me/usage`, `/api/v1/me/request-usage`, and
+`/api/v1/projects/{projectID}/gpu-usage`. Focused App/API test evidence passed,
+covering filtering/totals, manual refresh route counts, GPU-route failure
+isolation with non-secret text, no admin usage fallback, no
+`localStorage`/`sessionStorage` credential persistence, backward-compatible
+`used` handling, and estimated/allocation-based SM attribution display;
+`npm --prefix frontend run build` also passed. Backend local evidence now
+separates `observed_gpu_pods` from `reserved_gpu_fraction` and labels
+allocation-derived or unavailable true per-process SM as
+`estimated_mps_allocation` or `unavailable`, not measured. This is
+frontend/local read-model evidence only; live usage attribution, real
+per-device/per-process GPU utilization, full WEB coverage, Full GA, and
+first-version completion remain open.
 Remaining WEB gaps are full WebRTC media session, real workload GPU
 telemetry/utilization evidence, live continuous log tailing/full status workflow
 evidence beyond the focused REST polling slice, live usage attribution beyond
-the focused WEB-007 frontend workflow, full image-build/allow-list/SBOM/signing/GUI
-scan workflow, Harbor scan lifecycle synchronization, and registry-wide
-automatic delete lifecycle automation beyond explicit per-tag sync/delete-resync.
+the focused WEB-007 frontend workflow, PID/container/GPU process telemetry
+evidence, full image-build/allow-list/SBOM/signing/GUI scan workflow, Harbor
+scan lifecycle synchronization, and registry-wide automatic delete lifecycle
+automation beyond explicit per-tag sync/delete-resync.
 Browser-operated WebRTC sessions remain covered by the RTC family and are not a
 substitute for a management Web UI.
 
