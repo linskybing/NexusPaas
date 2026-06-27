@@ -1,0 +1,22 @@
+{
+  "event_id": "44444444-4444-4444-8444-444444444444",
+  "schema_version": 1,
+  "event_type": "StorageBenchmarkRecorded",
+  "producer": "storage-service",
+  "occurred_at": "2026-06-27T00:00:00Z",
+  "trace_id": "trace-storage-benchmark-recorded-v1",
+  "request_id": "req-storage-benchmark-recorded-v1",
+  "aggregate_id": "benchmark-00001",
+  "payload": {
+    "benchmark_record_id": "benchmark-00001",
+    "cluster_id": "prod-gpu-a",
+    "node_pool": "gpu-hpc-h100",
+    "storage_profile": "local-nvme-scratch",
+    "metrics": {
+      "fio_read_gbps": 11.8,
+      "fio_write_gbps": 9.4,
+      "stage_in_gbps": 7.2
+    },
+    "action": "recorded"
+  }
+}

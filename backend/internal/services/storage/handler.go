@@ -38,6 +38,7 @@ const (
 func Register(app *platform.App) {
 	app.RegisterRequiredFields(storageProfilesResource, "name", "provider", "tier", "access_mode")
 	app.RegisterRequiredFields(cacheBindingsResource, "project_id", "storage_binding_id", "cache_key", "scratch_profile")
+	app.RegisterRequiredFields(storageBenchmarkRecordsResource, "storage_profile")
 	if err := seedDefaultStorageProfiles(app); err != nil {
 		slog.Error("storage profile seed failed", "error", err)
 	}
@@ -48,6 +49,7 @@ func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/storage-profiles", createStorageProfile)
 	app.RegisterCustomHandler(http.MethodPut, "/api/v1/storage-profiles/{id}", updateStorageProfile)
 	app.RegisterCustomHandler(http.MethodDelete, "/api/v1/storage-profiles/{id}", deleteStorageProfile)
+	app.RegisterCustomHandler(http.MethodPost, "/api/v1/storage/benchmark-records", createStorageBenchmarkRecord)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/storage/options", listStorageOptions)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/admin/group-storage", listAdminGroupStorage)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/storage/group/{id}", listGroupStorage)
