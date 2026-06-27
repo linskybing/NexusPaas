@@ -20,6 +20,7 @@ const (
 	usageDriftAlertsResource         = serviceName + ":usage_drift_alerts"
 	usageDriftDetectedEventName      = "UsageDriftDetected"
 	usageDriftReasonMaterialMismatch = "material_reservation_telemetry_divergence"
+	usageDriftReasonMissingFresh     = "active_reserved_jobs_missing_fresh_snapshots"
 	usageDriftTraceIDPrefix          = "usage-drift-"
 	usageDriftIdempotencyKeyScope    = "usage-drift-detector:"
 	usageDriftAbsoluteThreshold      = 0.25
@@ -34,6 +35,17 @@ type usageDriftProjectStats struct {
 	freshRows     int
 	firstSample   time.Time
 	lastSample    time.Time
+}
+
+type usageDriftActiveJob struct {
+	jobID       string
+	projectID   string
+	reservedGPU float64
+}
+
+type usageDriftFreshSnapshotIndex struct {
+	byJob     map[string]bool
+	byProject map[string]int
 }
 
 func detectUsageDrift(ctx context.Context, app *platform.App, jobs map[string]map[string]any, now time.Time) int {
@@ -65,6 +77,7 @@ func detectUsageDrift(ctx context.Context, app *platform.App, jobs map[string]ma
 		}
 		published++
 	}
+	published += detectMissingFreshTelemetry(ctx, app, jobs, now, windowMinutes)
 	if len(stats) > 0 || published > 0 {
 		slog.Info("usage drift detector completed", "projects_scanned", len(stats), "drifts_published", published)
 	}
@@ -357,6 +370,133 @@ func usageDriftNumericValue(data map[string]any, keys ...string) (float64, bool)
 	return 0, false
 }
 
+func detectMissingFreshTelemetry(ctx context.Context, app *platform.App, jobs map[string]map[string]any, now time.Time, windowMinutes int) int {
+	activeJobs := usageDriftActiveReservedJobs(jobs)
+	if len(activeJobs) == 0 {
+		resolveInactiveMissingFreshTelemetryAlerts(ctx, app.Store, map[string]bool{}, now)
+		return 0
+	}
+	fresh := usageDriftFreshSnapshots(ctx, app.Store, jobs, now, windowMinutes)
+	missingByProject, activeCounts := usageDriftMissingFreshJobs(activeJobs, fresh)
+	published := 0
+	for projectID, missingJobs := range missingByProject {
+		data := usageDriftMissingFreshEventData(projectID, missingJobs, activeCounts[projectID], fresh.byProject[projectID], now, windowMinutes)
+		shouldPublish, eventData := upsertUsageDriftAlert(ctx, app.Store, data, now)
+		if !shouldPublish {
+			continue
+		}
+		if err := publishUsageDriftDetected(ctx, app.Events, eventData, now); err != nil {
+			slog.Warn("usage stale telemetry event publish failed", "project_id", projectID, "error", err)
+			continue
+		}
+		published++
+	}
+	resolveInactiveMissingFreshTelemetryAlerts(ctx, app.Store, missingProjectSet(missingByProject), now)
+	return published
+}
+
+func usageDriftActiveReservedJobs(jobs map[string]map[string]any) []usageDriftActiveJob {
+	seen := map[string]bool{}
+	out := []usageDriftActiveJob{}
+	for _, job := range jobs {
+		jobID := textValue(job, "job_id", "jobId", "JobID", "id", "ID")
+		projectID := textValue(job, "project_id", "projectId", "ProjectID")
+		if jobID == "" || projectID == "" || seen[jobID] || !usageDriftJobActive(job) {
+			continue
+		}
+		reserved, ok := usageDriftJobReservedGPUFraction(job)
+		if !ok || reserved <= 0 {
+			continue
+		}
+		seen[jobID] = true
+		out = append(out, usageDriftActiveJob{jobID: jobID, projectID: projectID, reservedGPU: reserved})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].projectID == out[j].projectID {
+			return out[i].jobID < out[j].jobID
+		}
+		return out[i].projectID < out[j].projectID
+	})
+	return out
+}
+
+func usageDriftFreshSnapshots(ctx context.Context, store platform.RecordStore, jobs map[string]map[string]any, now time.Time, windowMinutes int) usageDriftFreshSnapshotIndex {
+	index := usageDriftFreshSnapshotIndex{byJob: map[string]bool{}, byProject: map[string]int{}}
+	for _, row := range usageDriftLatestSnapshots(ctx, store, jobs, now.Add(-time.Duration(windowMinutes)*time.Minute)) {
+		if row.jobID != "" {
+			index.byJob[row.jobID] = true
+		}
+		if row.projectID != "" {
+			index.byProject[row.projectID]++
+		}
+	}
+	return index
+}
+
+func usageDriftMissingFreshJobs(activeJobs []usageDriftActiveJob, fresh usageDriftFreshSnapshotIndex) (map[string][]string, map[string]int) {
+	missingByProject := map[string][]string{}
+	activeCounts := map[string]int{}
+	for _, job := range activeJobs {
+		activeCounts[job.projectID]++
+		if fresh.byJob[job.jobID] {
+			continue
+		}
+		missingByProject[job.projectID] = append(missingByProject[job.projectID], job.jobID)
+	}
+	for projectID := range missingByProject {
+		sort.Strings(missingByProject[projectID])
+	}
+	return missingByProject, activeCounts
+}
+
+func usageDriftMissingFreshEventData(projectID string, missingJobs []string, activeCount, freshRows int, detectedAt time.Time, windowMinutes int) map[string]any {
+	return map[string]any{
+		"project_id":                        projectID,
+		"reason":                            usageDriftReasonMissingFresh,
+		"drift_reason":                      usageDriftReasonMissingFresh,
+		"missing_active_reserved_jobs":      len(missingJobs),
+		"missing_job_ids":                   append([]string{}, missingJobs...),
+		"active_reserved_job_count":         activeCount,
+		"fresh_job_snapshot_window_minutes": windowMinutes,
+		"fresh_snapshot_rows_seen":          freshRows,
+		"detected_at":                       detectedAt.UTC().Format(time.RFC3339),
+		"basis":                             "active_reserved_jobs_without_fresh_snapshots",
+	}
+}
+
+func missingProjectSet(missingByProject map[string][]string) map[string]bool {
+	out := map[string]bool{}
+	for projectID := range missingByProject {
+		out[projectID] = true
+	}
+	return out
+}
+
+func resolveInactiveMissingFreshTelemetryAlerts(ctx context.Context, store platform.RecordStore, missingProjects map[string]bool, now time.Time) {
+	if store == nil {
+		return
+	}
+	for _, alert := range store.List(ctx, usageDriftAlertsResource) {
+		if textValue(alert.Data, "reason", "drift_reason") != usageDriftReasonMissingFresh || textValue(alert.Data, "status") != "active" {
+			continue
+		}
+		projectID := shared.FirstNonBlank(textValue(alert.Data, "project_id", "projectId"), usageDriftProjectIDFromAlertID(alert.ID))
+		if projectID == "" || missingProjects[projectID] {
+			continue
+		}
+		_, _ = store.Update(ctx, usageDriftAlertsResource, alert.ID, map[string]any{
+			"status":       "resolved",
+			"resolved_at":  now.UTC().Format(time.RFC3339),
+			"last_seen_at": now.UTC().Format(time.RFC3339),
+		})
+	}
+}
+
+func usageDriftProjectIDFromAlertID(id string) string {
+	projectID, _, _ := strings.Cut(id, ":")
+	return strings.TrimSpace(projectID)
+}
+
 func upsertUsageDriftAlert(ctx context.Context, store platform.RecordStore, data map[string]any, now time.Time) (bool, map[string]any) {
 	if store == nil {
 		return false, nil
@@ -413,6 +553,11 @@ func usageDriftAlertID(projectID, reason string) string {
 }
 
 func usageDriftFingerprint(data map[string]any) string {
+	if textValue(data, "reason", "drift_reason") == usageDriftReasonMissingFresh {
+		ids := shared.StringSlice(data["missing_job_ids"])
+		sort.Strings(ids)
+		return fmt.Sprintf("%s:missing=%s", usageDriftReasonMissingFresh, strings.Join(ids, ","))
+	}
 	return fmt.Sprintf("%s:reserved=%.3f:observed=%.3f",
 		textValue(data, "reason", "drift_reason"),
 		floatValue(data, "reserved_gpu_fraction"),
