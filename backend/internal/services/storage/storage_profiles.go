@@ -10,7 +10,10 @@ import (
 	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
 
-const storageProfilesResource = serviceName + ":storage_profiles"
+const (
+	storageProfilesResource = serviceName + ":storage_profiles"
+	msgStorageProfileSave   = "storage profile could not be saved"
+)
 
 func seedDefaultStorageProfiles(app *platform.App) error {
 	if app == nil || app.Store == nil || !app.Config.AllowsService(serviceName) {
@@ -44,7 +47,7 @@ func createStorageProfile(app *platform.App, r *http.Request, _ platform.RouteSp
 		return storageEvent(r, "StorageProfileChanged", storageProfileEventPayload(record.Data, "created"))
 	})
 	if err != nil {
-		return storageProfileCreateError(err), shared.ErrorData("storage profile could not be saved"), nil
+		return storageProfileCreateError(err), shared.ErrorData(msgStorageProfileSave), nil
 	}
 	return http.StatusCreated, record, nil
 }
@@ -66,14 +69,14 @@ func updateStorageProfile(app *platform.App, r *http.Request, _ platform.RouteSp
 		return storageEvent(r, "StorageProfileChanged", storageProfileEventPayload(record.Data, "updated"))
 	})
 	if err != nil {
-		return http.StatusInternalServerError, shared.ErrorData("storage profile could not be saved"), nil
+		return http.StatusInternalServerError, shared.ErrorData(msgStorageProfileSave), nil
 	}
 	if !ok {
 		record, err = app.CreateRecordWithEvent(r.Context(), storageProfilesResource, payload, func(record contracts.Record[map[string]any]) contracts.Event {
 			return storageEvent(r, "StorageProfileChanged", storageProfileEventPayload(record.Data, "updated"))
 		})
 		if err != nil {
-			return storageProfileCreateError(err), shared.ErrorData("storage profile could not be saved"), nil
+			return storageProfileCreateError(err), shared.ErrorData(msgStorageProfileSave), nil
 		}
 	}
 	return http.StatusOK, record, nil

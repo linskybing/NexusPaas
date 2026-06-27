@@ -21,12 +21,13 @@ import (
 )
 
 const (
-	testSchedulerQueuesResource      = "scheduler-quota-service:queues"
-	testSchedulerPlansResource       = "scheduler-quota-service:plans"
-	testSchedulerAdmissionsResource  = "scheduler-quota-service:submit_admissions"
-	testSchedulerPreemptionsResource = "scheduler-quota-service:preemption_records"
-	testOrgProjectsResource          = "org-project-service:projects"
-	testOrgProjectMembersResource    = "org-project-service:project_members"
+	testSchedulerQueuesResource       = "scheduler-quota-service:queues"
+	testSchedulerPlansResource        = "scheduler-quota-service:plans"
+	testSchedulerAdmissionsResource   = "scheduler-quota-service:submit_admissions"
+	testSchedulerPreemptionsResource  = "scheduler-quota-service:preemption_records"
+	testSchedulerReservationsResource = "scheduler-quota-service:reservations"
+	testOrgProjectsResource           = "org-project-service:projects"
+	testOrgProjectMembersResource     = "org-project-service:project_members"
 )
 
 func TestSubmitJobCallsAdmissionAndPersistsSubmittedJob(t *testing.T) {
@@ -47,14 +48,40 @@ func TestSubmitJobCallsAdmissionAndPersistsSubmittedJob(t *testing.T) {
 	if job["status"] != "submitted" || job["queue_name"] != "default-batch" || job["required_gpu"] != float64(1) {
 		t.Fatalf("submitted job = %#v, want submitted job with normalized admission fields", job)
 	}
+	reservationID, _ := job["reservation_id"].(string)
+	if reservationID == "" || job["reservation_state"] != "committed" {
+		t.Fatalf("submitted job reservation = %#v, want committed reservation id", job)
+	}
 	if len(app.Store.List(context.Background(), jobsResource)) != 1 {
 		t.Fatal("submitted job was not persisted in workload-service:jobs")
 	}
 	if len(app.Store.List(context.Background(), testSchedulerAdmissionsResource)) != 1 {
 		t.Fatal("scheduler admission review was not recorded")
 	}
+	reservation, found := app.Store.Get(context.Background(), testSchedulerReservationsResource, reservationID)
+	if !found || reservation.Data["state"] != "committed" {
+		t.Fatalf("scheduler reservation = found:%v %#v, want committed", found, reservation.Data)
+	}
 	if len(app.Events.Outbox()) == 0 {
 		t.Fatal("job submit did not publish a domain event")
+	}
+}
+
+func TestSubmitJobReleasesCommittedReservationWhenJobCreateFails(t *testing.T) {
+	app := newJobSubmitTestApp()
+	seedJobAdmissionProject(t, app, map[string]any{})
+	createWorkloadRecord(t, app, jobsResource, map[string]any{
+		"id": "J-conflict", "job_id": "J-conflict", "project_id": "P1", "user_id": "U1", "status": "completed",
+	})
+
+	serveSubmitJob(t, app, `{"job_id":"J-conflict","project_id":"P1","user_id":"U1","queue_name":"default-batch","required_cpu":1,"required_memory":1024}`, "U1", http.StatusConflict)
+
+	reservations := app.Store.List(context.Background(), testSchedulerReservationsResource)
+	if len(reservations) != 1 || reservations[0].Data["state"] != "released" {
+		t.Fatalf("reservations after failed submit = %#v, want one released rollback reservation", reservations)
+	}
+	if got := len(app.Store.List(context.Background(), jobsResource)); got != 1 {
+		t.Fatalf("job count after failed submit = %d, want original conflict record only", got)
 	}
 }
 
@@ -396,11 +423,14 @@ func TestSubmitJobUsesRemoteSchedulerAdmissionWhenIsolated(t *testing.T) {
 		ServiceAPIKey: serviceKey,
 	})
 	registerSchedulerAdmissionRoute(schedulerApp)
+	registerSchedulerReservationRoutes(schedulerApp)
 	schedulerquota.Register(schedulerApp)
 	seedSchedulerAdmissionPolicy(t, schedulerApp)
 	var received http.Header
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		received = r.Header.Clone()
+		if r.URL.Path == schedulerAdmissionPath {
+			received = r.Header.Clone()
+		}
 		schedulerApp.ServeHTTP(w, r)
 	}))
 	defer server.Close()
@@ -557,6 +587,7 @@ func newJobSubmitTestAppWithCluster(cl *cluster.Client) *platform.App {
 	registerWorkloadPreemptionRoutes(app)
 	registerSchedulerAdmissionRoute(app)
 	registerSchedulerPreemptionRoute(app)
+	registerSchedulerReservationRoutes(app)
 	schedulerquota.Register(app)
 	Register(app)
 	return app
@@ -576,6 +607,7 @@ func newAuthJobSubmitTestApp() *platform.App {
 	})
 	registerWorkloadJobRoute(app)
 	registerSchedulerAdmissionRoute(app)
+	registerSchedulerReservationRoutes(app)
 	schedulerquota.Register(app)
 	Register(app)
 	return app
@@ -627,6 +659,17 @@ func registerSchedulerPreemptionRoute(app *platform.App) {
 			Action:       "command",
 			AuthRequired: true,
 		}},
+	})
+}
+
+func registerSchedulerReservationRoutes(app *platform.App) {
+	app.RegisterService(platform.ServiceSpec{
+		Name: schedulerServiceName,
+		Routes: []platform.RouteSpec{
+			{Method: http.MethodPost, Pattern: schedulerReservationsPath, Resource: "reservations", Action: "quota_reserve", AuthRequired: true},
+			{Method: http.MethodPost, Pattern: schedulerReservationsPath + "/{reservationId}/commit", Resource: "reservations", Action: "quota_commit", IDParam: "reservationId", AuthRequired: true},
+			{Method: http.MethodPost, Pattern: schedulerReservationsPath + "/{reservationId}/release", Resource: "reservations", Action: "quota_release", IDParam: "reservationId", AuthRequired: true},
+		},
 	})
 }
 

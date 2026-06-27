@@ -121,6 +121,14 @@ type admissionDeny struct {
 	reason string
 }
 
+type submitAdmissionContext struct {
+	project    admissionRecord
+	plan       admissionRecord
+	queue      admissionRecord
+	queueFound bool
+	queueName  string
+}
+
 func (e admissionDeny) Error() string {
 	return e.reason
 }
@@ -167,7 +175,27 @@ func reviewSubmitAdmission(app *platform.App, r *http.Request, _ platform.RouteS
 }
 
 func evaluateSubmitAdmission(ctx context.Context, reader admissionReader, req submitAdmissionRequest, now time.Time) (admissionReview, error) {
-	review := admissionReview{
+	review := newSubmitAdmissionReview(req)
+	admissionCtx, err := resolveSubmitAdmissionContext(ctx, reader, req, now)
+	if err != nil {
+		return review, err
+	}
+	review.QueueName = admissionCtx.queueName
+	applyAdmissionQueueReview(&review, admissionCtx.queue, admissionCtx.queueFound)
+	if err := resolveAdmissionProfiles(ctx, reader, &req, admissionCtx.queueName, &review); err != nil {
+		return review, err
+	}
+	if err := enforceAdmissionProfilePolicies(ctx, reader, admissionCtx, req, &review); err != nil {
+		return review, err
+	}
+	if err := applyAdmissionUsagePolicies(ctx, reader, admissionCtx, req, &review); err != nil {
+		return review, err
+	}
+	return review, nil
+}
+
+func newSubmitAdmissionReview(req submitAdmissionRequest) admissionReview {
+	return admissionReview{
 		Allowed:              true,
 		ProjectID:            req.ProjectID,
 		UserID:               req.UserID,
@@ -177,87 +205,94 @@ func evaluateSubmitAdmission(ctx context.Context, reader admissionReader, req su
 		StreamingSession:     req.StreamingSession,
 		StreamMaxBitrateKbps: req.StreamMaxBitrateKbps,
 	}
+}
+
+func resolveSubmitAdmissionContext(ctx context.Context, reader admissionReader, req submitAdmissionRequest, now time.Time) (submitAdmissionContext, error) {
+	var admissionCtx submitAdmissionContext
 	if strings.TrimSpace(req.ProjectID) == "" {
-		return review, deny(http.StatusBadRequest, "project id is required")
+		return admissionCtx, deny(http.StatusBadRequest, "project id is required")
 	}
 	if strings.TrimSpace(req.UserID) == "" {
-		return review, deny(http.StatusBadRequest, "user id is required")
+		return admissionCtx, deny(http.StatusBadRequest, "user id is required")
 	}
-
 	project, found := reader.Project(ctx, req.ProjectID)
 	if !found {
-		return review, deny(http.StatusNotFound, "project not found")
+		return admissionCtx, deny(http.StatusNotFound, "project not found")
 	}
 	plan, err := admissionProjectPlan(ctx, reader, project, now)
 	if err != nil {
-		return review, err
+		return admissionCtx, err
 	}
 	if err := requireAdmissionProjectAccess(ctx, reader, project, req.UserID); err != nil {
-		return review, err
+		return admissionCtx, err
 	}
-
 	queueName := strings.TrimSpace(req.QueueName)
 	if queueName == "" {
 		queueName = schedulerDefaultQueueName()
 	}
 	if !admissionQueueAllowed(ctx, reader, plan, queueName) {
-		return review, deny(http.StatusForbidden, "queue is not allowed by project plan")
+		return admissionCtx, deny(http.StatusForbidden, "queue is not allowed by project plan")
 	}
-	review.QueueName = queueName
-	var queue admissionRecord
-	var queueFound bool
-	if queue, queueFound = admissionQueueByName(ctx, reader, queueName); queueFound {
+	queue, queueFound := admissionQueueByName(ctx, reader, queueName)
+	return submitAdmissionContext{project: project, plan: plan, queue: queue, queueFound: queueFound, queueName: queueName}, nil
+}
+
+func applyAdmissionQueueReview(review *admissionReview, queue admissionRecord, queueFound bool) {
+	if queueFound {
 		review.QueuePriority = shared.IntValue(queue.Data, "priority_value", "priorityValue", "priority")
 		review.QueuePreemptible = shared.BoolValue(queue.Data, "is_preemptible", "isPreemptible", "preemptible")
 		review.RuntimeLimit = shared.IntValue(queue.Data, "max_runtime_seconds", "maxRuntimeSeconds", "runtime_limit_seconds", "runtimeLimitSeconds")
 	}
-	if err := resolveAdmissionPlacementProfile(ctx, reader, req, queueName, &review); err != nil {
-		return review, err
-	}
-	if err := resolveAdmissionAcceleratorProfile(ctx, reader, &req, &review); err != nil {
-		return review, err
-	}
+}
 
-	if err := enforceAdmissionDeviceClass(plan, &req); err != nil {
-		return review, err
+func resolveAdmissionProfiles(ctx context.Context, reader admissionReader, req *submitAdmissionRequest, queueName string, review *admissionReview) error {
+	if err := resolveAdmissionPlacementProfile(ctx, reader, *req, queueName, review); err != nil {
+		return err
+	}
+	return resolveAdmissionAcceleratorProfile(ctx, reader, req, review)
+}
+
+func enforceAdmissionProfilePolicies(ctx context.Context, reader admissionReader, admissionCtx submitAdmissionContext, req submitAdmissionRequest, review *admissionReview) error {
+	if err := enforceAdmissionDeviceClass(admissionCtx.plan, &req); err != nil {
+		return err
 	}
 	review.DeviceClassName = req.DeviceClassName
 	review.SMPercentage = req.SMPercentage
 	if req.PinnedMemoryLimit != nil {
 		review.PinnedMemoryLimit = strings.TrimSpace(*req.PinnedMemoryLimit)
 	}
-	if err := enforceAdmissionMPSPolicy(ctx, reader, project, plan, queue, queueFound, req); err != nil {
-		return review, err
+	if err := enforceAdmissionMPSPolicy(ctx, reader, admissionCtx.project, admissionCtx.plan, admissionCtx.queue, admissionCtx.queueFound, req); err != nil {
+		return err
 	}
-	if err := resolveAdmissionNetworkProfile(ctx, reader, req, &review); err != nil {
-		return review, err
-	}
+	return resolveAdmissionNetworkProfile(ctx, reader, req, review)
+}
 
+func applyAdmissionUsagePolicies(ctx context.Context, reader admissionReader, admissionCtx submitAdmissionContext, req submitAdmissionRequest, review *admissionReview) error {
 	floor, err := admissionResourceFloorFromRequest(req)
 	if err != nil {
-		return review, deny(http.StatusUnprocessableEntity, err.Error())
+		return deny(http.StatusUnprocessableEntity, err.Error())
 	}
 	review.Usage.ResourceFloorGPU = floor.gpu
 	review.Usage.ResourceFloorCPU = floor.cpu
 	review.Usage.FloorMemoryMB = floor.memoryMB
 	if err := enforceAdmissionResourceFloor(req, floor); err != nil {
-		return review, deny(http.StatusUnprocessableEntity, err.Error())
+		return deny(http.StatusUnprocessableEntity, err.Error())
 	}
 	review.Usage = admissionUsageForJobs(ctx, reader, req.ProjectID, req.UserID, review.Usage)
 	review.Usage.StreamEgressBudgetKbps = req.StreamEgressBudgetKbps
 	if err := enforceAdmissionStreaming(req, review.Usage); err != nil {
-		return review, err
+		return err
 	}
-	if err := enforceAdmissionJobLimits(project, review.Usage); err != nil {
-		return review, err
+	if err := enforceAdmissionJobLimits(admissionCtx.project, review.Usage); err != nil {
+		return err
 	}
-	if err := enforceAdmissionQuota(plan, req, review.Usage); err != nil {
-		return review, err
+	if err := enforceAdmissionQuota(admissionCtx.plan, req, review.Usage); err != nil {
+		return err
 	}
 	if err := enforceAdmissionUserQuota(ctx, reader, req, review.Usage); err != nil {
-		return review, err
+		return err
 	}
-	return review, nil
+	return nil
 }
 
 func deny(status int, reason string) error {

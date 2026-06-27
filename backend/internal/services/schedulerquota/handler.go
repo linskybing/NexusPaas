@@ -82,6 +82,7 @@ func Register(app *platform.App) {
 	registerResourceQuotaReconciler(app)
 	registerPlanWindowReaper(app)
 	registerPriorityClassSync(app)
+	registerReservationDriftDetector(app)
 }
 
 func listQueues(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {

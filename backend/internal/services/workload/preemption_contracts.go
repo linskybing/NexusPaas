@@ -81,6 +81,7 @@ func workloadPreemptJob(app *platform.App, r *http.Request, _ platform.RouteSpec
 	if !ok {
 		return http.StatusInternalServerError, shared.ErrorData("job preemption status update failed"), nil
 	}
+	releaseSubmittedJobReservation(r.Context(), app, r.Header, updated.Data)
 	return http.StatusOK, updated, nil
 }
 

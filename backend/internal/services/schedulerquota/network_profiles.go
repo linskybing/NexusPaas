@@ -10,7 +10,10 @@ import (
 	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 )
 
-const networkProfilesResource = serviceName + ":network_profiles"
+const (
+	networkProfilesResource = serviceName + ":network_profiles"
+	msgNetworkProfileSave   = "network profile could not be saved"
+)
 
 func seedDefaultNetworkProfiles(app *platform.App) error {
 	if app == nil || app.Store == nil || !app.Config.AllowsService(serviceName) {
@@ -44,7 +47,7 @@ func createNetworkProfile(app *platform.App, r *http.Request, _ platform.RouteSp
 		return schedulerEvent(r, "NetworkProfileChanged", "created", networkProfileEventPayload(record.Data, "created"))
 	})
 	if err != nil {
-		return networkProfileCreateError(err), shared.ErrorData("network profile could not be saved"), nil
+		return networkProfileCreateError(err), shared.ErrorData(msgNetworkProfileSave), nil
 	}
 	return http.StatusCreated, record, nil
 }
@@ -66,14 +69,14 @@ func updateNetworkProfile(app *platform.App, r *http.Request, _ platform.RouteSp
 		return schedulerEvent(r, "NetworkProfileChanged", "updated", networkProfileEventPayload(record.Data, "updated"))
 	})
 	if err != nil {
-		return http.StatusInternalServerError, shared.ErrorData("network profile could not be saved"), nil
+		return http.StatusInternalServerError, shared.ErrorData(msgNetworkProfileSave), nil
 	}
 	if !ok {
 		record, err = app.CreateRecordWithEvent(r.Context(), networkProfilesResource, payload, func(record contracts.Record[map[string]any]) contracts.Event {
 			return schedulerEvent(r, "NetworkProfileChanged", "updated", networkProfileEventPayload(record.Data, "updated"))
 		})
 		if err != nil {
-			return networkProfileCreateError(err), shared.ErrorData("network profile could not be saved"), nil
+			return networkProfileCreateError(err), shared.ErrorData(msgNetworkProfileSave), nil
 		}
 	}
 	return http.StatusOK, record, nil

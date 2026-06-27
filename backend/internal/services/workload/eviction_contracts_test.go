@@ -13,6 +13,7 @@ func newWorkloadEvictionTestApp(serviceKey string) *platform.App {
 	app.RegisterService(platform.ServiceSpec{Name: serviceName, Routes: []platform.RouteSpec{
 		{Method: http.MethodPost, Pattern: "/internal/workload/jobs/{id}/evict", Resource: "jobs", Action: "evict", AuthRequired: false},
 	}})
+	registerSchedulerReservationRoutes(app)
 	Register(app)
 	return app
 }
@@ -27,7 +28,10 @@ func TestWorkloadEvictRequiresServiceAuth(t *testing.T) {
 
 func TestWorkloadEvictTransitionIsIdempotent(t *testing.T) {
 	app := newWorkloadEvictionTestApp("svc-key")
-	createWorkloadRecord(t, app, jobsResource, map[string]any{"id": "j1", "job_id": "j1", "status": "queued"})
+	createWorkloadRecord(t, app, testSchedulerReservationsResource, map[string]any{
+		"id": "res-evict", "job_id": "j1", "project_id": "P1", "state": "committed",
+	})
+	createWorkloadRecord(t, app, jobsResource, map[string]any{"id": "j1", "job_id": "j1", "status": "queued", "reservation_id": "res-evict"})
 	body := `{"reason":"Plan window expired"}`
 
 	serveWorkloadPreemption(t, app, http.MethodPost, "/internal/workload/jobs/j1/evict", body, "svc-key", http.StatusOK)
@@ -39,6 +43,10 @@ func TestWorkloadEvictTransitionIsIdempotent(t *testing.T) {
 	}
 	if record.Data["status_reason"] != "Plan window expired" {
 		t.Fatalf("status_reason = %v, want plan window reason", record.Data["status_reason"])
+	}
+	reservation, _ := app.Store.Get(context.Background(), testSchedulerReservationsResource, "res-evict")
+	if reservation.Data["state"] != "released" {
+		t.Fatalf("evicted reservation = %#v, want released", reservation.Data)
 	}
 }
 

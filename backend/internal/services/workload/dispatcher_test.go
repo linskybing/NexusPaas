@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"testing"
@@ -174,6 +175,43 @@ func TestDispatchResourcesRejectsRawSecret(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "super-secret") {
 		t.Fatalf("raw Secret rejection leaked plaintext: %v", err)
+	}
+}
+
+func TestDispatchFailureReleasesReservation(t *testing.T) {
+	now := time.Date(2026, 6, 27, 9, 0, 0, 0, time.UTC)
+	cl := cluster.New(fake.NewSimpleClientset(), "proj")
+	app := platform.NewApp(platform.Config{ServiceName: serviceName}, platform.WithCluster(cl))
+	ctx := context.Background()
+	createWorkloadRecord(t, app, jobsResource, map[string]any{
+		"id":             "J-secret",
+		"job_id":         "J-secret",
+		"project_id":     "P1",
+		"user_id":        "U1",
+		"status":         jobStatusSubmitted,
+		"namespace":      "proj-p1",
+		"reservation_id": "res-dispatch",
+		"resources": []any{map[string]any{
+			"name":     "db-creds",
+			"manifest": `{"apiVersion":"v1","kind":"Secret","metadata":{"name":"db-creds"},"stringData":{"password":"super-secret"}}`,
+		}},
+	})
+	released := []string{}
+	release := func(_ context.Context, _ http.Header, id string) (schedulerReservationResult, error) {
+		released = append(released, id)
+		return schedulerReservationResult{}, nil
+	}
+
+	if err := dispatchSubmittedWorkloadsWithReservationRelease(ctx, app.Cluster, app.Store, nil, nil, release, now); err != nil {
+		t.Fatal(err)
+	}
+
+	record, _ := app.Store.Get(ctx, jobsResource, "J-secret")
+	if record.Data["status"] != jobStatusFailed {
+		t.Fatalf("dispatch failed record = %#v, want failed", record.Data)
+	}
+	if len(released) != 1 || released[0] != "res-dispatch" {
+		t.Fatalf("released reservations = %#v, want res-dispatch", released)
 	}
 }
 

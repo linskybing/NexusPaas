@@ -57,6 +57,15 @@ type dispatchCandidate struct {
 	dueAt  time.Time
 }
 
+type dispatchRuntime struct {
+	cl            *cluster.Client
+	store         platform.RecordStore
+	storageMounts storageMountPlanResolver
+	dataPlanes    dataPlanePlanResolver
+	release       reservationReleaseFunc
+	now           time.Time
+}
+
 func dispatchSubmittedWorkloads(ctx context.Context, cl *cluster.Client, store platform.RecordStore, now time.Time) error {
 	return dispatchSubmittedWorkloadsWithStorageMountClient(ctx, cl, store, nil, now)
 }
@@ -66,6 +75,10 @@ func dispatchSubmittedWorkloadsWithStorageMountClient(ctx context.Context, cl *c
 }
 
 func dispatchSubmittedWorkloadsWithStorageClients(ctx context.Context, cl *cluster.Client, store platform.RecordStore, storageMounts storageMountPlanResolver, dataPlanes dataPlanePlanResolver, now time.Time) error {
+	return dispatchSubmittedWorkloadsWithReservationRelease(ctx, cl, store, storageMounts, dataPlanes, nil, now)
+}
+
+func dispatchSubmittedWorkloadsWithReservationRelease(ctx context.Context, cl *cluster.Client, store platform.RecordStore, storageMounts storageMountPlanResolver, dataPlanes dataPlanePlanResolver, release reservationReleaseFunc, now time.Time) error {
 	jobs := jobRepositoryFromStore(store)
 	if jobs == nil {
 		return nil
@@ -74,8 +87,9 @@ func dispatchSubmittedWorkloadsWithStorageClients(ctx context.Context, cl *clust
 	if len(candidates) > dispatcherMaxJobsPerRun {
 		candidates = candidates[:dispatcherMaxJobsPerRun]
 	}
+	runtime := dispatchRuntime{cl: cl, store: store, storageMounts: storageMounts, dataPlanes: dataPlanes, release: release, now: now}
 	for _, candidate := range candidates {
-		dispatchJob(ctx, cl, store, storageMounts, dataPlanes, candidate.record, now)
+		dispatchJob(ctx, runtime, candidate.record)
 	}
 	return nil
 }
@@ -88,64 +102,64 @@ func dispatchCandidates(ctx context.Context, store platform.RecordStore, now tim
 	return jobs.ListDispatchCandidates(ctx, now)
 }
 
-func dispatchJob(ctx context.Context, cl *cluster.Client, store platform.RecordStore, storageMounts storageMountPlanResolver, dataPlanes dataPlanePlanResolver, record contracts.Record[map[string]any], now time.Time) {
-	if cl == nil {
-		deferDispatchForInfrastructure(ctx, store, record, now, cluster.ErrUnavailable)
+func dispatchJob(ctx context.Context, rt dispatchRuntime, record contracts.Record[map[string]any]) {
+	if rt.cl == nil {
+		deferDispatchForInfrastructure(ctx, rt.store, rt.release, record, rt.now, cluster.ErrUnavailable)
 		return
 	}
 	namespace := shared.TextValue(record.Data, "namespace", "Namespace")
 	if namespace == "" {
-		failDispatchedJob(ctx, store, record.ID, "namespace is required")
+		failDispatchedJob(ctx, rt.store, rt.release, record.ID, "namespace is required")
 		return
 	}
 	resources, err := dispatchResources(record.Data)
 	if err != nil {
-		failDispatchedJob(ctx, store, record.ID, err.Error())
+		failDispatchedJob(ctx, rt.store, rt.release, record.ID, err.Error())
 		return
 	}
 	if len(resources) == 0 {
-		failDispatchedJob(ctx, store, record.ID, "no workload resources found")
+		failDispatchedJob(ctx, rt.store, rt.release, record.ID, "no workload resources found")
 		return
 	}
-	if err := cl.EnsureNamespace(ctx, namespace); err != nil {
-		deferDispatchForInfrastructure(ctx, store, record, now, err)
+	if err := rt.cl.EnsureNamespace(ctx, namespace); err != nil {
+		deferDispatchForInfrastructure(ctx, rt.store, rt.release, record, rt.now, err)
 		return
 	}
-	storagePlan, err := resolveDispatchStorageMountPlan(ctx, storageMounts, record.Data, namespace)
+	storagePlan, err := resolveDispatchStorageMountPlan(ctx, rt.storageMounts, record.Data, namespace)
 	if err != nil {
-		handleDispatchCreateError(ctx, store, record, now, err)
+		handleDispatchCreateError(ctx, rt.store, rt.release, record, rt.now, err)
 		return
 	}
-	if err := ensureDispatchPVCMounts(ctx, cl, storagePlan, namespace); err != nil {
-		handleDispatchCreateError(ctx, store, record, now, err)
+	if err := ensureDispatchPVCMounts(ctx, rt.cl, storagePlan, namespace); err != nil {
+		handleDispatchCreateError(ctx, rt.store, rt.release, record, rt.now, err)
 		return
 	}
-	dataPlanePlan, err := resolveDispatchDataPlanePlan(ctx, dataPlanes, record.Data, namespace)
+	dataPlanePlan, err := resolveDispatchDataPlanePlan(ctx, rt.dataPlanes, record.Data, namespace)
 	if err != nil {
-		handleDispatchCreateError(ctx, store, record, now, err)
+		handleDispatchCreateError(ctx, rt.store, rt.release, record, rt.now, err)
 		return
 	}
-	if err := ensureDispatchDataPlanePVCMounts(ctx, cl, dataPlanePlan, namespace); err != nil {
-		handleDispatchCreateError(ctx, store, record, now, err)
+	if err := ensureDispatchDataPlanePVCMounts(ctx, rt.cl, dataPlanePlan, namespace); err != nil {
+		handleDispatchCreateError(ctx, rt.store, rt.release, record, rt.now, err)
 		return
 	}
-	manifests, err := prepareDispatchManifests(record.Data, resources, namespace, cl, storagePlan, dataPlanePlan)
+	manifests, err := prepareDispatchManifests(record.Data, resources, namespace, rt.cl, storagePlan, dataPlanePlan)
 	if err != nil {
-		rollbackDispatch(ctx, cl, namespace, record.ID)
-		failDispatchedJob(ctx, store, record.ID, err.Error())
+		rollbackDispatch(ctx, rt.cl, namespace, record.ID)
+		failDispatchedJob(ctx, rt.store, rt.release, record.ID, err.Error())
 		return
 	}
 	created := make([]map[string]any, 0, len(manifests))
 	for _, manifest := range manifests {
-		objects, err := createDispatchManifest(ctx, cl, namespace, manifest)
+		objects, err := createDispatchManifest(ctx, rt.cl, namespace, manifest)
 		if err != nil {
-			rollbackDispatch(ctx, cl, namespace, record.ID)
-			handleDispatchCreateError(ctx, store, record, now, err)
+			rollbackDispatch(ctx, rt.cl, namespace, record.ID)
+			handleDispatchCreateError(ctx, rt.store, rt.release, record, rt.now, err)
 			return
 		}
 		created = append(created, objects...)
 	}
-	markDispatchedJobRunning(ctx, store, record.ID, now, created)
+	markDispatchedJobRunning(ctx, rt.store, record.ID, rt.now, created)
 }
 
 func createDispatchManifest(
@@ -695,25 +709,34 @@ func markDispatchedJobRunning(ctx context.Context, store platform.RecordStore, i
 	}
 }
 
-func failDispatchedJob(ctx context.Context, store platform.RecordStore, id, reason string) {
+func failDispatchedJob(ctx context.Context, store platform.RecordStore, release reservationReleaseFunc, id, reason string) {
 	jobs := jobRepositoryFromStore(store)
-	if jobs == nil || !jobs.MarkDispatchFailed(ctx, id, jobDispatchFailedUpdate{Reason: reason, CompletedAt: time.Now().UTC()}) {
+	if jobs == nil {
 		slog.Warn("dispatcher: failed to mark job failed", "job_id", id)
-	}
-}
-
-func handleDispatchCreateError(ctx context.Context, store platform.RecordStore, record contracts.Record[map[string]any], now time.Time, err error) {
-	if dispatchPermanentError(err) {
-		failDispatchedJob(ctx, store, record.ID, err.Error())
 		return
 	}
-	deferDispatchForInfrastructure(ctx, store, record, now, err)
+	record, found := jobs.FindJob(ctx, id)
+	if !jobs.MarkDispatchFailed(ctx, id, jobDispatchFailedUpdate{Reason: reason, CompletedAt: time.Now().UTC()}) {
+		slog.Warn("dispatcher: failed to mark job failed", "job_id", id)
+		return
+	}
+	if found {
+		releaseJobReservation(ctx, release, nil, record.Data)
+	}
 }
 
-func deferDispatchForInfrastructure(ctx context.Context, store platform.RecordStore, record contracts.Record[map[string]any], now time.Time, err error) {
+func handleDispatchCreateError(ctx context.Context, store platform.RecordStore, release reservationReleaseFunc, record contracts.Record[map[string]any], now time.Time, err error) {
+	if dispatchPermanentError(err) {
+		failDispatchedJob(ctx, store, release, record.ID, err.Error())
+		return
+	}
+	deferDispatchForInfrastructure(ctx, store, release, record, now, err)
+}
+
+func deferDispatchForInfrastructure(ctx context.Context, store platform.RecordStore, release reservationReleaseFunc, record contracts.Record[map[string]any], now time.Time, err error) {
 	nextRetryCount := shared.IntValue(record.Data, "retry_count", "retryCount") + 1
 	if nextRetryCount >= dispatcherRetryMaxAttempts {
-		failDispatchedJob(ctx, store, record.ID, fmt.Sprintf("infrastructure recovery retry limit reached after %d attempts: %v", nextRetryCount, err))
+		failDispatchedJob(ctx, store, release, record.ID, fmt.Sprintf("infrastructure recovery retry limit reached after %d attempts: %v", nextRetryCount, err))
 		return
 	}
 	delay := dispatcherBackoff(nextRetryCount)
@@ -794,6 +817,6 @@ func registerJobDispatcher(app *platform.App) {
 		}
 	}
 	app.RegisterMaintenanceTaskForService(serviceName, "workload-dispatcher", func(ctx context.Context) error {
-		return dispatchSubmittedWorkloadsWithStorageClients(ctx, app.Cluster, app.Store, storageMounts, dataPlanes, time.Now().UTC())
+		return dispatchSubmittedWorkloadsWithReservationRelease(ctx, app.Cluster, app.Store, storageMounts, dataPlanes, schedulerReservationReleaseFuncForApp(app), time.Now().UTC())
 	})
 }

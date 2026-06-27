@@ -159,6 +159,13 @@ func admissionReviewData(review admissionReview) map[string]any {
 			"stream_egress_budget_kbps":  review.Usage.StreamEgressBudgetKbps,
 		},
 	}
+	addAdmissionNetworkReviewData(data, review)
+	addAdmissionPlacementReviewData(data, review)
+	addAdmissionAcceleratorReviewData(data, review)
+	return data
+}
+
+func addAdmissionNetworkReviewData(data map[string]any, review admissionReview) {
 	if review.NetworkProfile != "" {
 		data["network_profile"] = review.NetworkProfile
 	}
@@ -177,6 +184,9 @@ func admissionReviewData(review admissionReview) map[string]any {
 	if len(review.NetworkEnv) > 0 {
 		data["network_env"] = shared.CloneMap(review.NetworkEnv)
 	}
+}
+
+func addAdmissionPlacementReviewData(data map[string]any, review admissionReview) {
 	if review.PlacementProfile != "" {
 		data["placement_profile"] = review.PlacementProfile
 	}
@@ -198,6 +208,9 @@ func admissionReviewData(review admissionReview) map[string]any {
 	if len(review.PlacementAnnotations) > 0 {
 		data["placement_annotations"] = shared.CloneMap(review.PlacementAnnotations)
 	}
+}
+
+func addAdmissionAcceleratorReviewData(data map[string]any, review admissionReview) {
 	if review.AcceleratorProfile != "" {
 		data["accelerator_profile"] = review.AcceleratorProfile
 	}
@@ -213,7 +226,6 @@ func admissionReviewData(review admissionReview) map[string]any {
 	if review.PinnedMemoryLimit != "" {
 		data["pinned_memory_limit"] = review.PinnedMemoryLimit
 	}
-	return data
 }
 
 func persistAdmissionReview(ctx context.Context, repo *recordStoreSchedulerQuotaRepository, review admissionReview) {

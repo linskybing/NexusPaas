@@ -2,6 +2,7 @@ package workload
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -97,6 +98,37 @@ func TestReconcileNativeWorkloadStatusesSkipsTerminalAndMissingRecords(t *testin
 	missing, _ := app.Store.Get(ctx, jobsResource, "store-missing")
 	if missing.Data["status"] != jobStatusRunning || missing.Data["status_reason"] != nil {
 		t.Fatalf("missing record = %#v, want no update without cluster resources", missing.Data)
+	}
+}
+
+func TestReconcileNativeWorkloadStatusesReleasesTerminalReservation(t *testing.T) {
+	now := time.Date(2026, 6, 27, 9, 5, 0, 0, time.UTC)
+	completed := metav1.NewTime(now)
+	cl := cluster.New(fake.NewSimpleClientset(
+		reconcilerBatchJob("proj-p1", "complete", "cluster-complete", batchv1.JobStatus{
+			CompletionTime: &completed,
+			Conditions: []batchv1.JobCondition{{
+				Type: batchv1.JobComplete, Status: corev1.ConditionTrue,
+			}},
+		}),
+	), "proj")
+	app := platform.NewApp(platform.Config{ServiceName: serviceName}, platform.WithCluster(cl))
+	ctx := context.Background()
+	createWorkloadRecord(t, app, jobsResource, map[string]any{
+		"id": "store-complete", "job_id": "cluster-complete", "status": jobStatusRunning, "namespace": "proj-p1", "reservation_id": "res-lifecycle",
+	})
+	released := []string{}
+	release := func(_ context.Context, _ http.Header, id string) (schedulerReservationResult, error) {
+		released = append(released, id)
+		return schedulerReservationResult{}, nil
+	}
+
+	if err := reconcileNativeWorkloadStatusesWithReservationRelease(ctx, app.Cluster, app.Store, release, now); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(released) != 1 || released[0] != "res-lifecycle" {
+		t.Fatalf("released reservations = %#v, want res-lifecycle", released)
 	}
 }
 

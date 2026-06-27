@@ -47,6 +47,10 @@ type admissionReader interface {
 	ListWorkloadJobs(ctx context.Context) []admissionRecord
 }
 
+type workloadJobAvailabilityReader interface {
+	ListWorkloadJobsAvailable(ctx context.Context) ([]admissionRecord, bool)
+}
+
 // storeAdmissionReader is the co-hosted/local implementation of admissionReader.
 // It is the only place that maps the typed reads to concrete resource keys.
 type storeAdmissionReader struct {
@@ -153,7 +157,15 @@ func (rdr storeAdmissionReader) ListUserQuotas(ctx context.Context) []admissionR
 }
 
 func (rdr storeAdmissionReader) ListWorkloadJobs(ctx context.Context) []admissionRecord {
-	return rdr.list(ctx, workloadJobsResource)
+	records, _ := rdr.ListWorkloadJobsAvailable(ctx)
+	return records
+}
+
+func (rdr storeAdmissionReader) ListWorkloadJobsAvailable(ctx context.Context) ([]admissionRecord, bool) {
+	if rdr.store == nil {
+		return nil, false
+	}
+	return rdr.list(ctx, workloadJobsResource), true
 }
 
 type ownerReadAdmissionReader struct {
@@ -215,7 +227,23 @@ func (rdr ownerReadAdmissionReader) ListUserQuotas(ctx context.Context) []admiss
 }
 
 func (rdr ownerReadAdmissionReader) ListWorkloadJobs(ctx context.Context) []admissionRecord {
-	return rdr.listOwner(ctx, workloadJobsResource)
+	records, _ := rdr.ListWorkloadJobsAvailable(ctx)
+	return records
+}
+
+func (rdr ownerReadAdmissionReader) ListWorkloadJobsAvailable(ctx context.Context) ([]admissionRecord, bool) {
+	if rdr.isLocalOwner(workloadJobsResource) {
+		return rdr.local.ListWorkloadJobsAvailable(ctx)
+	}
+	if rdr.owner == nil {
+		return nil, false
+	}
+	records, err := rdr.owner.List(ctx, workloadJobsResource)
+	if err != nil {
+		slog.Error("scheduler quota owner read list failed", "resource", workloadJobsResource, "error", err)
+		return nil, false
+	}
+	return records, true
 }
 
 func (rdr ownerReadAdmissionReader) getOwner(ctx context.Context, resource, id string) (admissionRecord, bool) {

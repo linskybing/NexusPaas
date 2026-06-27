@@ -33,6 +33,9 @@ const (
 	msgGroupAdminRequired  = "group admin access required"
 	msgProjectMember       = "project member access required"
 	msgProjectManager      = "project manager access required"
+	msgFastTransferMissing = "fast transfer not found"
+
+	pathProjectStorageCacheBinding = "/api/v1/projects/{id}/storage/cache-bindings/{cacheBindingId}"
 )
 
 func Register(app *platform.App) {
@@ -71,9 +74,9 @@ func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodDelete, "/api/v1/projects/{id}/storage/bindings/{requestId}", deleteProjectBinding)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/projects/{id}/storage/cache-bindings", listCacheBindings)
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/projects/{id}/storage/cache-bindings", createCacheBinding)
-	app.RegisterCustomHandler(http.MethodGet, "/api/v1/projects/{id}/storage/cache-bindings/{cacheBindingId}", getCacheBinding)
-	app.RegisterCustomHandler(http.MethodPut, "/api/v1/projects/{id}/storage/cache-bindings/{cacheBindingId}", updateCacheBinding)
-	app.RegisterCustomHandler(http.MethodDelete, "/api/v1/projects/{id}/storage/cache-bindings/{cacheBindingId}", deleteCacheBinding)
+	app.RegisterCustomHandler(http.MethodGet, pathProjectStorageCacheBinding, getCacheBinding)
+	app.RegisterCustomHandler(http.MethodPut, pathProjectStorageCacheBinding, updateCacheBinding)
+	app.RegisterCustomHandler(http.MethodDelete, pathProjectStorageCacheBinding, deleteCacheBinding)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/projects/{id}/storage/bindings/{pvcId}/permissions", listProjectBindingPermissions)
 	app.RegisterCustomHandler(http.MethodPut, "/api/v1/projects/{id}/storage/bindings/{pvcId}/permissions", setProjectBindingPermission)
 	app.RegisterCustomHandler(http.MethodDelete, "/api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/{userId}", deleteProjectBindingPermission)
@@ -505,7 +508,7 @@ func getFastTransfer(app *platform.App, r *http.Request, _ platform.RouteSpec) (
 	}
 	record, found := storageRepo(app).GetFastTransfer(r.Context(), projectID, r.PathValue("targetNamespace"), r.PathValue("name"))
 	if !found {
-		return http.StatusNotFound, shared.ErrorData("fast transfer not found"), nil
+		return http.StatusNotFound, shared.ErrorData(msgFastTransferMissing), nil
 	}
 	return http.StatusOK, record, nil
 }
@@ -523,7 +526,7 @@ func cancelFastTransfer(app *platform.App, r *http.Request, _ platform.RouteSpec
 	repo := storageRepo(app)
 	current, found := repo.GetFastTransfer(r.Context(), projectID, namespace, name)
 	if !found {
-		return http.StatusNotFound, shared.ErrorData("fast transfer not found"), nil
+		return http.StatusNotFound, shared.ErrorData(msgFastTransferMissing), nil
 	}
 	patch, status, err := fastTransferCancelPatch(current, time.Now().UTC())
 	if err != nil {
@@ -536,7 +539,7 @@ func cancelFastTransfer(app *platform.App, r *http.Request, _ platform.RouteSpec
 		return http.StatusInternalServerError, shared.ErrorData("fast transfer could not be cancelled"), nil
 	}
 	if !ok {
-		return http.StatusNotFound, shared.ErrorData("fast transfer not found"), nil
+		return http.StatusNotFound, shared.ErrorData(msgFastTransferMissing), nil
 	}
 	return http.StatusOK, updated, nil
 }
@@ -554,7 +557,7 @@ func updateFastTransferProgress(app *platform.App, r *http.Request, _ platform.R
 	repo := storageRepo(app)
 	current, found := repo.GetFastTransfer(r.Context(), projectID, namespace, name)
 	if !found {
-		return http.StatusNotFound, shared.ErrorData("fast transfer not found"), nil
+		return http.StatusNotFound, shared.ErrorData(msgFastTransferMissing), nil
 	}
 	patch, eventName, status, err := fastTransferProgressPatchFromPayload(current, payload, time.Now().UTC())
 	if err != nil {
@@ -567,7 +570,7 @@ func updateFastTransferProgress(app *platform.App, r *http.Request, _ platform.R
 		return http.StatusInternalServerError, shared.ErrorData("fast transfer could not be updated"), nil
 	}
 	if !ok {
-		return http.StatusNotFound, shared.ErrorData("fast transfer not found"), nil
+		return http.StatusNotFound, shared.ErrorData(msgFastTransferMissing), nil
 	}
 	if eventName != fastTransferChangedEvent {
 		publishEvent(app, r, eventName, fastTransferEventPayload(updated, shared.TextValue(updated, "status")))

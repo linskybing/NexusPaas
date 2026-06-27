@@ -12,7 +12,10 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-const acceleratorProfilesResource = serviceName + ":accelerator_profiles"
+const (
+	acceleratorProfilesResource = serviceName + ":accelerator_profiles"
+	msgAcceleratorProfileSave   = "accelerator profile could not be saved"
+)
 
 func seedDefaultAcceleratorProfiles(app *platform.App) error {
 	if app == nil || app.Store == nil || !app.Config.AllowsService(serviceName) {
@@ -43,7 +46,7 @@ func createAcceleratorProfile(app *platform.App, r *http.Request, _ platform.Rou
 		return schedulerEvent(r, "AcceleratorProfileChanged", "created", acceleratorProfileEventPayload(record.Data, "created"))
 	})
 	if err != nil {
-		return acceleratorProfileCreateError(err), shared.ErrorData("accelerator profile could not be saved"), nil
+		return acceleratorProfileCreateError(err), shared.ErrorData(msgAcceleratorProfileSave), nil
 	}
 	return http.StatusCreated, record, nil
 }
@@ -62,14 +65,14 @@ func updateAcceleratorProfile(app *platform.App, r *http.Request, _ platform.Rou
 		return schedulerEvent(r, "AcceleratorProfileChanged", "updated", acceleratorProfileEventPayload(record.Data, "updated"))
 	})
 	if err != nil {
-		return http.StatusInternalServerError, shared.ErrorData("accelerator profile could not be saved"), nil
+		return http.StatusInternalServerError, shared.ErrorData(msgAcceleratorProfileSave), nil
 	}
 	if !ok {
 		record, err = app.CreateRecordWithEvent(r.Context(), acceleratorProfilesResource, payload, func(record contracts.Record[map[string]any]) contracts.Event {
 			return schedulerEvent(r, "AcceleratorProfileChanged", "updated", acceleratorProfileEventPayload(record.Data, "updated"))
 		})
 		if err != nil {
-			return acceleratorProfileCreateError(err), shared.ErrorData("accelerator profile could not be saved"), nil
+			return acceleratorProfileCreateError(err), shared.ErrorData(msgAcceleratorProfileSave), nil
 		}
 	}
 	return http.StatusOK, record, nil
@@ -103,44 +106,79 @@ func normalizeAcceleratorProfilePayload(payload map[string]any) (map[string]any,
 	if strings.TrimSpace(shared.TextValue(payload, "name")) == "" {
 		return nil, fmt.Errorf("missing required field: name")
 	}
+	if err := normalizeAcceleratorProfileEnabled(payload); err != nil {
+		return nil, err
+	}
+	if err := normalizeAcceleratorProfileMaps(payload); err != nil {
+		return nil, err
+	}
+	if err := normalizeAcceleratorProfileMPS(payload); err != nil {
+		return nil, err
+	}
+	if err := normalizeAcceleratorProfilePinnedMemory(payload); err != nil {
+		return nil, err
+	}
+	if err := normalizeAcceleratorProfileDeviceClass(payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func normalizeAcceleratorProfileEnabled(payload map[string]any) error {
 	if value, found := firstPresent(payload, "enabled", "Enabled"); found {
 		if _, ok := value.(bool); !ok {
-			return nil, fmt.Errorf("enabled must be a boolean")
+			return fmt.Errorf("enabled must be a boolean")
 		}
-	} else {
-		payload["enabled"] = true
+		return nil
 	}
+	payload["enabled"] = true
+	return nil
+}
+
+func normalizeAcceleratorProfileMaps(payload map[string]any) error {
 	nodeSelector, err := acceleratorStringMap(payload["node_selector"])
 	if err != nil {
-		return nil, fmt.Errorf("node_selector %w", err)
+		return fmt.Errorf("node_selector %w", err)
 	}
 	labels, err := acceleratorStringMap(payload["labels"])
 	if err != nil {
-		return nil, fmt.Errorf("labels %w", err)
+		return fmt.Errorf("labels %w", err)
 	}
 	payload["node_selector"] = nodeSelector
 	payload["labels"] = labels
+	return nil
+}
+
+func normalizeAcceleratorProfileMPS(payload map[string]any) error {
 	if value, found := firstPresent(payload, "default_mps_sm_percentage", "defaultMpsSmPercentage"); found {
 		sm := int(getInt64(value, 0))
 		if sm < 1 || sm > 100 {
-			return nil, fmt.Errorf("default_mps_sm_percentage must be between 1 and 100")
+			return fmt.Errorf("default_mps_sm_percentage must be between 1 and 100")
 		}
 		payload["default_mps_sm_percentage"] = sm
 	}
+	return nil
+}
+
+func normalizeAcceleratorProfilePinnedMemory(payload map[string]any) error {
 	if pinned := shared.TextValue(payload, "default_pinned_memory_limit", "defaultPinnedMemoryLimit"); pinned != "" {
 		if _, err := resource.ParseQuantity(pinned); err != nil {
-			return nil, fmt.Errorf("invalid default_pinned_memory_limit %q: %w", pinned, err)
+			return fmt.Errorf("invalid default_pinned_memory_limit %q: %w", pinned, err)
 		}
 		payload["default_pinned_memory_limit"] = pinned
 	}
+	return nil
+}
+
+func normalizeAcceleratorProfileDeviceClass(payload map[string]any) error {
 	if value, found := firstPresent(payload, "allowed_device_class_name", "allowedDeviceClassName"); found {
 		text, ok := value.(string)
 		if !ok || strings.TrimSpace(text) == "" {
-			return nil, fmt.Errorf("allowed_device_class_name must be a non-empty string")
+			return fmt.Errorf("allowed_device_class_name must be a non-empty string")
 		}
 		payload["allowed_device_class_name"] = strings.TrimSpace(text)
 	}
-	return payload, nil
+	return nil
 }
 
 func acceleratorStringMap(raw any) (map[string]any, error) {
@@ -149,34 +187,40 @@ func acceleratorStringMap(raw any) (map[string]any, error) {
 	}
 	switch typed := raw.(type) {
 	case map[string]any:
-		out := map[string]any{}
-		for key, value := range typed {
-			text, ok := value.(string)
-			if !ok {
-				return nil, fmt.Errorf("must contain string values")
-			}
-			key = strings.TrimSpace(key)
-			text = strings.TrimSpace(text)
-			if key == "" || text == "" {
-				continue
-			}
-			out[key] = text
-		}
-		return out, nil
+		return acceleratorAnyStringMap(typed)
 	case map[string]string:
-		out := map[string]any{}
-		for key, value := range typed {
-			key = strings.TrimSpace(key)
-			value = strings.TrimSpace(value)
-			if key == "" || value == "" {
-				continue
-			}
-			out[key] = value
-		}
-		return out, nil
+		return acceleratorTypedStringMap(typed), nil
 	default:
 		return nil, fmt.Errorf("must be an object")
 	}
+}
+
+func acceleratorAnyStringMap(input map[string]any) (map[string]any, error) {
+	out := map[string]any{}
+	for key, value := range input {
+		text, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("must contain string values")
+		}
+		key = strings.TrimSpace(key)
+		text = strings.TrimSpace(text)
+		if key != "" && text != "" {
+			out[key] = text
+		}
+	}
+	return out, nil
+}
+
+func acceleratorTypedStringMap(input map[string]string) map[string]any {
+	out := map[string]any{}
+	for key, value := range input {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key != "" && value != "" {
+			out[key] = value
+		}
+	}
+	return out
 }
 
 func acceleratorProfileEventPayload(data map[string]any, action string) map[string]any {

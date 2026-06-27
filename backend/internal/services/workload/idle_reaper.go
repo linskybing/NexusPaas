@@ -19,6 +19,15 @@ const (
 	staleJobGracePeriod       = 5 * time.Minute
 )
 
+type idleReaperRun struct {
+	cl              *cluster.Client
+	store           platform.RecordStore
+	release         reservationReleaseFunc
+	now             time.Time
+	threshold       time.Duration
+	deletionEnabled bool
+}
+
 // reapIdleInteractiveWorkloads deletes interactive workload pods whose last
 // activity timestamp exceeds the configured idle timeout, then fails stale active
 // job records whose Kubernetes resources are gone. It ports the reference idle
@@ -31,30 +40,43 @@ func reapIdleInteractiveWorkloads(
 	threshold time.Duration,
 	deletionEnabled bool,
 ) error {
+	return reapIdleInteractiveWorkloadsWithReservationRelease(ctx, cl, store, nil, now, threshold, deletionEnabled)
+}
+
+func reapIdleInteractiveWorkloadsWithReservationRelease(
+	ctx context.Context,
+	cl *cluster.Client,
+	store platform.RecordStore,
+	release reservationReleaseFunc,
+	now time.Time,
+	threshold time.Duration,
+	deletionEnabled bool,
+) error {
 	if cl == nil {
 		return nil
 	}
 	if threshold <= 0 {
 		threshold = defaultIdleTimeout
 	}
-	pods, err := cl.ListPodsByLabel(ctx, "", idleResourceTypeLabel)
+	run := idleReaperRun{cl: cl, store: store, release: release, now: now, threshold: threshold, deletionEnabled: deletionEnabled}
+	return reapIdleInteractiveWorkloadsRun(ctx, run)
+}
+
+func reapIdleInteractiveWorkloadsRun(ctx context.Context, run idleReaperRun) error {
+	pods, err := run.cl.ListPodsByLabel(ctx, "", idleResourceTypeLabel)
 	if err != nil {
 		return err
 	}
 	for _, pod := range pods {
-		reapIdleInteractivePod(ctx, cl, store, pod, now, threshold, deletionEnabled)
+		reapIdleInteractivePod(ctx, run, pod)
 	}
-	return reapStaleJobRecords(ctx, cl, store, now)
+	return reapStaleJobRecords(ctx, run.cl, run.store, run.release, run.now)
 }
 
 func reapIdleInteractivePod(
 	ctx context.Context,
-	cl *cluster.Client,
-	store platform.RecordStore,
+	run idleReaperRun,
 	pod cluster.PodInfo,
-	now time.Time,
-	threshold time.Duration,
-	deletionEnabled bool,
 ) {
 	resourceType := strings.TrimSpace(pod.Labels[idleResourceTypeLabel])
 	if !strings.HasPrefix(resourceType, interactiveResourcePrefix) {
@@ -64,40 +86,38 @@ func reapIdleInteractivePod(
 	if !ok {
 		return
 	}
-	idleFor := now.Sub(lastActivity)
-	if idleFor <= threshold {
+	idleFor := run.now.Sub(lastActivity)
+	if idleFor <= run.threshold {
 		return
 	}
 	jobID := strings.TrimSpace(pod.Labels[cluster.LabelJobID])
-	if !deletionEnabled {
+	if !run.deletionEnabled {
 		slog.Warn("idle reaper: automated pod deletion disabled, leaving idle pod running",
 			"pod", pod.Name, "namespace", pod.Namespace, "job_id", jobID)
 		return
 	}
 	if jobID != "" {
-		reapIdleJobPod(ctx, cl, store, pod, jobID, idleFor, threshold)
+		reapIdleJobPod(ctx, run, pod, jobID, idleFor)
 		return
 	}
-	if err := cl.DeletePod(ctx, pod.Namespace, pod.Name); err != nil {
+	if err := run.cl.DeletePod(ctx, pod.Namespace, pod.Name); err != nil {
 		slog.Warn("idle reaper: delete idle pod failed", "pod", pod.Name, "namespace", pod.Namespace, "error", err)
 	}
 }
 
 func reapIdleJobPod(
 	ctx context.Context,
-	cl *cluster.Client,
-	store platform.RecordStore,
+	run idleReaperRun,
 	pod cluster.PodInfo,
 	jobID string,
 	idleFor time.Duration,
-	threshold time.Duration,
 ) {
-	if _, err := cl.CleanupJobResources(ctx, pod.Namespace, jobID); err != nil {
+	if _, err := run.cl.CleanupJobResources(ctx, pod.Namespace, jobID); err != nil {
 		slog.Warn("idle reaper: cleanup job resources failed", "job_id", jobID, "namespace", pod.Namespace, "error", err)
 		return
 	}
-	reason := "Reaped: idle timeout exceeded (idle_for=" + idleFor.String() + ", threshold=" + threshold.String() + ")"
-	markJobFailed(ctx, store, jobID, reason)
+	reason := "Reaped: idle timeout exceeded (idle_for=" + idleFor.String() + ", threshold=" + run.threshold.String() + ")"
+	markJobFailed(ctx, run.store, run.release, jobID, reason)
 }
 
 func parseLastActivity(annotations map[string]string) (time.Time, bool) {
@@ -109,7 +129,7 @@ func parseLastActivity(annotations map[string]string) (time.Time, bool) {
 	return value, err == nil
 }
 
-func reapStaleJobRecords(ctx context.Context, cl *cluster.Client, store platform.RecordStore, now time.Time) error {
+func reapStaleJobRecords(ctx context.Context, cl *cluster.Client, store platform.RecordStore, release reservationReleaseFunc, now time.Time) error {
 	jobs := jobRepositoryFromStore(store)
 	if cl == nil || jobs == nil {
 		return nil
@@ -123,7 +143,7 @@ func reapStaleJobRecords(ctx context.Context, cl *cluster.Client, store platform
 		if namespace == "" || existingPods[namespace+"/"+record.ID] {
 			continue
 		}
-		markJobFailed(ctx, store, record.ID, "Resource no longer exists in cluster")
+		markJobFailed(ctx, store, release, record.ID, "Resource no longer exists in cluster")
 	}
 	return nil
 }
@@ -163,10 +183,11 @@ func jobCreatedAt(data map[string]any, fallback time.Time) time.Time {
 
 func registerIdleReaper(app *platform.App) {
 	app.RegisterMaintenanceTaskForService(serviceName, "idle-reaper", func(ctx context.Context) error {
-		return reapIdleInteractiveWorkloads(
+		return reapIdleInteractiveWorkloadsWithReservationRelease(
 			ctx,
 			app.Cluster,
 			app.Store,
+			schedulerReservationReleaseFuncForApp(app),
 			time.Now().UTC(),
 			app.Config.WorkloadIdleTimeout,
 			app.Config.AutomatedPodDeletion,

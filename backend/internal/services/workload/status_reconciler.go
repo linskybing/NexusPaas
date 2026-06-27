@@ -23,6 +23,10 @@ var statusReconcilerLiveStatuses = map[string]bool{
 }
 
 func reconcileNativeWorkloadStatuses(ctx context.Context, cl *cluster.Client, store platform.RecordStore, now time.Time) error {
+	return reconcileNativeWorkloadStatusesWithReservationRelease(ctx, cl, store, nil, now)
+}
+
+func reconcileNativeWorkloadStatusesWithReservationRelease(ctx context.Context, cl *cluster.Client, store platform.RecordStore, release reservationReleaseFunc, now time.Time) error {
 	jobs := jobRepositoryFromStore(store)
 	if cl == nil || jobs == nil {
 		return nil
@@ -31,7 +35,7 @@ func reconcileNativeWorkloadStatuses(ctx context.Context, cl *cluster.Client, st
 		now = time.Now().UTC()
 	}
 	for _, record := range jobs.ListLifecycleReconcileCandidates(ctx) {
-		if err := reconcileNativeWorkloadRecord(ctx, cl, jobs, record, now); err != nil {
+		if err := reconcileNativeWorkloadRecord(ctx, cl, jobs, release, record, now); err != nil {
 			return err
 		}
 	}
@@ -42,6 +46,7 @@ func reconcileNativeWorkloadRecord(
 	ctx context.Context,
 	cl *cluster.Client,
 	jobs *recordStoreWorkloadJobRepository,
+	release reservationReleaseFunc,
 	record contracts.Record[map[string]any],
 	now time.Time,
 ) error {
@@ -59,6 +64,10 @@ func reconcileNativeWorkloadRecord(
 	}
 	if !jobs.ApplyLifecycleObservation(ctx, record, lifecycle, now) {
 		slog.Warn("status reconciler: failed to update job", "job_id", record.ID, "status", lifecycle.Status)
+		return nil
+	}
+	if lifecycle.Status == jobStatusCompleted || lifecycle.Status == jobStatusFailed {
+		releaseJobReservation(ctx, release, nil, record.Data)
 	}
 	return nil
 }
@@ -120,6 +129,6 @@ func lifecycleTimeOrNow(value *time.Time, now time.Time) string {
 
 func registerStatusReconciler(app *platform.App) {
 	app.RegisterMaintenanceTaskForService(serviceName, "workload-status-reconciler", func(ctx context.Context) error {
-		return reconcileNativeWorkloadStatuses(ctx, app.Cluster, app.Store, time.Now().UTC())
+		return reconcileNativeWorkloadStatusesWithReservationRelease(ctx, app.Cluster, app.Store, schedulerReservationReleaseFuncForApp(app), time.Now().UTC())
 	})
 }

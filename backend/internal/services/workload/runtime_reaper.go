@@ -23,6 +23,10 @@ var activeJobStatuses = map[string]bool{
 // .reapExpiredRuntimeWorkloads: resources carrying a job-id label are cleaned up as
 // a unit (and the job marked failed, once), other resources are deleted directly.
 func reapExpiredRuntimeWorkloads(ctx context.Context, cl *cluster.Client, store platform.RecordStore, now time.Time) error {
+	return reapExpiredRuntimeWorkloadsWithReservationRelease(ctx, cl, store, nil, now)
+}
+
+func reapExpiredRuntimeWorkloadsWithReservationRelease(ctx context.Context, cl *cluster.Client, store platform.RecordStore, release reservationReleaseFunc, now time.Time) error {
 	if cl == nil {
 		return nil
 	}
@@ -35,12 +39,12 @@ func reapExpiredRuntimeWorkloads(ctx context.Context, cl *cluster.Client, store 
 		if !runtimeLimitExpired(res.Labels, res.CreatedAt, now) || !isPlatformManaged(res.Labels) {
 			continue
 		}
-		reapRuntimeResource(ctx, cl, store, res, seenJobs)
+		reapRuntimeResource(ctx, cl, store, release, res, seenJobs)
 	}
 	return nil
 }
 
-func reapRuntimeResource(ctx context.Context, cl *cluster.Client, store platform.RecordStore, res cluster.RuntimeResource, seenJobs map[string]bool) {
+func reapRuntimeResource(ctx context.Context, cl *cluster.Client, store platform.RecordStore, release reservationReleaseFunc, res cluster.RuntimeResource, seenJobs map[string]bool) {
 	jobID := res.Labels[cluster.LabelJobID]
 	if jobID != "" {
 		key := res.Namespace + "/" + jobID
@@ -54,7 +58,7 @@ func reapRuntimeResource(ctx context.Context, cl *cluster.Client, store platform
 			return
 		}
 		slog.Info("runtime reaper: cleanup issued", "job_id", jobID, "namespace", res.Namespace, "deleted", result.Total())
-		markJobFailed(ctx, store, jobID, "Runtime limit exceeded")
+		markJobFailed(ctx, store, release, jobID, "Runtime limit exceeded")
 		return
 	}
 	if err := cl.DeleteResource(ctx, res.Kind, res.Namespace, res.Name); err != nil {
@@ -67,7 +71,7 @@ func reapRuntimeResource(ctx context.Context, cl *cluster.Client, store platform
 // markJobFailed transitions a job record to "failed" only if it is currently
 // active, mirroring the reference UpdateStatusIfActive. It is a best-effort no-op
 // when the jobs read model has no record (the typed job domain lands in Phase 3).
-func markJobFailed(ctx context.Context, store platform.RecordStore, jobID, reason string) {
+func markJobFailed(ctx context.Context, store platform.RecordStore, release reservationReleaseFunc, jobID, reason string) {
 	jobs := jobRepositoryFromStore(store)
 	if jobs == nil || jobID == "" {
 		return
@@ -78,7 +82,9 @@ func markJobFailed(ctx context.Context, store platform.RecordStore, jobID, reaso
 	}
 	if !jobs.MarkFailedIfActive(ctx, jobID, reason) {
 		slog.Warn("runtime reaper: failed to mark job failed", "job_id", jobID)
+		return
 	}
+	releaseJobReservation(ctx, release, nil, record.Data)
 }
 
 // runtimeLimitExpired reports whether createdAt + runtime-limit-seconds is in the
@@ -111,6 +117,6 @@ func isPlatformManaged(labels map[string]string) bool {
 // maintenance task. It runs only once StartMaintenance is called.
 func registerRuntimeReaper(app *platform.App) {
 	app.RegisterMaintenanceTaskForService(serviceName, "workload-runtime-reaper", func(ctx context.Context) error {
-		return reapExpiredRuntimeWorkloads(ctx, app.Cluster, app.Store, time.Now().UTC())
+		return reapExpiredRuntimeWorkloadsWithReservationRelease(ctx, app.Cluster, app.Store, schedulerReservationReleaseFuncForApp(app), time.Now().UTC())
 	})
 }

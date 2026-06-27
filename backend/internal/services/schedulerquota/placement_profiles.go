@@ -15,6 +15,7 @@ const (
 	placementDefaultSchedulerName = "default-scheduler"
 	placementVolcanoSchedulerName = "volcano"
 	kueueQueueNameLabel           = "kueue.x-k8s.io/queue-name"
+	msgPlacementProfileSave       = "placement profile could not be saved"
 )
 
 func seedDefaultPlacementProfiles(app *platform.App) error {
@@ -49,7 +50,7 @@ func createPlacementProfile(app *platform.App, r *http.Request, _ platform.Route
 		return schedulerEvent(r, "PlacementProfileChanged", "created", placementProfileEventPayload(record.Data, "created"))
 	})
 	if err != nil {
-		return placementProfileCreateError(err), shared.ErrorData("placement profile could not be saved"), nil
+		return placementProfileCreateError(err), shared.ErrorData(msgPlacementProfileSave), nil
 	}
 	return http.StatusCreated, record, nil
 }
@@ -71,14 +72,14 @@ func updatePlacementProfile(app *platform.App, r *http.Request, _ platform.Route
 		return schedulerEvent(r, "PlacementProfileChanged", "updated", placementProfileEventPayload(record.Data, "updated"))
 	})
 	if err != nil {
-		return http.StatusInternalServerError, shared.ErrorData("placement profile could not be saved"), nil
+		return http.StatusInternalServerError, shared.ErrorData(msgPlacementProfileSave), nil
 	}
 	if !ok {
 		record, err = app.CreateRecordWithEvent(r.Context(), placementProfilesResource, payload, func(record contracts.Record[map[string]any]) contracts.Event {
 			return schedulerEvent(r, "PlacementProfileChanged", "updated", placementProfileEventPayload(record.Data, "updated"))
 		})
 		if err != nil {
-			return placementProfileCreateError(err), shared.ErrorData("placement profile could not be saved"), nil
+			return placementProfileCreateError(err), shared.ErrorData(msgPlacementProfileSave), nil
 		}
 	}
 	return http.StatusOK, record, nil

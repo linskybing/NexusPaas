@@ -16,6 +16,11 @@ type admissionMPSPolicy struct {
 	allowCrossProject bool
 }
 
+const (
+	errInvalidPlanMPSPolicy  = "invalid plan MPS policy: %w"
+	errInvalidQueueMPSPolicy = "invalid queue MPS policy: %w"
+)
+
 func enforceAdmissionMPSPolicy(ctx context.Context, reader admissionReader, project, plan, queue admissionRecord, queueFound bool, req submitAdmissionRequest) error {
 	if !admissionMPSRequested(req) {
 		return nil
@@ -56,37 +61,37 @@ func admissionMPSPercentage(req submitAdmissionRequest) int {
 func resolveAdmissionMPSPolicy(project, plan, queue map[string]any, queueFound bool) (admissionMPSPolicy, error) {
 	planAllowed, err := admissionPolicyBool(plan, true, "mps_allowed", "mpsAllowed")
 	if err != nil {
-		return admissionMPSPolicy{}, fmt.Errorf("invalid plan MPS policy: %w", err)
+		return admissionMPSPolicy{}, fmt.Errorf(errInvalidPlanMPSPolicy, err)
 	}
 	queueAllowed := true
 	if queueFound {
 		queueAllowed, err = admissionPolicyBool(queue, true, "mps_allowed", "mpsAllowed")
 		if err != nil {
-			return admissionMPSPolicy{}, fmt.Errorf("invalid queue MPS policy: %w", err)
+			return admissionMPSPolicy{}, fmt.Errorf(errInvalidQueueMPSPolicy, err)
 		}
 	}
 
 	planCross, err := admissionPolicyBool(plan, false, "allow_cross_project_mps", "allowCrossProjectMps")
 	if err != nil {
-		return admissionMPSPolicy{}, fmt.Errorf("invalid plan MPS policy: %w", err)
+		return admissionMPSPolicy{}, fmt.Errorf(errInvalidPlanMPSPolicy, err)
 	}
 	queueCross := true
 	if queueFound {
 		queueCross, err = admissionPolicyBool(queue, true, "allow_cross_project_mps", "allowCrossProjectMps")
 		if err != nil {
-			return admissionMPSPolicy{}, fmt.Errorf("invalid queue MPS policy: %w", err)
+			return admissionMPSPolicy{}, fmt.Errorf(errInvalidQueueMPSPolicy, err)
 		}
 	}
 
 	planCap, err := admissionPolicySMCap(plan, "max_sm_percentage_per_gpu", "maxMpsSmPercentage", "max_gpu_sm_percentage_per_job")
 	if err != nil {
-		return admissionMPSPolicy{}, fmt.Errorf("invalid plan MPS policy: %w", err)
+		return admissionMPSPolicy{}, fmt.Errorf(errInvalidPlanMPSPolicy, err)
 	}
 	queueCap := 0
 	if queueFound {
 		queueCap, err = admissionPolicySMCap(queue, "max_sm_percentage_per_gpu", "maxMpsSmPercentage", "max_gpu_sm_percentage_per_job")
 		if err != nil {
-			return admissionMPSPolicy{}, fmt.Errorf("invalid queue MPS policy: %w", err)
+			return admissionMPSPolicy{}, fmt.Errorf(errInvalidQueueMPSPolicy, err)
 		}
 	}
 	if _, err := admissionPolicyBool(project, false, "high_security", "highSecurity", "mps_forbidden", "mpsForbidden"); err != nil {
