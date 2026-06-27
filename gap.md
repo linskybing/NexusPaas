@@ -439,6 +439,21 @@ external API fixture coverage only; it does not claim live Harbor build
 execution, SBOM/signing, allow-list enforcement, image scan lifecycle, full image
 workflow, Full GA, or first-version completion.
 
+2026-06-28 Image-registry acceleration and queued supply-chain metadata update:
+`ImageAccelerationProfile` now has local metadata/contract coverage through
+admin CRUD routes, seeded defaults, a create API fixture, and
+`ImageAccelerationProfileChanged` event fixture. Queued image builds now also
+record and emit pending supply-chain status metadata in create responses, stored
+records, and `ImageBuildStarted` events:
+`image_digest=""`, `allow_list_decision="pending"`,
+`sbom_status="pending"`, `signature_status="pending"`,
+`scan_status="pending"`, and `supply_chain_checked_at=null`. Contract coverage
+also validates historical `ImageBuildStarted` schema-v1 payloads without those
+additive keys. This is local metadata/event-shape evidence only; it does not
+claim image conversion/prewarm execution, completed SBOM generation, signing,
+scan enforcement, allow-list admission, live Harbor/Tekton/BuildKit execution,
+full IMG, V1 external launch, or Full GA.
+
 2026-06-23 DATA-014 image build create idempotency local update:
 image-registry build create APIs now have local deterministic optional
 `Idempotency-Key` replay/conflict evidence. Same-key same-request replays return

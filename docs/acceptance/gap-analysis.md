@@ -65,6 +65,15 @@ auth, route, path params, state-changing, and `harbor` adapter metadata. This is
 static contract evidence only; it does not prove live Harbor build execution,
 SBOM/signing, allow-list enforcement, image scan lifecycle, or full image
 workflow GA.
+Image-registry profile and queued-event metadata now also have local/static
+evidence: `ImageAccelerationProfile` admin CRUD, seeded defaults, create API
+fixture, and `ImageAccelerationProfileChanged` event fixture are covered, and
+queued image builds include pending supply-chain status fields in the response,
+stored record, and `ImageBuildStarted` event while historical records/events
+without those fields remain tolerated. This is metadata and event-shape evidence
+only; it does not prove image conversion/prewarm execution, completed SBOM
+generation, signing, scan enforcement, allow-list admission, live Harbor build
+execution, or full image workflow GA.
 Workload job submission now also has local/static typed external REST fixture
 coverage for `POST /api/v1/jobs`: the fixture uses `201 Created`, requires
 `project_id` and `user_id`, keeps queue/resource/config/streaming fields as
@@ -624,6 +633,17 @@ including user auth, no service key, no path params, state-changing behavior,
 `harbor` adapter metadata, and `ImageBuildStarted`. This is not live Harbor
 build execution, SBOM/signing, allow-list enforcement, image scan lifecycle,
 full image workflow, Full GA, or first-version completion.
+Image-registry profile and supply-chain status metadata now also have local
+evidence: `ImageAccelerationProfile` CRUD/seed/fixture/event coverage exists,
+and queued image builds expose `image_digest=""`,
+`allow_list_decision="pending"`, `sbom_status="pending"`,
+`signature_status="pending"`, `scan_status="pending"`, and
+`supply_chain_checked_at=null` in create responses, stored records, and
+`ImageBuildStarted` events. Contract coverage also validates that historical
+`ImageBuildStarted` payloads without those additive keys remain schema-v1
+compatible. This remains local metadata/contract evidence only and does not
+close live SBOM/signing/scan, allow-list enforcement, image conversion/prewarm,
+live Harbor/Tekton/BuildKit execution, full IMG, V1 external launch, or Full GA.
 
 Workload job submission now has local/static external API fixture coverage for
 `POST /api/v1/jobs`: the fixture validator checks metadata, exact required
