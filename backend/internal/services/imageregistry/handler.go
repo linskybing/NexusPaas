@@ -56,6 +56,12 @@ type imageBuildResources struct {
 }
 
 func Register(app *platform.App) {
+	if err := seedDefaultImageAccelerationProfiles(app); err != nil {
+		panic(err)
+	}
+	app.RegisterCustomHandler(http.MethodPost, "/api/v1/image-acceleration-profiles", createImageAccelerationProfile)
+	app.RegisterCustomHandler(http.MethodPut, "/api/v1/image-acceleration-profiles/{id}", updateImageAccelerationProfile)
+	app.RegisterCustomHandler(http.MethodDelete, "/api/v1/image-acceleration-profiles/{id}", deleteImageAccelerationProfile)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/harbor-status", getHarborStatus)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/harbor-statistics", getHarborStatistics)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/harbor-projects", listHarborProjects)

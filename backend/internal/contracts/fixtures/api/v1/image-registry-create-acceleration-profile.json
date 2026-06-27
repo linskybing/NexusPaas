@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "contract_name": "image-registry.create_acceleration_profile",
+  "owner_service": "image-registry-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "image-registry-service:image_acceleration_profiles",
+  "action": "create",
+  "method": "POST",
+  "path": "/api/v1/image-acceleration-profiles",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [],
+  "required_request_fields": [
+    "name",
+    "snapshotter",
+    "prewarm_policy"
+  ],
+  "optional_request_fields": [
+    "id",
+    "registry_mirror",
+    "conversion_required",
+    "allowed_for_projects",
+    "node_selector",
+    "enabled"
+  ],
+  "request_example": {
+    "id": "estargz-gpu-prewarm",
+    "name": "eStargz GPU prewarm",
+    "snapshotter": "stargz",
+    "prewarm_policy": "nodepool-based",
+    "conversion_required": true,
+    "node_selector": {
+      "nexuspaas.io/node-class": "gpu-hpc"
+    }
+  },
+  "success_statuses": [
+    201
+  ],
+  "error_statuses": [
+    400,
+    401,
+    403,
+    409,
+    500
+  ],
+  "emits_events": [
+    "ImageAccelerationProfileChanged"
+  ],
+  "response_example": {
+    "id": "estargz-gpu-prewarm",
+    "data": {
+      "id": "estargz-gpu-prewarm",
+      "name": "eStargz GPU prewarm",
+      "snapshotter": "stargz",
+      "prewarm_policy": "nodepool-based",
+      "conversion_required": true
+    },
+    "version": 1,
+    "created_at": "2026-06-28T00:00:00Z",
+    "updated_at": "2026-06-28T00:00:00Z"
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "event_id": "99999999-9999-4999-9999-999999999999",
+  "schema_version": 1,
+  "event_type": "ImageAccelerationProfileChanged",
+  "producer": "image-registry-service",
+  "occurred_at": "2026-06-28T00:00:00Z",
+  "trace_id": "trace-image-acceleration-profile-changed-v1",
+  "request_id": "req-image-acceleration-profile-changed-v1",
+  "aggregate_id": "estargz-gpu-prewarm",
+  "payload": {
+    "image_acceleration_profile_id": "estargz-gpu-prewarm",
+    "profile_id": "estargz-gpu-prewarm",
+    "name": "eStargz GPU prewarm",
+    "snapshotter": "stargz",
+    "prewarm_policy": "nodepool-based",
+    "conversion_required": true,
+    "action": "created"
+  }
+}

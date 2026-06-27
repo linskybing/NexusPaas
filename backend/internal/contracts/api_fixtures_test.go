@@ -14,7 +14,7 @@ import (
 
 func TestExternalAPIFixturesAreValidV1(t *testing.T) {
 	fixtures := externalAPIFixtureFiles(t)
-	want := []string{"image-registry-context-build.json", "image-registry-dockerfile-build.json", "image-registry-storage-build.json", "org-project-batch-delete-groups.json", "org-project-batch-delete-projects.json", "org-project-create-group.json", "org-project-create-project.json", "org-project-delete-group.json", "org-project-delete-project.json", "org-project-update-group.json", "org-project-update-project.json", "request-notification-create-form.json", "scheduler-create-accelerator-profile.json", "scheduler-create-network-profile.json", "scheduler-create-placement-profile.json", "storage-batch-delete-project-permissions.json", "storage-batch-update-project-permissions.json", "storage-create-benchmark-record.json", "storage-create-cache-binding.json", "storage-create-permission.json", "storage-create-profile.json", "storage-create-project-binding.json", "storage-delete-project-permission.json", "storage-list-benchmark-records.json", "storage-update-project-permission.json", "workload-cancel-job.json", "workload-commit-configfile-version.json", "workload-create-configfile.json", "workload-delete-configfile.json", "workload-get-configfile.json", "workload-patch-configfile.json", "workload-submit-job.json", "workload-update-configfile.json"}
+	want := []string{"image-registry-context-build.json", "image-registry-create-acceleration-profile.json", "image-registry-dockerfile-build.json", "image-registry-storage-build.json", "org-project-batch-delete-groups.json", "org-project-batch-delete-projects.json", "org-project-create-group.json", "org-project-create-project.json", "org-project-delete-group.json", "org-project-delete-project.json", "org-project-update-group.json", "org-project-update-project.json", "request-notification-create-form.json", "scheduler-create-accelerator-profile.json", "scheduler-create-network-profile.json", "scheduler-create-placement-profile.json", "storage-batch-delete-project-permissions.json", "storage-batch-update-project-permissions.json", "storage-create-benchmark-record.json", "storage-create-cache-binding.json", "storage-create-permission.json", "storage-create-profile.json", "storage-create-project-binding.json", "storage-delete-project-permission.json", "storage-list-benchmark-records.json", "storage-update-project-permission.json", "workload-cancel-job.json", "workload-commit-configfile-version.json", "workload-create-configfile.json", "workload-delete-configfile.json", "workload-get-configfile.json", "workload-patch-configfile.json", "workload-submit-job.json", "workload-update-configfile.json"}
 	if !reflect.DeepEqual(fixtures, want) {
 		t.Fatalf("fixture files = %v, want %v", fixtures, want)
 	}
@@ -26,6 +26,13 @@ func TestExternalAPIFixturesAreValidV1(t *testing.T) {
 			action:       "command",
 			method:       http.MethodPost,
 			path:         "/api/v1/images/build",
+		},
+		"image-registry-create-acceleration-profile.json": {
+			ownerService: "image-registry-service",
+			resource:     "image-registry-service:image_acceleration_profiles",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/image-acceleration-profiles",
 		},
 		"image-registry-dockerfile-build.json": {
 			ownerService: "image-registry-service",
@@ -97,23 +104,23 @@ func TestExternalAPIFixturesAreValidV1(t *testing.T) {
 			method:       http.MethodDelete,
 			path:         "/api/v1/projects/{id}",
 		},
-			"request-notification-create-form.json": {
-				ownerService: "request-notification-service",
-				resource:     "request-notification-service:forms",
-				action:       "create",
-				method:       http.MethodPost,
-				path:         "/api/v1/forms",
-			},
-			"scheduler-create-accelerator-profile.json": {
-				ownerService: "scheduler-quota-service",
-				resource:     "scheduler-quota-service:accelerator_profiles",
-				action:       "create",
-				method:       http.MethodPost,
-				path:         "/api/v1/accelerator-profiles",
-			},
-			"scheduler-create-network-profile.json": {
-				ownerService: "scheduler-quota-service",
-				resource:     "scheduler-quota-service:network_profiles",
+		"request-notification-create-form.json": {
+			ownerService: "request-notification-service",
+			resource:     "request-notification-service:forms",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/forms",
+		},
+		"scheduler-create-accelerator-profile.json": {
+			ownerService: "scheduler-quota-service",
+			resource:     "scheduler-quota-service:accelerator_profiles",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/accelerator-profiles",
+		},
+		"scheduler-create-network-profile.json": {
+			ownerService: "scheduler-quota-service",
+			resource:     "scheduler-quota-service:network_profiles",
 			action:       "create",
 			method:       http.MethodPost,
 			path:         "/api/v1/network-profiles",
