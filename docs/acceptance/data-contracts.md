@@ -63,3 +63,21 @@ inbox_events
 | DATA-016 | Drift checks compare owner data and read-model data. |
 | DATA-017 | Outbox publish lag and consumer lag are observable. |
 | DATA-018 | Event replay procedure is documented and tested. |
+
+## Current Local Evidence
+
+`DATA-014` has partial local evidence for command and deploy/apply idempotency:
+
+- image build create/cancel, workload submit/cancel, and scheduler preemption
+  have deterministic local `Idempotency-Key` replay/conflict tests;
+- workload deploy/apply retry now has local dispatcher evidence: a
+  `waiting_infra` job whose `next_retry_at` is due is retried after the target
+  Kubernetes Job already exists, `cluster.Client.CreateByJSON` treats
+  `AlreadyExists` as success, and the workload record transitions to `running`
+  with a single `created_resources` entry;
+- the deploy/apply evidence is internal retry idempotency, not a new external
+  API header or request contract.
+
+This remains local control-plane/fake-client evidence only. It does not prove
+live Kubernetes deploy replay, live rollback behavior, full `DATA-014`, typed
+data ownership completion, or Full GA.
