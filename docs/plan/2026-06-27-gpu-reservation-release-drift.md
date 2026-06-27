@@ -265,5 +265,4 @@ No new external public API routes.
 
 ## 20. Status
 
-Plan Status: Approved
-Implementation Status: Implemented and Reviewer-approved.
+Status: Approved

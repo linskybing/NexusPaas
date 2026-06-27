@@ -243,4 +243,4 @@ Keep thresholds and gating constants local in `gpuusage` collector code unless t
 
 ## 20. Status
 
-Plan Status: Approved by Reviewer Agent after revision
+Status: Approved
