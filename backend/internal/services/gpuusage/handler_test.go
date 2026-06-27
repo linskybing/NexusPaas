@@ -66,6 +66,9 @@ func TestGPUUsageJobAndMappingHandlers(t *testing.T) {
 	if len(mapping) != 2 || mapping[0].Node != "gpu-node-1" || mapping[0].SMUtilization != 50 {
 		t.Fatalf("MPS mapping = %#v, want active slots with GPU metrics", mapping)
 	}
+	if mapping[0].ReservedSMPercentage != 2 || mapping[0].SMAttributionSource != gpuSMAttributionEstimatedMPS || mapping[0].SMAttributionMeasured {
+		t.Fatalf("MPS mapping attribution = %#v, want reserved SM with estimated allocation source", mapping[0])
+	}
 }
 
 func TestGPUUsageAdminHistoryAndJobs(t *testing.T) {
@@ -242,6 +245,7 @@ func seedGPUUsageRecords(t *testing.T, app *platform.App) {
 			"gpu_uuid":              "GPU-a",
 			"gpu_memory_bytes":      2048.0,
 			"gpu_sm_utilization":    50.0,
+			"gpu_sm_util_source":    "unavailable",
 			"gpu_memory_used_bytes": 1024.0,
 		}},
 		{"id": "SN2", "job_id": "J2", "pod_name": "pod-b", "pod_namespace": "ns-b", "node": "gpu-node-1", "gpu_index": 1, "mps_physical_gpu_index": 1, "mps_virtual_units": 4, "timestamp": now.Add(-1 * time.Minute), "metrics": map[string]any{

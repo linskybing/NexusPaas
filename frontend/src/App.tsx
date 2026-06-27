@@ -1235,11 +1235,22 @@ function ProjectGPUUsageSummary({ usage, error }: { usage?: ProjectGPUUsage; err
   if (error) {
     return <div className="panel-summary muted">Project GPU usage unavailable: {error}</div>;
   }
+  const observedPods = projectGPUObservedPods(usage);
+  const reservedFraction = projectGPUReservedFraction(usage);
+  const attributionSource = projectGPUSMAttributionSource(usage);
   return (
     <dl className="details compact summary-details">
       <div>
-        <dt>Project GPU pods</dt>
-        <dd>{String(projectGPUUsed(usage))}</dd>
+        <dt>Observed GPU pods</dt>
+        <dd>{String(observedPods)}</dd>
+      </div>
+      <div>
+        <dt>Reserved GPU fraction</dt>
+        <dd>{formatNumber(reservedFraction)}</dd>
+      </div>
+      <div>
+        <dt>SM attribution</dt>
+        <dd>{attributionSource}</dd>
       </div>
     </dl>
   );
@@ -1601,8 +1612,16 @@ function usagePeriod(record: UsageRecord): string {
   return [start, end].filter(Boolean).join(" - ") || "current";
 }
 
-function projectGPUUsed(usage?: ProjectGPUUsage): number {
-  return numberValue(usage?.used ?? usage?.Used);
+function projectGPUObservedPods(usage?: ProjectGPUUsage): number {
+  return numberValue(usage?.observed_gpu_pods ?? usage?.observedGpuPods ?? usage?.ObservedGPUPods ?? usage?.used ?? usage?.Used);
+}
+
+function projectGPUReservedFraction(usage?: ProjectGPUUsage): number {
+  return numberValue(usage?.reserved_gpu_fraction ?? usage?.reservedGpuFraction ?? usage?.ReservedGPUFraction);
+}
+
+function projectGPUSMAttributionSource(usage?: ProjectGPUUsage): string {
+  return valueText(usage?.sm_attribution_source, usage?.smAttributionSource, usage?.SMAttributionSource) || "unavailable";
 }
 
 function formatNumber(value: number): string {

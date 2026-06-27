@@ -224,7 +224,19 @@ describe("api client helpers", () => {
         case "/api/v1/me/request-usage":
           return new Response(JSON.stringify({ success: true, data: [{ ProjectID: "P1", JobID: "J1", CPUHours: 1 }] }), { status: 200 });
         case "/api/v1/projects/P1/gpu-usage":
-          return new Response(JSON.stringify({ success: true, data: { used: 2 } }), { status: 200 });
+          return new Response(
+            JSON.stringify({
+              success: true,
+              data: {
+                used: 2,
+                observed_gpu_pods: 2,
+                reserved_gpu_fraction: 0.75,
+                reserved_gpu_source: "cluster_read_model_allocation",
+                sm_attribution_source: "estimated_mps_allocation",
+              },
+            }),
+            { status: 200 },
+          );
         default:
           throw new Error(`unexpected fetch ${url}`);
       }
@@ -246,7 +258,13 @@ describe("api client helpers", () => {
     await expect(client.projectImageBuilds("P1")).resolves.toEqual([{ id: "build-1", status: "queued" }]);
     await expect(client.myUsage()).resolves.toEqual([{ ProjectID: "P1", JobID: "J1", GPUHours: 2 }]);
     await expect(client.myRequestUsage()).resolves.toEqual([{ ProjectID: "P1", JobID: "J1", CPUHours: 1 }]);
-    await expect(client.projectGPUUsage("P1")).resolves.toEqual({ used: 2 });
+    await expect(client.projectGPUUsage("P1")).resolves.toEqual({
+      used: 2,
+      observed_gpu_pods: 2,
+      reserved_gpu_fraction: 0.75,
+      reserved_gpu_source: "cluster_read_model_allocation",
+      sm_attribution_source: "estimated_mps_allocation",
+    });
   });
 
   it("raises envelope errors", async () => {

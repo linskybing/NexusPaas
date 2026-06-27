@@ -228,6 +228,21 @@ export type UsageRecord = {
 export type ProjectGPUUsage = {
   used?: number;
   Used?: number;
+  observed_gpu_pods?: number;
+  observedGpuPods?: number;
+  ObservedGPUPods?: number;
+  observed_gpu_source?: string;
+  observedGpuSource?: string;
+  ObservedGPUSource?: string;
+  reserved_gpu_fraction?: number;
+  reservedGpuFraction?: number;
+  ReservedGPUFraction?: number;
+  reserved_gpu_source?: string;
+  reservedGpuSource?: string;
+  ReservedGPUSource?: string;
+  sm_attribution_source?: string;
+  smAttributionSource?: string;
+  SMAttributionSource?: string;
   [key: string]: unknown;
 };
 

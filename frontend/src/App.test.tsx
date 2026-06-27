@@ -249,7 +249,16 @@ describe("App", () => {
             data: [{ ProjectID: "proj-a", ProjectName: "Project A", JobID: "job-a", CPUHours: 7, GPUHours: 8, MemoryGBHours: 9 }],
           });
         case "GET /api/v1/projects/proj-a/gpu-usage":
-          return json({ success: true, data: { used: 2 } });
+          return json({
+            success: true,
+            data: {
+              used: 2,
+              observed_gpu_pods: 2,
+              reserved_gpu_fraction: 0.75,
+              reserved_gpu_source: "cluster_read_model_allocation",
+              sm_attribution_source: "estimated_mps_allocation",
+            },
+          });
         case "POST /api/v1/configfiles":
           expect(init?.body).toBe(JSON.stringify({ project_id: "proj-a", name: "new.yaml", content: "kind: Job" }));
           return json({ success: true, data: { id: "cfg-new", data: { project_id: "proj-a", name: "new.yaml" } } }, 201);
@@ -331,9 +340,11 @@ describe("App", () => {
     );
     expect(imageBuildPost?.[1]?.body).toBe(JSON.stringify({ project_id: "proj-a", image_reference: "registry.local/team/app:new" }));
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/admin"))).toBe(false);
-		const projectGPUSummary = screen.getByText("Project GPU pods").closest("div");
-		expect(projectGPUSummary).not.toBeNull();
-	    expect(within(projectGPUSummary as HTMLElement).getByText("2")).toBeInTheDocument();
+    const projectGPUSummary = screen.getByText("Observed GPU pods").closest("div");
+    expect(projectGPUSummary).not.toBeNull();
+    expect(within(projectGPUSummary as HTMLElement).getByText("2")).toBeInTheDocument();
+    expect(screen.getByText("Reserved GPU fraction").closest("div")).toHaveTextContent("0.75");
+    expect(screen.getByText("SM attribution").closest("div")).toHaveTextContent("estimated_mps_allocation");
     expect(screen.getByRole("table", { name: "GPU usage" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Open stream job-a" }));
@@ -417,7 +428,16 @@ describe("App", () => {
         case "GET /api/v1/projects/proj-a/gpu-usage":
           gpuCalls += 1;
           if (gpuCalls === 1) {
-            return json({ success: true, data: { used: 2 } });
+            return json({
+              success: true,
+              data: {
+                used: 2,
+                observed_gpu_pods: 2,
+                reserved_gpu_fraction: 0.75,
+                reserved_gpu_source: "cluster_read_model_allocation",
+                sm_attribution_source: "estimated_mps_allocation",
+              },
+            });
           }
           return json({ success: false, error: { message: "adminkey-token-secret" } }, 503);
         case "GET /openapi.json":
@@ -448,9 +468,11 @@ describe("App", () => {
     expect(screen.getByLabelText("Request usage totals")).toHaveTextContent(/CPUh\s*7/);
     expect(screen.getByLabelText("Request usage totals")).toHaveTextContent(/GPUh\s*8/);
     expect(screen.getByLabelText("Request usage totals")).toHaveTextContent(/Memory GBh\s*9/);
-    const projectGPUSummary = screen.getByText("Project GPU pods").closest("div");
+    const projectGPUSummary = screen.getByText("Observed GPU pods").closest("div");
     expect(projectGPUSummary).not.toBeNull();
     expect(within(projectGPUSummary as HTMLElement).getByText("2")).toBeInTheDocument();
+    expect(screen.getByText("Reserved GPU fraction").closest("div")).toHaveTextContent("0.75");
+    expect(screen.getByText("SM attribution").closest("div")).toHaveTextContent("estimated_mps_allocation");
     expect(usageCalls).toBe(1);
     expect(requestUsageCalls).toBe(1);
     expect(gpuCalls).toBe(1);

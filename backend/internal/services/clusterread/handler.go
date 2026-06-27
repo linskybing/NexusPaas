@@ -26,12 +26,14 @@ const (
 	clusterProjectsResource       = serviceName + ":cluster_projects"
 	clusterReadModelResource      = serviceName + ":cluster_read_models"
 	clusterUserGroupsResource     = serviceName + ":cluster_user_groups"
+	gpuUsageSnapshotsResource     = serviceName + ":job_gpu_usage_snapshots"
 	authorizationRolesResource    = "authorization-policy-service:roles"
 	identityRolesResource         = "identity-service:roles"
 	identityUsersResource         = "identity-service:users"
 	orgProjectMembersResource     = "org-project-service:project_members"
 	orgProjectsResource           = "org-project-service:projects"
 	orgUserGroupsResource         = "org-project-service:user_groups"
+	workloadJobsResource          = "workload-service:jobs"
 	keyAction                     = "action"
 	keyCapabilities               = "capabilities"
 	keyCapabilitiesTitle          = "Capabilities"
@@ -54,6 +56,14 @@ const (
 	keyUserID                     = "user_id"
 	keyUserIDCamel                = "userId"
 	keyUserIDTitle                = "UserID"
+
+	gpuSourceClusterReadModel   = "cluster_read_model"
+	gpuSourceClusterAllocation  = "cluster_read_model_allocation"
+	gpuSourceSnapshotAllocation = "usage_observability_snapshot"
+	gpuSourceWorkloadAllocation = "workload_job_allocation"
+	gpuSourceUnavailable        = "unavailable"
+	smAttributionMeasured       = "measured"
+	smAttributionEstimatedMPS   = "estimated_mps_allocation"
 )
 
 var errClusterProjectionDriftUnavailable = errors.New("cluster projection drift unavailable")
@@ -181,13 +191,18 @@ func getProjectGPUUsage(app *platform.App, r *http.Request, _ platform.RouteSpec
 		return http.StatusForbidden, map[string]any{"message": "project access required"}, nil
 	}
 	summary := clusterSummary(app, r)
-	var used int64
-	for _, usage := range podGPUUsages(summary) {
-		if podGPUUsageBelongsToProject(usage, projectID) {
-			used++
-		}
+	projectRows := projectPodGPUUsages(summary, projectID)
+	observedPods := int64(len(projectRows))
+	reserved, reservedSource := projectReservedGPUFraction(app, r, projectID, projectRows)
+	smSource := projectSMAttributionSource(app, r, projectID, projectRows)
+	out := map[string]any{
+		"used":                  observedPods,
+		"observed_gpu_pods":     observedPods,
+		"observed_gpu_source":   gpuSourceClusterReadModel,
+		"reserved_gpu_fraction": reserved,
+		"reserved_gpu_source":   reservedSource,
+		"sm_attribution_source": smSource,
 	}
-	out := map[string]any{"used": used}
 	addTelemetryMetadata(out, app, summary)
 	return http.StatusOK, out, nil
 }

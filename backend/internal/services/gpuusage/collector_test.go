@@ -35,6 +35,7 @@ func TestCollectGPUUsageTelemetryProducesSnapshotsAndSummary(t *testing.T) {
 	if metrics["gpu_uuid"] != "GPU-a" || int64Value(metrics, "gpu_memory_bytes") != 4096 || floatValue(metrics, "gpu_sm_utilization") != 75 {
 		t.Fatalf("snapshot metrics = %#v, want normalized GPU metrics", metrics)
 	}
+	assertEstimatedSMAttribution(t, metrics)
 
 	summary, ok := summaryRecordForJob(context.Background(), app.Store, "JGPU")
 	if !ok {
@@ -59,6 +60,13 @@ func TestCollectGPUUsageTelemetryProducesSnapshotsAndSummary(t *testing.T) {
 	rows := data.([]UserResourceUsage)
 	if len(rows) != 1 || rows[0].JobID != "JGPU" || rows[0].UserID != "U1" || rows[0].ProjectName != "vision" {
 		t.Fatalf("admin usage rows = %#v, want collector-produced JGPU summary", rows)
+	}
+}
+
+func assertEstimatedSMAttribution(t *testing.T, metrics map[string]any) {
+	t.Helper()
+	if textValue(metrics, "gpu_sm_util_source") != gpuSMAttributionEstimatedMPS || intValue(metrics, "reserved_sm_percentage") != 50 {
+		t.Fatalf("snapshot SM attribution = %#v, want estimated MPS allocation label", metrics)
 	}
 }
 

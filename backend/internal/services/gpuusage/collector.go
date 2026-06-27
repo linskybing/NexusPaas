@@ -156,6 +156,14 @@ func gpuSnapshotMetrics(data map[string]any, gpuUUID string) map[string]any {
 	copyTextMetric(out, data, "gpu_sm_util_source", "gpu_sm_util_source", "gpuSMUtilSource", "GPUSMUtilSource")
 	copyTextMetric(out, data, "gpu_mem_util_source", "gpu_mem_util_source", "gpuMemUtilSource", "GPUMemUtilSource")
 	copyTextMetric(out, data, "gpu_memory_used_source", "gpu_memory_used_source", "gpuMemoryUsedSource", "GPUMemoryUsedSource")
+	if units := mpsVirtualUnits(data, metrics); units > 0 {
+		if _, ok := out["gpu_sm_util_source"]; !ok {
+			out["gpu_sm_util_source"] = gpuSMAttributionEstimatedMPS
+		}
+		if _, ok := out["reserved_sm_percentage"]; !ok {
+			out["reserved_sm_percentage"] = units
+		}
+	}
 	return out
 }
 

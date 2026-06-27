@@ -26,6 +26,9 @@ const (
 	workloadJobsResource          = "workload-service:jobs"
 	dateLayout                    = "2006-01-02"
 	msgAdminAccessRequired        = "admin access required"
+	gpuSMAttributionEstimatedMPS  = "estimated_mps_allocation"
+	gpuSMAttributionMeasured      = "measured"
+	gpuSMAttributionUnavailable   = "unavailable"
 )
 
 type UserResourceUsage struct {
@@ -60,27 +63,30 @@ type UserMPSJob struct {
 }
 
 type MPSGPUSlot struct {
-	Node                 string
-	PhysicalGPUIndex     int
-	GPUUUID              string
-	JobID                string
-	PodName              string
-	PodNamespace         string
-	MPSVirtualUnits      int
-	GPUMemoryBytes       int64
-	SMUtilization        float64
-	SMUtilizationSource  string
-	MemUtilization       float64
-	MemUtilizationSource string
-	MemoryUsedBytes      int64
-	MemoryUsedSource     string
-	EncUtilization       float64
-	DecUtilization       float64
-	PowerUsageWatts      float64
-	Timestamp            time.Time
-	UserID               string
-	Username             string
-	ProjectName          string
+	Node                  string
+	PhysicalGPUIndex      int
+	GPUUUID               string
+	JobID                 string
+	PodName               string
+	PodNamespace          string
+	MPSVirtualUnits       int
+	ReservedSMPercentage  int
+	GPUMemoryBytes        int64
+	SMUtilization         float64
+	SMUtilizationSource   string
+	SMAttributionSource   string
+	SMAttributionMeasured bool
+	MemUtilization        float64
+	MemUtilizationSource  string
+	MemoryUsedBytes       int64
+	MemoryUsedSource      string
+	EncUtilization        float64
+	DecUtilization        float64
+	PowerUsageWatts       float64
+	Timestamp             time.Time
+	UserID                string
+	Username              string
+	ProjectName           string
 }
 
 type AdminGPUUserSummary struct {
