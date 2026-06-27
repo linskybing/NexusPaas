@@ -1,0 +1,29 @@
+{
+  "event_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  "schema_version": 1,
+  "event_type": "ImageBuildStarted",
+  "producer": "image-registry-service",
+  "occurred_at": "2026-06-28T00:00:00Z",
+  "trace_id": "trace-image-build-started-v1",
+  "request_id": "req-image-build-started-v1",
+  "aggregate_id": "build-ga-001",
+  "payload": {
+    "id": "build-ga-001",
+    "job_name": "build-ga-001",
+    "build_id": "build-ga-001",
+    "project_id": "project-ga-001",
+    "image_reference": "registry.example.test/nexuspaas/api:2026-06-28",
+    "build_type": "dockerfile",
+    "cpu_cores": 2,
+    "memory_gib": 4,
+    "max_build_time_seconds": 600,
+    "status": "queued",
+    "image_digest": "",
+    "allow_list_decision": "pending",
+    "sbom_status": "pending",
+    "signature_status": "pending",
+    "scan_status": "pending",
+    "supply_chain_checked_at": null,
+    "requested_by": "user-ga-builder"
+  }
+}

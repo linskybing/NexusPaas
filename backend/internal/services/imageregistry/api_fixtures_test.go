@@ -146,6 +146,7 @@ func assertImageBuildCreateFixtureMetadata(t *testing.T, fixture imageBuildCreat
 	assertFixtureIntsContainAll(t, "error_statuses", fixture.ErrorStatuses, []int{http.StatusConflict})
 	assertImageBuildResourceExample(t, "request_example", fixture.RequestExample)
 	assertImageBuildResourceExample(t, "response_example", fixture.ResponseExample)
+	assertImageBuildSupplyChainResponseExample(t, fixture.ResponseExample)
 	assertFixtureStringField(t, "response_example", fixture.ResponseExample, "build_type", want.buildType)
 	if !reflect.DeepEqual(fixture.SuccessStatuses, []int{http.StatusAccepted}) {
 		t.Fatalf("success_statuses = %v, want [202]", fixture.SuccessStatuses)
@@ -247,6 +248,18 @@ func assertImageBuildResourceExample(t *testing.T, field string, example map[str
 	assertFixtureNumberField(t, field, example, "cpu_cores", 2)
 	assertFixtureNumberField(t, field, example, "memory_gib", 4)
 	assertFixtureNumberField(t, field, example, "max_build_time_seconds", 600)
+}
+
+func assertImageBuildSupplyChainResponseExample(t *testing.T, example map[string]any) {
+	t.Helper()
+	assertFixtureStringField(t, "response_example", example, "image_digest", "")
+	assertFixtureStringField(t, "response_example", example, "allow_list_decision", "pending")
+	assertFixtureStringField(t, "response_example", example, "sbom_status", "pending")
+	assertFixtureStringField(t, "response_example", example, "signature_status", "pending")
+	assertFixtureStringField(t, "response_example", example, "scan_status", "pending")
+	if value, ok := example["supply_chain_checked_at"]; !ok || value != nil {
+		t.Fatalf("response_example.supply_chain_checked_at = %v, want null", value)
+	}
 }
 
 func assertFixtureNumberField(t *testing.T, field string, data map[string]any, key string, want float64) {

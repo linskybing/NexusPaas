@@ -23,6 +23,7 @@ func TestEventEnvelopeFixturesAreValidV1(t *testing.T) {
 		"fast-transfer-progressed.json",
 		"fast-transfer-queued.json",
 		"image-acceleration-profile-changed.json",
+		"image-build-started.json",
 		"job-submitted.json",
 		"network-profile-changed.json",
 		"placement-profile-changed.json",
@@ -69,6 +70,7 @@ func TestEventEnvelopeFixturesAreValidV1(t *testing.T) {
 		"FastTransferProgressed":          "storage-service",
 		"FastTransferQueued":              "storage-service",
 		"ImageAccelerationProfileChanged": "image-registry-service",
+		"ImageBuildStarted":               "image-registry-service",
 		"JobSubmitted":                    "workload-service",
 		"NetworkProfileChanged":           "scheduler-quota-service",
 		"PlacementProfileChanged":         "scheduler-quota-service",
@@ -82,6 +84,41 @@ func TestEventEnvelopeFixturesAreValidV1(t *testing.T) {
 	}
 	if !reflect.DeepEqual(seenTypes, wantTypes) {
 		t.Fatalf("fixture event type/producers = %v, want %v", seenTypes, wantTypes)
+	}
+}
+
+func TestImageBuildStartedEventAllowsHistoricalSupplyChainOmission(t *testing.T) {
+	raw := readEventEnvelopeFixtureDocument(t, "image-build-started.json")
+	payload, ok := raw["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload has type %T, want object", raw["payload"])
+	}
+	for _, key := range []string{
+		"image_digest",
+		"allow_list_decision",
+		"sbom_status",
+		"signature_status",
+		"scan_status",
+		"supply_chain_checked_at",
+	} {
+		delete(payload, key)
+	}
+
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal historical ImageBuildStarted fixture: %v", err)
+	}
+	event, err := DecodeEventEnvelope(encoded)
+	if err != nil {
+		t.Fatalf("DecodeEventEnvelope historical ImageBuildStarted without supply-chain fields: %v", err)
+	}
+	if event.SchemaVersion != 1 || event.EventType != "ImageBuildStarted" {
+		t.Fatalf("historical event metadata = %#v, want schema v1 ImageBuildStarted", event)
+	}
+	for _, key := range []string{"sbom_status", "signature_status", "scan_status"} {
+		if _, ok := event.Payload[key]; ok {
+			t.Fatalf("historical payload unexpectedly retained %s: %#v", key, event.Payload)
+		}
 	}
 }
 
