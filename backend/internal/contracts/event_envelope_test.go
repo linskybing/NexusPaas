@@ -15,6 +15,7 @@ func TestEventEnvelopeFixturesAreValidV1(t *testing.T) {
 	fixtures := eventFixtureFiles(t)
 	want := []string{
 		"audit-event.json",
+		"data-plane-plan-built.json",
 		"job-submitted.json",
 		"project-updated.json",
 		"quota-reserved.json",
@@ -48,6 +49,7 @@ func TestEventEnvelopeFixturesAreValidV1(t *testing.T) {
 
 	wantTypes := map[string]string{
 		"AuditEvent":            "scheduler-quota-service",
+		"DataPlanePlanBuilt":    "storage-service",
 		"JobSubmitted":          "workload-service",
 		"ProjectUpdated":        "org-project-service",
 		"QuotaReserved":         "scheduler-quota-service",

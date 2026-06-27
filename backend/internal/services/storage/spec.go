@@ -16,9 +16,10 @@ func Spec() platform.ServiceSpec {
 		RequiresCluster: true,
 		Description:     "User/group storage, PVC lifecycle, FileBrowser, permissions, project bindings, fast-stage transfer, and Longhorn RWX health.",
 		Tables:          []string{"storages", "group_storage_permissions", "access_policies", "project_storage_bindings", "storage_profiles", "fast_transfer_records", "longhorn_rwx_health", "outbox", "inbox"},
-		Events:          []string{"PVCProvisioned", "StorageBound", "ProjectStorageBindingChanged", "ProjectStoragePermissionChanged", "StoragePermissionChanged", "StorageProfileChanged", "StorageMountPlanResolved", "FastTransferCompleted", "LonghornRWXHealthChecked"},
+		Events:          []string{"PVCProvisioned", "StorageBound", "ProjectStorageBindingChanged", "ProjectStoragePermissionChanged", "StoragePermissionChanged", "StorageProfileChanged", "StorageMountPlanResolved", "DataPlanePlanBuilt", "FastTransferCompleted", "LonghornRWXHealthChecked"},
 		Routes: []platform.RouteSpec{
 			route(http.MethodPost, "/internal/storage/projects/{project_id}/mount-plan", "mount_plans", "resolve", id("project_id"), serviceInternal()),
+			route(http.MethodPost, "/internal/storage/projects/{project_id}/data-plane-plan", "data_plane_plans", "resolve", id("project_id"), serviceInternal()),
 			route(http.MethodGet, "/api/v1/storage-profiles", "storage_profiles", "list", admin()),
 			route(http.MethodPost, "/api/v1/storage-profiles", "storage_profiles", "create", admin()),
 			route(http.MethodGet, "/api/v1/storage-profiles/{id}", "storage_profiles", "get", id("id"), admin()),

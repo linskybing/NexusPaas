@@ -62,6 +62,10 @@ func dispatchSubmittedWorkloads(ctx context.Context, cl *cluster.Client, store p
 }
 
 func dispatchSubmittedWorkloadsWithStorageMountClient(ctx context.Context, cl *cluster.Client, store platform.RecordStore, storageMounts storageMountPlanResolver, now time.Time) error {
+	return dispatchSubmittedWorkloadsWithStorageClients(ctx, cl, store, storageMounts, nil, now)
+}
+
+func dispatchSubmittedWorkloadsWithStorageClients(ctx context.Context, cl *cluster.Client, store platform.RecordStore, storageMounts storageMountPlanResolver, dataPlanes dataPlanePlanResolver, now time.Time) error {
 	jobs := jobRepositoryFromStore(store)
 	if jobs == nil {
 		return nil
@@ -71,7 +75,7 @@ func dispatchSubmittedWorkloadsWithStorageMountClient(ctx context.Context, cl *c
 		candidates = candidates[:dispatcherMaxJobsPerRun]
 	}
 	for _, candidate := range candidates {
-		dispatchJob(ctx, cl, store, storageMounts, candidate.record, now)
+		dispatchJob(ctx, cl, store, storageMounts, dataPlanes, candidate.record, now)
 	}
 	return nil
 }
@@ -84,7 +88,7 @@ func dispatchCandidates(ctx context.Context, store platform.RecordStore, now tim
 	return jobs.ListDispatchCandidates(ctx, now)
 }
 
-func dispatchJob(ctx context.Context, cl *cluster.Client, store platform.RecordStore, storageMounts storageMountPlanResolver, record contracts.Record[map[string]any], now time.Time) {
+func dispatchJob(ctx context.Context, cl *cluster.Client, store platform.RecordStore, storageMounts storageMountPlanResolver, dataPlanes dataPlanePlanResolver, record contracts.Record[map[string]any], now time.Time) {
 	if cl == nil {
 		deferDispatchForInfrastructure(ctx, store, record, now, cluster.ErrUnavailable)
 		return
@@ -116,7 +120,16 @@ func dispatchJob(ctx context.Context, cl *cluster.Client, store platform.RecordS
 		handleDispatchCreateError(ctx, store, record, now, err)
 		return
 	}
-	manifests, err := prepareDispatchManifests(record.Data, resources, namespace, cl, storagePlan)
+	dataPlanePlan, err := resolveDispatchDataPlanePlan(ctx, dataPlanes, record.Data, namespace)
+	if err != nil {
+		handleDispatchCreateError(ctx, store, record, now, err)
+		return
+	}
+	if err := ensureDispatchDataPlanePVCMounts(ctx, cl, dataPlanePlan, namespace); err != nil {
+		handleDispatchCreateError(ctx, store, record, now, err)
+		return
+	}
+	manifests, err := prepareDispatchManifests(record.Data, resources, namespace, cl, storagePlan, dataPlanePlan)
 	if err != nil {
 		rollbackDispatch(ctx, cl, namespace, record.ID)
 		failDispatchedJob(ctx, store, record.ID, err.Error())
@@ -164,8 +177,12 @@ func createdDispatchResource(obj cluster.CreatedObject) map[string]any {
 	return map[string]any{"kind": obj.Kind, "namespace": obj.Namespace, "name": obj.Name}
 }
 
-func prepareDispatchManifests(job map[string]any, resources []dispatchResource, namespace string, cl *cluster.Client, storagePlan storageMountPlan) ([]dispatchManifest, error) {
+func prepareDispatchManifests(job map[string]any, resources []dispatchResource, namespace string, cl *cluster.Client, storagePlan storageMountPlan, dataPlanePlan dataPlanePlan) ([]dispatchManifest, error) {
 	resources, err := prepareStorageMountDispatchResources(storagePlan, resources)
+	if err != nil {
+		return nil, err
+	}
+	resources, err = prepareDataPlaneDispatchResources(dataPlanePlan, resources)
 	if err != nil {
 		return nil, err
 	}
@@ -758,7 +775,13 @@ func registerJobDispatcher(app *platform.App) {
 			return storageMountPlan{}, err
 		}
 	}
+	dataPlanes, err := newDataPlanePlanClient(app)
+	if err != nil {
+		dataPlanes = func(context.Context, string, dataPlanePlanRequest) (dataPlanePlan, error) {
+			return dataPlanePlan{}, err
+		}
+	}
 	app.RegisterMaintenanceTaskForService(serviceName, "workload-dispatcher", func(ctx context.Context) error {
-		return dispatchSubmittedWorkloadsWithStorageMountClient(ctx, app.Cluster, app.Store, storageMounts, time.Now().UTC())
+		return dispatchSubmittedWorkloadsWithStorageClients(ctx, app.Cluster, app.Store, storageMounts, dataPlanes, time.Now().UTC())
 	})
 }
