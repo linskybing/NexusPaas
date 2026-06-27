@@ -3,6 +3,7 @@ package storage
 import (
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/linskybing/nexuspaas/backend/internal/contracts"
@@ -42,6 +43,7 @@ func Register(app *platform.App) {
 	registerLonghornRWXHealthWorker(app)
 	app.RegisterCustomHandler(http.MethodPost, pathInternalStorageMountPlan, resolveStorageMountPlanContract)
 	app.RegisterCustomHandler(http.MethodPost, pathInternalStorageDataPlanePlan, resolveStorageDataPlanePlanContract)
+	app.RegisterCustomHandler(http.MethodPost, pathInternalFastTransferProgress, updateFastTransferProgress)
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/storage-profiles", createStorageProfile)
 	app.RegisterCustomHandler(http.MethodPut, "/api/v1/storage-profiles/{id}", updateStorageProfile)
 	app.RegisterCustomHandler(http.MethodDelete, "/api/v1/storage-profiles/{id}", deleteStorageProfile)
@@ -461,15 +463,26 @@ func startFastTransfer(app *platform.App, r *http.Request, _ platform.RouteSpec)
 	if err != nil {
 		return http.StatusBadRequest, shared.ErrorData(msgInvalidRequestBody), nil
 	}
-	name := shared.FirstNonBlank(shared.TextValue(payload, "name"), storageRepo(app).NextFastTransferName())
-	namespace := shared.FirstNonBlank(shared.TextValue(payload, "target_namespace", "targetNamespace"), "project-"+projectID)
-	transfer := map[string]any{"id": fastTransferID(projectID, namespace, name), "project_id": projectID, "target_namespace": namespace, "name": name, "status": "staged", "created_by": userID, "created_at": time.Now().UTC()}
-	record, err := storageRepo(app).CreateFastTransferWithEvent(r.Context(), app, transfer, func(data map[string]any) contracts.Event {
-		return storageEvent(r, "FastTransferChanged", data)
+	repo := storageRepo(app)
+	keyHash, fingerprintHash := fastTransferIdempotencyHashes(r, payload, projectID, userID)
+	if existing, found := repo.FindFastTransferByIdempotencyKeyHash(r.Context(), projectID, keyHash); found {
+		if text(existing, internalFastTransferIdempotencyFingerprint) != fingerprintHash {
+			return http.StatusConflict, shared.ErrorData("idempotency key is already used by a different fast transfer request"), nil
+		}
+		return http.StatusAccepted, existing, nil
+	}
+	transfer := fastTransferRecord(projectID, userID, payload, repo, time.Now().UTC())
+	if keyHash != "" {
+		transfer[internalFastTransferIdempotencyKeyHash] = keyHash
+		transfer[internalFastTransferIdempotencyFingerprint] = fingerprintHash
+	}
+	record, err := repo.CreateFastTransferWithEvent(r.Context(), app, transfer, func(data map[string]any) contracts.Event {
+		return storageEvent(r, fastTransferChangedEvent, fastTransferEventPayload(data, "queued"))
 	})
 	if err != nil {
 		return http.StatusConflict, shared.ErrorData("fast transfer already exists"), nil
 	}
+	publishEvent(app, r, fastTransferQueuedEvent, fastTransferEventPayload(record, "queued"))
 	return http.StatusAccepted, record, nil
 }
 
@@ -498,14 +511,58 @@ func cancelFastTransfer(app *platform.App, r *http.Request, _ platform.RouteSpec
 	if _, status, data, ok := requireProjectManager(app, r, projectID, userID); !ok {
 		return status, data, nil
 	}
-	updated, ok, err := storageRepo(app).CancelFastTransferWithEvent(r.Context(), app, projectID, r.PathValue("targetNamespace"), r.PathValue("name"), time.Now().UTC(), func(data map[string]any) contracts.Event {
-		return storageEvent(r, "FastTransferChanged", data)
+	namespace, name := r.PathValue("targetNamespace"), r.PathValue("name")
+	repo := storageRepo(app)
+	current, found := repo.GetFastTransfer(r.Context(), projectID, namespace, name)
+	if !found {
+		return http.StatusNotFound, shared.ErrorData("fast transfer not found"), nil
+	}
+	patch, status, err := fastTransferCancelPatch(current, time.Now().UTC())
+	if err != nil {
+		return status, shared.ErrorData(err.Error()), nil
+	}
+	updated, ok, err := repo.UpdateFastTransferWithEvent(r.Context(), app, projectID, namespace, name, patch, func(data map[string]any) contracts.Event {
+		return storageEvent(r, fastTransferChangedEvent, fastTransferEventPayload(data, "cancelled"))
 	})
 	if err != nil {
 		return http.StatusInternalServerError, shared.ErrorData("fast transfer could not be cancelled"), nil
 	}
 	if !ok {
 		return http.StatusNotFound, shared.ErrorData("fast transfer not found"), nil
+	}
+	return http.StatusOK, updated, nil
+}
+
+func updateFastTransferProgress(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
+	if status, data, ok := requireStorageServiceAuth(app, r); !ok {
+		return status, data, nil
+	}
+	payload, err := platform.DecodeMapWithError(r)
+	if err != nil {
+		return http.StatusBadRequest, shared.ErrorData(msgInvalidRequestBody), nil
+	}
+	projectID := strings.TrimSpace(r.PathValue("project_id"))
+	namespace, name := r.PathValue("targetNamespace"), r.PathValue("name")
+	repo := storageRepo(app)
+	current, found := repo.GetFastTransfer(r.Context(), projectID, namespace, name)
+	if !found {
+		return http.StatusNotFound, shared.ErrorData("fast transfer not found"), nil
+	}
+	patch, eventName, status, err := fastTransferProgressPatchFromPayload(current, payload, time.Now().UTC())
+	if err != nil {
+		return status, shared.ErrorData(err.Error()), nil
+	}
+	updated, ok, err := repo.UpdateFastTransferWithEvent(r.Context(), app, projectID, namespace, name, patch, func(data map[string]any) contracts.Event {
+		return storageEvent(r, fastTransferChangedEvent, fastTransferEventPayload(data, "progress"))
+	})
+	if err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("fast transfer could not be updated"), nil
+	}
+	if !ok {
+		return http.StatusNotFound, shared.ErrorData("fast transfer not found"), nil
+	}
+	if eventName != fastTransferChangedEvent {
+		publishEvent(app, r, eventName, fastTransferEventPayload(updated, shared.TextValue(updated, "status")))
 	}
 	return http.StatusOK, updated, nil
 }

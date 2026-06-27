@@ -241,6 +241,28 @@ func (r recordStoreStorageRepository) GetFastTransfer(ctx context.Context, proje
 	return r.get(ctx, fastTransfersResource, fastTransferID(projectID, namespace, name))
 }
 
+func (r recordStoreStorageRepository) FindFastTransferByIdempotencyKeyHash(ctx context.Context, projectID, keyHash string) (map[string]any, bool) {
+	if keyHash == "" {
+		return nil, false
+	}
+	for _, row := range r.listMaps(ctx, fastTransfersResource) {
+		if text(row, "project_id", "projectId") == projectID && text(row, internalFastTransferIdempotencyKeyHash) == keyHash {
+			return row, true
+		}
+	}
+	return nil, false
+}
+
+func (r recordStoreStorageRepository) UpdateFastTransferWithEvent(
+	ctx context.Context,
+	app *platform.App,
+	projectID, namespace, name string,
+	data map[string]any,
+	build func(map[string]any) contracts.Event,
+) (map[string]any, bool, error) {
+	return r.updateWithEvent(ctx, app, fastTransfersResource, fastTransferID(projectID, namespace, name), data, build)
+}
+
 func (r recordStoreStorageRepository) CancelFastTransfer(
 	ctx context.Context,
 	projectID, namespace, name string,

@@ -16,6 +16,10 @@ func TestEventEnvelopeFixturesAreValidV1(t *testing.T) {
 	want := []string{
 		"audit-event.json",
 		"data-plane-plan-built.json",
+		"fast-transfer-completed.json",
+		"fast-transfer-failed.json",
+		"fast-transfer-progressed.json",
+		"fast-transfer-queued.json",
 		"job-submitted.json",
 		"project-updated.json",
 		"quota-reserved.json",
@@ -48,13 +52,17 @@ func TestEventEnvelopeFixturesAreValidV1(t *testing.T) {
 	}
 
 	wantTypes := map[string]string{
-		"AuditEvent":            "scheduler-quota-service",
-		"DataPlanePlanBuilt":    "storage-service",
-		"JobSubmitted":          "workload-service",
-		"ProjectUpdated":        "org-project-service",
-		"QuotaReserved":         "scheduler-quota-service",
-		"StorageProfileChanged": "storage-service",
-		"UserUpdated":           "identity-service",
+		"AuditEvent":             "scheduler-quota-service",
+		"DataPlanePlanBuilt":     "storage-service",
+		"FastTransferCompleted":  "storage-service",
+		"FastTransferFailed":     "storage-service",
+		"FastTransferProgressed": "storage-service",
+		"FastTransferQueued":     "storage-service",
+		"JobSubmitted":           "workload-service",
+		"ProjectUpdated":         "org-project-service",
+		"QuotaReserved":          "scheduler-quota-service",
+		"StorageProfileChanged":  "storage-service",
+		"UserUpdated":            "identity-service",
 	}
 	if !reflect.DeepEqual(seenTypes, wantTypes) {
 		t.Fatalf("fixture event type/producers = %v, want %v", seenTypes, wantTypes)
