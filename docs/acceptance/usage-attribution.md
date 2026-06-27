@@ -342,11 +342,32 @@ by
 - missing or zero reserved evidence is skipped, so telemetry absence does not
   grant extra quota or create divide-by-zero drift ratios;
 - local tests cover material drift emission, duplicate suppression, below-
-  threshold skips, missing-reserved skips, stale-telemetry skips, and the
+  threshold skips, missing-reserved skips, stale/missing telemetry alerting, and the
   `UsageDriftDetected` event fixture.
+
+`USAGE-032` / `MON-018` now have local control-plane evidence in commit
+`eb5cd16`, documented by
+[`2026-06-27-usage-telemetry-stale-alert.md`](../plan/2026-06-27-usage-telemetry-stale-alert.md)
+and
+[`2026-06-27-usage-stale-alert-doc-sync.md`](../plan/2026-06-27-usage-stale-alert-doc-sync.md):
+
+- `usage-observability-service` emits `UsageDriftDetected` with
+  `reason`/`drift_reason="active_reserved_jobs_missing_fresh_snapshots"` when
+  active reserved GPU jobs have no fresh `job_gpu_usage_snapshots` in the
+  configured snapshot window;
+- repeated equivalent stale/missing alerts are deduped through persisted
+  `usage_drift_alerts`, and the alert record resolves when all active reserved
+  jobs regain fresh snapshots or are no longer active/reserved;
+- mixed projects report only the stale/missing subset in `missing_job_ids`, so
+  jobs with fresh telemetry are excluded from the alert payload;
+- this alert path is informational and does not change quota admission, quota
+  grants, or quota release behavior.
 
 This is local control-plane/UI evidence only. `USAGE-013`, `USAGE-014`,
 `USAGE-017`, `USAGE-018`, and `USAGE-035` through `USAGE-037` still require
 real node-level GPU/process evidence, including DCGM or NVIDIA tooling where
 available, process-exporter or equivalent process telemetry, PID/cgroup/CRI
 container mapping, MPS server overhead handling, and live multi-user MPS E2E.
+The `USAGE-032` / `MON-018` stale/missing alert evidence above is also local
+only; it does not prove live node-agent failure, live GPU hardware telemetry, or
+full MON completion.

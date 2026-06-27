@@ -476,9 +476,17 @@ and load evidence remains tracked separately under PERF.
   `UsageDriftDetected` for material reserved-vs-observed GPU telemetry drift,
   persists `usage_drift_alerts` to suppress repeated equivalent alerts, and
   skips missing/zero reserved evidence so telemetry absence does not grant
-  extra quota or create invalid drift ratios. This is local control-plane
-  evidence only; live GPU/process telemetry and stale-node-agent alert proof
-  remain open under the usage and monitoring rows. Harbor
+  extra quota or create invalid drift ratios. Local USAGE-032 / MON-018 evidence
+  also exists after commit `eb5cd16`: active reserved GPU jobs without fresh
+  `job_gpu_usage_snapshots` emit `UsageDriftDetected` with
+  `reason`/`drift_reason="active_reserved_jobs_missing_fresh_snapshots"`,
+  repeated equivalent alerts are deduped and later resolved through
+  `usage_drift_alerts`, and mixed projects report only the stale/missing subset
+  in `missing_job_ids`. This alert path is informational and does not change
+  quota admission, quota grants, or quota release behavior. This is local
+  control-plane evidence only; live GPU/process telemetry, live node-agent
+  failure proof, and full MON completion remain open under the usage and
+  monitoring rows. Harbor
   dependency failure-injection evidence also exists: runtime `HARBOR_URL`
   points at the Harbor API ping path, healthy `/api/v1/harbor-status` was
   proven, `harbor-core` was scaled from `1` to `0`, the product API returned
