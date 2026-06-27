@@ -204,7 +204,9 @@ func evaluateSubmitAdmission(ctx context.Context, reader admissionReader, req su
 		return review, deny(http.StatusForbidden, "queue is not allowed by project plan")
 	}
 	review.QueueName = queueName
-	if queue, found := admissionQueueByName(ctx, reader, queueName); found {
+	var queue admissionRecord
+	var queueFound bool
+	if queue, queueFound = admissionQueueByName(ctx, reader, queueName); queueFound {
 		review.QueuePriority = shared.IntValue(queue.Data, "priority_value", "priorityValue", "priority")
 		review.QueuePreemptible = shared.BoolValue(queue.Data, "is_preemptible", "isPreemptible", "preemptible")
 		review.RuntimeLimit = shared.IntValue(queue.Data, "max_runtime_seconds", "maxRuntimeSeconds", "runtime_limit_seconds", "runtimeLimitSeconds")
@@ -223,6 +225,9 @@ func evaluateSubmitAdmission(ctx context.Context, reader admissionReader, req su
 	review.SMPercentage = req.SMPercentage
 	if req.PinnedMemoryLimit != nil {
 		review.PinnedMemoryLimit = strings.TrimSpace(*req.PinnedMemoryLimit)
+	}
+	if err := enforceAdmissionMPSPolicy(ctx, reader, project, plan, queue, queueFound, req); err != nil {
+		return review, err
 	}
 	if err := resolveAdmissionNetworkProfile(ctx, reader, req, &review); err != nil {
 		return review, err

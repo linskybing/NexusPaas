@@ -78,3 +78,10 @@ MPS must not be represented as hard isolation across mutually untrusted tenants.
 | GPU-016 | Live E2E test proves DRA ResourceClaimTemplate + MPS injection on a GPU cluster. |
 | GPU-017 | GPU usage dashboard shows reserved GPU fraction and observed GPU usage separately. |
 | GPU-018 | If true per-process SM usage is unavailable on the target NVIDIA stack, UI must label SM attribution as estimated or allocation-based, not measured. |
+
+## Current Admission Caveat
+
+`scheduler-quota-service` enforces MPS policy during submit admission. The
+cross-project guard is a conservative control-plane check over active workload
+records using the same active statuses as quota accounting. It is not yet
+node-level placement proof; live DRA/MPS hardware validation remains `GPU-016`.

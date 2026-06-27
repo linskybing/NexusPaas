@@ -61,6 +61,22 @@ Required trace behavior:
 Do not log secrets, bearer tokens, API keys, raw cookies, raw OIDC assertions,
 file payloads, or sensitive tenant data.
 
+## GPU MPS Admission Policy
+
+Operators control fractional GPU/MPS admission with existing plan and queue
+records:
+
+- `mps_allowed=false` blocks MPS for the plan or queue.
+- `max_sm_percentage_per_gpu` caps per-job MPS active thread percentage.
+- `allow_cross_project_mps=true` on the plan permits cross-project MPS only when
+  the queue does not tighten it back to false.
+- `high_security=true` or `mps_forbidden=true` on a Project blocks MPS.
+
+Malformed MPS policy fields fail closed during submit admission. Cross-project
+blocking is based on active workload records and the same active status set used
+for quota accounting; it is a conservative control-plane guard, not GPU
+placement proof. Use MIG or whole-GPU allocation for hard tenant isolation.
+
 ## Alert Policy
 
 Page immediately for sustained Production Beta symptoms:
