@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "contract_name": "authorization-policy.update_proxy_policy",
+  "owner_service": "authorization-policy-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "authorization-policy-service:proxy_policies",
+  "action": "update",
+  "method": "PUT",
+  "path": "/api/v1/admin/proxy-rbac/policies/{id}",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [
+    "id"
+  ],
+  "required_request_fields": [],
+  "optional_request_fields": [
+    "name",
+    "description",
+    "rules"
+  ],
+  "request_example": {
+    "description": "Updated storage and workload proxy policy",
+    "rules": [
+      {
+        "serviceId": "workload-service",
+        "actions": [
+          "submit",
+          "cancel"
+        ]
+      }
+    ]
+  },
+  "success_statuses": [
+    200
+  ],
+  "error_statuses": [
+    400,
+    401,
+    403,
+    404,
+    409,
+    500
+  ],
+  "emits_events": [
+    "ProxyPolicyChanged"
+  ],
+  "response_example": {
+    "id": "proxy-policy-ga-storage-auditor",
+    "name": "ga_storage_audit_policy",
+    "description": "Updated storage and workload proxy policy",
+    "is_system": false,
+    "created_at": "2026-06-28T00:00:00Z",
+    "updated_at": "2026-06-28T01:00:00Z",
+    "rules": [
+      {
+        "service_id": "workload-service",
+        "actions": [
+          "submit",
+          "cancel"
+        ]
+      }
+    ]
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

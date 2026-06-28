@@ -14,12 +14,68 @@ import (
 
 func TestExternalAPIFixturesAreValidV1(t *testing.T) {
 	fixtures := externalAPIFixtureFiles(t)
-	want := []string{"authorization-policy-create-proxy-role.json", "authorization-policy-delete-proxy-role.json", "authorization-policy-update-proxy-role.json", "identity-cli-login.json", "identity-create-api-token.json", "identity-list-api-tokens.json", "identity-login.json", "identity-refresh.json", "identity-register.json", "identity-revoke-api-token.json", "identity-revoke-current-api-token.json", "image-registry-context-build.json", "image-registry-create-acceleration-profile.json", "image-registry-dockerfile-build.json", "image-registry-storage-build.json", "org-project-batch-delete-groups.json", "org-project-batch-delete-projects.json", "org-project-create-group.json", "org-project-create-project.json", "org-project-delete-group.json", "org-project-delete-project.json", "org-project-update-group.json", "org-project-update-project.json", "request-notification-create-form.json", "scheduler-create-accelerator-profile.json", "scheduler-create-network-profile.json", "scheduler-create-placement-profile.json", "storage-batch-delete-project-permissions.json", "storage-batch-update-project-permissions.json", "storage-create-benchmark-record.json", "storage-create-cache-binding.json", "storage-create-permission.json", "storage-create-profile.json", "storage-create-project-binding.json", "storage-delete-project-permission.json", "storage-list-benchmark-records.json", "storage-update-project-permission.json", "workload-cancel-job.json", "workload-commit-configfile-version.json", "workload-create-configfile.json", "workload-delete-configfile.json", "workload-get-configfile.json", "workload-patch-configfile.json", "workload-submit-job.json", "workload-update-configfile.json"}
+	want := []string{
+		"authorization-policy-create-proxy-policy.json",
+		"authorization-policy-create-proxy-role.json",
+		"authorization-policy-delete-proxy-policy.json",
+		"authorization-policy-delete-proxy-role.json",
+		"authorization-policy-update-proxy-policy.json",
+		"authorization-policy-update-proxy-role.json",
+		"identity-cli-login.json",
+		"identity-create-api-token.json",
+		"identity-list-api-tokens.json",
+		"identity-login.json",
+		"identity-refresh.json",
+		"identity-register.json",
+		"identity-revoke-api-token.json",
+		"identity-revoke-current-api-token.json",
+		"image-registry-context-build.json",
+		"image-registry-create-acceleration-profile.json",
+		"image-registry-dockerfile-build.json",
+		"image-registry-storage-build.json",
+		"org-project-batch-delete-groups.json",
+		"org-project-batch-delete-projects.json",
+		"org-project-create-group.json",
+		"org-project-create-project.json",
+		"org-project-delete-group.json",
+		"org-project-delete-project.json",
+		"org-project-update-group.json",
+		"org-project-update-project.json",
+		"request-notification-create-form.json",
+		"scheduler-create-accelerator-profile.json",
+		"scheduler-create-network-profile.json",
+		"scheduler-create-placement-profile.json",
+		"storage-batch-delete-project-permissions.json",
+		"storage-batch-update-project-permissions.json",
+		"storage-create-benchmark-record.json",
+		"storage-create-cache-binding.json",
+		"storage-create-permission.json",
+		"storage-create-profile.json",
+		"storage-create-project-binding.json",
+		"storage-delete-project-permission.json",
+		"storage-list-benchmark-records.json",
+		"storage-update-project-permission.json",
+		"workload-cancel-job.json",
+		"workload-commit-configfile-version.json",
+		"workload-create-configfile.json",
+		"workload-delete-configfile.json",
+		"workload-get-configfile.json",
+		"workload-patch-configfile.json",
+		"workload-submit-job.json",
+		"workload-update-configfile.json",
+	}
 	if !reflect.DeepEqual(fixtures, want) {
 		t.Fatalf("fixture files = %v, want %v", fixtures, want)
 	}
 
 	wantRoutes := map[string]externalAPIFixtureRoute{
+		"authorization-policy-create-proxy-policy.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_policies",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/admin/proxy-rbac/policies",
+		},
 		"authorization-policy-create-proxy-role.json": {
 			ownerService: "authorization-policy-service",
 			resource:     "authorization-policy-service:proxy_roles",
@@ -27,12 +83,26 @@ func TestExternalAPIFixturesAreValidV1(t *testing.T) {
 			method:       http.MethodPost,
 			path:         "/api/v1/admin/proxy-rbac/roles",
 		},
+		"authorization-policy-delete-proxy-policy.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_policies",
+			action:       "delete",
+			method:       http.MethodDelete,
+			path:         "/api/v1/admin/proxy-rbac/policies/{id}",
+		},
 		"authorization-policy-delete-proxy-role.json": {
 			ownerService: "authorization-policy-service",
 			resource:     "authorization-policy-service:proxy_roles",
 			action:       "delete",
 			method:       http.MethodDelete,
 			path:         "/api/v1/admin/proxy-rbac/roles/{id}",
+		},
+		"authorization-policy-update-proxy-policy.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_policies",
+			action:       "update",
+			method:       http.MethodPut,
+			path:         "/api/v1/admin/proxy-rbac/policies/{id}",
 		},
 		"authorization-policy-update-proxy-role.json": {
 			ownerService: "authorization-policy-service",
@@ -678,7 +748,10 @@ func validateExternalAPIRequiredRequest(fixture externalAPIContractFixture) erro
 		return nil
 	}
 	if len(fixture.RequiredRequestFields) == 0 {
-		return fmt.Errorf("external API fixture required_request_fields is empty")
+		if len(fixture.OptionalRequestFields) == 0 || !hasDeclaredOptionalExternalAPIRequestExample(fixture) {
+			return fmt.Errorf("external API fixture required_request_fields is empty")
+		}
+		return nil
 	}
 	for _, field := range fixture.RequiredRequestFields {
 		value, ok := fixture.RequestExample[field]
@@ -690,6 +763,15 @@ func validateExternalAPIRequiredRequest(fixture externalAPIContractFixture) erro
 		}
 	}
 	return nil
+}
+
+func hasDeclaredOptionalExternalAPIRequestExample(fixture externalAPIContractFixture) bool {
+	for _, field := range fixture.OptionalRequestFields {
+		if _, ok := fixture.RequestExample[field]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func validateExternalAPIStatuses(fixture externalAPIContractFixture) error {

@@ -87,6 +87,14 @@ params, success/error statuses, and `ProxyPolicyChanged` linkage. The
 `action`. This is static contract evidence only; it does not prove live admin
 authorization, live proxy role mutation behavior, full typed API coverage, DATA
 GA, Full GA, or first-version readiness.
+Authorization-policy proxy policy create, update, and delete now also have
+local/static external REST fixture parity against `authorizationpolicy.Spec()`
+for admin route metadata, authenticated-user/no-service-key posture, path
+params, partial-update optional request fields, success/error statuses, and
+`ProxyPolicyChanged` linkage. The existing `ProxyPolicyChanged` event envelope
+fixture is reused. Typed API coverage remains Open; this does not prove live
+admin authorization, live proxy policy mutation behavior, DATA GA, Full GA, or
+first-version readiness.
 Identity auth/session entrypoints now also have local/static typed external REST
 fixture coverage for `POST /api/v1/register`, `POST /api/v1/login`,
 `POST /api/v1/refresh`, and `POST /api/v1/cli/login`: the fixtures declare

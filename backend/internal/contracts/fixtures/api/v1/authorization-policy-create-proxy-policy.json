@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "contract_name": "authorization-policy.create_proxy_policy",
+  "owner_service": "authorization-policy-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "authorization-policy-service:proxy_policies",
+  "action": "create",
+  "method": "POST",
+  "path": "/api/v1/admin/proxy-rbac/policies",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [],
+  "required_request_fields": [
+    "name"
+  ],
+  "optional_request_fields": [
+    "id",
+    "description",
+    "rules"
+  ],
+  "request_example": {
+    "id": "proxy-policy-ga-storage-auditor",
+    "name": "ga_storage_audit_policy",
+    "description": "Grant read-only storage proxy actions",
+    "rules": [
+      {
+        "service_id": "storage-service",
+        "actions": [
+          "list",
+          "read"
+        ]
+      }
+    ]
+  },
+  "success_statuses": [
+    201
+  ],
+  "error_statuses": [
+    400,
+    401,
+    403,
+    409,
+    500
+  ],
+  "emits_events": [
+    "ProxyPolicyChanged"
+  ],
+  "response_example": {
+    "id": "proxy-policy-ga-storage-auditor",
+    "name": "ga_storage_audit_policy",
+    "description": "Grant read-only storage proxy actions",
+    "is_system": false,
+    "created_at": "2026-06-28T00:00:00Z",
+    "updated_at": "2026-06-28T00:00:00Z",
+    "rules": [
+      {
+        "service_id": "storage-service",
+        "actions": [
+          "list",
+          "read"
+        ]
+      }
+    ]
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}
