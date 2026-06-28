@@ -195,6 +195,61 @@ func TestProxyRoleUserExternalAPIFixturesMatchSpec(t *testing.T) {
 	assertProxyRoleUserExternalAPIFixturesMatchSpec(t, cases)
 }
 
+func TestProxyPolicyAssignmentExternalAPIFixturesMatchSpec(t *testing.T) {
+	cases := []proxyRoleUserFixtureCase{
+		{
+			name:           "list",
+			fixtureName:    "authorization-policy-list-proxy-policy-assignments.json",
+			contractName:   "authorization-policy.list_proxy_policy_assignments",
+			method:         http.MethodGet,
+			path:           "/api/v1/admin/proxy-rbac/policies/{id}/assignments",
+			resource:       "proxy_policy_assignments",
+			action:         "list",
+			idParam:        "id",
+			pathParameters: []string{"id"},
+			requiredFields: []string{},
+			success:        []int{http.StatusOK},
+			errors:         []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError},
+			emitsEvents:    []string{},
+			collection:     true,
+		},
+		{
+			name:           "assign",
+			fixtureName:    "authorization-policy-assign-proxy-policy.json",
+			contractName:   "authorization-policy.assign_proxy_policy",
+			method:         http.MethodPost,
+			path:           "/api/v1/admin/proxy-rbac/policies/{id}/assignments",
+			resource:       "proxy_policy_assignments",
+			action:         "create",
+			idParam:        "id",
+			pathParameters: []string{"id"},
+			requiredFields: []string{"target_type", "target_id"},
+			success:        []int{http.StatusOK, http.StatusCreated},
+			errors:         []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusInternalServerError},
+			emitsEvents:    []string{"ProxyPolicyChanged"},
+			stateChanging:  true,
+		},
+		{
+			name:           "unassign",
+			fixtureName:    "authorization-policy-unassign-proxy-policy.json",
+			contractName:   "authorization-policy.unassign_proxy_policy",
+			method:         http.MethodDelete,
+			path:           "/api/v1/admin/proxy-rbac/policies/{id}/assignments",
+			resource:       "proxy_policy_assignments",
+			action:         "delete",
+			idParam:        "id",
+			pathParameters: []string{"id"},
+			requiredFields: []string{"target_type", "target_id"},
+			success:        []int{http.StatusOK},
+			errors:         []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError},
+			emitsEvents:    []string{"ProxyPolicyChanged"},
+			stateChanging:  true,
+		},
+	}
+
+	assertProxyRoleUserExternalAPIFixturesMatchSpec(t, cases)
+}
+
 func assertProxyRBACExternalAPIFixturesMatchSpec(t *testing.T, cases []proxyRBACFixtureCase) {
 	t.Helper()
 	spec := Spec()
@@ -294,6 +349,7 @@ type proxyRoleUserFixtureCase struct {
 	contractName   string
 	method         string
 	path           string
+	resource       string
 	action         string
 	idParam        string
 	pathParameters []string
@@ -432,8 +488,12 @@ func assertProxyRoleUserRouteMetadata(t *testing.T, route platform.RouteSpec, fi
 	if route.Method != want.method || route.Pattern != want.path {
 		t.Fatalf("route = %s %s, want %s %s", route.Method, route.Pattern, want.method, want.path)
 	}
-	if route.Resource != "proxy_role_users" || route.Action != want.action {
-		t.Fatalf("route metadata = %#v, want proxy_role_users/%s", route, want.action)
+	resource := want.resource
+	if resource == "" {
+		resource = "proxy_role_users"
+	}
+	if route.Resource != resource || route.Action != want.action {
+		t.Fatalf("route metadata = %#v, want %s/%s", route, resource, want.action)
 	}
 	if route.IDParam != want.idParam {
 		t.Fatalf("route IDParam = %q, want %q", route.IDParam, want.idParam)
@@ -449,8 +509,12 @@ func assertProxyRoleUserRouteMetadata(t *testing.T, route platform.RouteSpec, fi
 func assertProxyRoleUserExamples(t *testing.T, fixture authorizationPolicyExternalAPIFixture, want proxyRoleUserFixtureCase) {
 	t.Helper()
 	if want.action == "delete" {
-		if len(fixture.RequestExample) != 0 || len(fixture.ResponseExample) != 0 {
-			t.Fatalf("delete request/response examples = %v/%v, want empty objects", fixture.RequestExample, fixture.ResponseExample)
+		assertRequiredRequestFields(t, fixture, want.requiredFields)
+		if len(want.requiredFields) == 0 && len(fixture.RequestExample) != 0 {
+			t.Fatalf("delete request example = %v, want empty object", fixture.RequestExample)
+		}
+		if len(fixture.ResponseExample) != 0 {
+			t.Fatalf("delete response example = %v, want empty object", fixture.ResponseExample)
 		}
 		return
 	}
@@ -463,7 +527,11 @@ func assertProxyRoleUserExamples(t *testing.T, fixture authorizationPolicyExtern
 	if want.collection {
 		row = firstResponseItem(t, fixture.ResponseExample)
 	}
-	assertProxyRoleUserResponseRow(t, row)
+	if want.resource == "proxy_policy_assignments" {
+		assertProxyPolicyAssignmentResponseRow(t, row)
+	} else {
+		assertProxyRoleUserResponseRow(t, row)
+	}
 }
 
 func assertProxyRBACFixtureMetadata(t *testing.T, fixture authorizationPolicyExternalAPIFixture, spec platform.ServiceSpec, route platform.RouteSpec, want proxyRBACFixtureCase) {
@@ -560,6 +628,19 @@ func assertProxyRoleUserResponseRow(t *testing.T, row map[string]any) {
 	assertResponseStringFields(t, role, []string{"id", "name", "display_name", "description", "created_at", "updated_at"})
 	if _, ok := role["is_system"].(bool); !ok {
 		t.Fatalf("response row role.is_system = %v, want bool", role["is_system"])
+	}
+}
+
+func assertProxyPolicyAssignmentResponseRow(t *testing.T, row map[string]any) {
+	t.Helper()
+	assertResponseStringFields(t, row, []string{"id", "policy_id", "target_type", "target_id", "created_at"})
+	policy, ok := row["policy"].(map[string]any)
+	if !ok {
+		t.Fatalf("response row policy = %v, want object", row["policy"])
+	}
+	assertResponseStringFields(t, policy, []string{"id", "name", "description", "created_at", "updated_at"})
+	if _, ok := policy["is_system"].(bool); !ok {
+		t.Fatalf("response row policy.is_system = %v, want bool", policy["is_system"])
 	}
 }
 

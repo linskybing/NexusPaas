@@ -15,14 +15,17 @@ import (
 func TestExternalAPIFixturesAreValidV1(t *testing.T) {
 	fixtures := externalAPIFixtureFiles(t)
 	want := []string{
+		"authorization-policy-assign-proxy-policy.json",
 		"authorization-policy-assign-proxy-role-user.json",
 		"authorization-policy-create-proxy-policy.json",
 		"authorization-policy-create-proxy-role.json",
 		"authorization-policy-delete-proxy-policy.json",
 		"authorization-policy-delete-proxy-role.json",
 		"authorization-policy-get-proxy-service.json",
+		"authorization-policy-list-proxy-policy-assignments.json",
 		"authorization-policy-list-proxy-role-users.json",
 		"authorization-policy-list-proxy-services.json",
+		"authorization-policy-unassign-proxy-policy.json",
 		"authorization-policy-unassign-proxy-role-user.json",
 		"authorization-policy-update-proxy-policy.json",
 		"authorization-policy-update-proxy-role.json",
@@ -74,6 +77,13 @@ func TestExternalAPIFixturesAreValidV1(t *testing.T) {
 	}
 
 	wantRoutes := map[string]externalAPIFixtureRoute{
+		"authorization-policy-assign-proxy-policy.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_policy_assignments",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/admin/proxy-rbac/policies/{id}/assignments",
+		},
 		"authorization-policy-assign-proxy-role-user.json": {
 			ownerService: "authorization-policy-service",
 			resource:     "authorization-policy-service:proxy_role_users",
@@ -123,12 +133,26 @@ func TestExternalAPIFixturesAreValidV1(t *testing.T) {
 			method:       http.MethodGet,
 			path:         "/api/v1/admin/proxy-rbac/services",
 		},
+		"authorization-policy-list-proxy-policy-assignments.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_policy_assignments",
+			action:       "list",
+			method:       http.MethodGet,
+			path:         "/api/v1/admin/proxy-rbac/policies/{id}/assignments",
+		},
 		"authorization-policy-list-proxy-role-users.json": {
 			ownerService: "authorization-policy-service",
 			resource:     "authorization-policy-service:proxy_role_users",
 			action:       "list",
 			method:       http.MethodGet,
 			path:         "/api/v1/admin/proxy-rbac/roles/{id}/users",
+		},
+		"authorization-policy-unassign-proxy-policy.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_policy_assignments",
+			action:       "delete",
+			method:       http.MethodDelete,
+			path:         "/api/v1/admin/proxy-rbac/policies/{id}/assignments",
 		},
 		"authorization-policy-unassign-proxy-role-user.json": {
 			ownerService: "authorization-policy-service",

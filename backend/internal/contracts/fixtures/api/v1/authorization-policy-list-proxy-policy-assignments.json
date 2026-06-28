@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "contract_name": "authorization-policy.list_proxy_policy_assignments",
+  "owner_service": "authorization-policy-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "authorization-policy-service:proxy_policy_assignments",
+  "action": "list",
+  "method": "GET",
+  "path": "/api/v1/admin/proxy-rbac/policies/{id}/assignments",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [
+    "id"
+  ],
+  "required_request_fields": [],
+  "optional_request_fields": [],
+  "request_example": {},
+  "success_statuses": [
+    200
+  ],
+  "error_statuses": [
+    401,
+    403,
+    404,
+    500
+  ],
+  "emits_events": [],
+  "response_example": {
+    "items": [
+      {
+        "id": "proxy-policy-assignment-ga-auditor-ada",
+        "policy_id": "proxy-policy-ga-audit-read",
+        "target_type": "user",
+        "target_id": "user-ga-ada",
+        "created_at": "2026-06-28T00:00:00Z",
+        "policy": {
+          "id": "proxy-policy-ga-audit-read",
+          "name": "ga_audit_read",
+          "description": "Read-only GA audit policy",
+          "is_system": false,
+          "created_at": "2026-06-28T00:00:00Z",
+          "updated_at": "2026-06-28T00:00:00Z"
+        }
+      }
+    ]
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}
