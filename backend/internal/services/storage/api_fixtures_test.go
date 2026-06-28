@@ -190,10 +190,10 @@ func TestCacheBindingExternalAPIFixturesMatchSpec(t *testing.T) {
 			if !ok {
 				t.Fatalf("route %s %s not found in Spec()", fixture.Method, fixture.Path)
 			}
-			assertCacheBindingExternalAPIFixtureMetadata(t, fixture, spec, route, tt.contract, tt.action)
+			assertStorageExternalAPIFixtureMetadata(t, fixture, spec, route, tt.contract, tt.action)
 			assertCacheBindingExternalAPIRouteMetadata(t, route, fixture, tt.method, tt.path, tt.action)
 			assertCacheBindingExternalAPIRequestShape(t, fixture, tt.pathParams, tt.action)
-			assertCacheBindingExternalAPIStatusesAndEvents(t, fixture, spec, tt.success, tt.errors, tt.events)
+			assertStorageExternalAPIStatusesAndEvents(t, fixture, spec, tt.success, tt.errors, tt.events)
 			assertCacheBindingExternalAPIResponseShape(t, fixture, tt.action)
 		})
 	}
@@ -260,10 +260,10 @@ func TestFastTransferExternalAPIFixturesMatchSpec(t *testing.T) {
 			if !ok {
 				t.Fatalf("route %s %s not found in Spec()", fixture.Method, fixture.Path)
 			}
-			assertFastTransferExternalAPIFixtureMetadata(t, fixture, spec, route, tt.contract, tt.action)
+			assertStorageExternalAPIFixtureMetadata(t, fixture, spec, route, tt.contract, tt.action)
 			assertFastTransferExternalAPIRouteMetadata(t, route, fixture, tt.method, tt.path, tt.action, tt.adapter)
 			assertFastTransferExternalAPIRequestShape(t, fixture, tt.pathParams, tt.action, tt.method)
-			assertFastTransferExternalAPIStatusesAndEvents(t, fixture, spec, tt.success, tt.errors, tt.events)
+			assertStorageExternalAPIStatusesAndEvents(t, fixture, spec, tt.success, tt.errors, tt.events)
 			assertFastTransferExternalAPIResponseShape(t, fixture, tt.status)
 		})
 	}
@@ -422,32 +422,7 @@ func assertProjectStoragePermissionsBatchExternalAPIBaseMetadata(t *testing.T, f
 	}
 }
 
-func assertCacheBindingExternalAPIFixtureMetadata(t *testing.T, fixture storageExternalAPIFixture, spec platform.ServiceSpec, route platform.RouteSpec, contractName, action string) {
-	t.Helper()
-	if fixture.ContractName != contractName {
-		t.Fatalf("contract_name = %q, want %s", fixture.ContractName, contractName)
-	}
-	if fixture.OwnerService != spec.Name {
-		t.Fatalf("owner_service = %q, want %q", fixture.OwnerService, spec.Name)
-	}
-	if fixture.APISurface != "external_rest" {
-		t.Fatalf("api_surface = %q, want external_rest", fixture.APISurface)
-	}
-	if fixture.Consumer != "authenticated-user-client" {
-		t.Fatalf("consumer = %q, want authenticated-user-client", fixture.Consumer)
-	}
-	if got, want := fixture.Resource, spec.Name+":"+route.Resource; got != want {
-		t.Fatalf("resource = %q, want %q", got, want)
-	}
-	if fixture.Action != action || route.Action != action {
-		t.Fatalf("action fixture/route = %q/%q, want %q", fixture.Action, route.Action, action)
-	}
-	if fixture.Auth != "user" || !fixture.AuthRequired || fixture.AuthRequired != route.AuthRequired || fixture.ServiceKeyRequired != route.ServiceAuthRequired {
-		t.Fatalf("auth metadata = %q/%v/%v, want user/%v/%v", fixture.Auth, fixture.AuthRequired, fixture.ServiceKeyRequired, route.AuthRequired, route.ServiceAuthRequired)
-	}
-}
-
-func assertFastTransferExternalAPIFixtureMetadata(t *testing.T, fixture storageExternalAPIFixture, spec platform.ServiceSpec, route platform.RouteSpec, contractName, action string) {
+func assertStorageExternalAPIFixtureMetadata(t *testing.T, fixture storageExternalAPIFixture, spec platform.ServiceSpec, route platform.RouteSpec, contractName, action string) {
 	t.Helper()
 	if fixture.ContractName != contractName {
 		t.Fatalf("contract_name = %q, want %s", fixture.ContractName, contractName)
@@ -764,25 +739,7 @@ func assertProjectStoragePermissionsBatchExternalAPIStatusesAndEvents(t *testing
 	}
 }
 
-func assertCacheBindingExternalAPIStatusesAndEvents(t *testing.T, fixture storageExternalAPIFixture, spec platform.ServiceSpec, success, errors []int, events []string) {
-	t.Helper()
-	if !reflect.DeepEqual(fixture.SuccessStatuses, success) {
-		t.Fatalf("success_statuses = %v, want %v", fixture.SuccessStatuses, success)
-	}
-	if !reflect.DeepEqual(fixture.ErrorStatuses, errors) {
-		t.Fatalf("error_statuses = %v, want %v", fixture.ErrorStatuses, errors)
-	}
-	if !reflect.DeepEqual(fixture.EmitsEvents, events) {
-		t.Fatalf("emits_events = %v, want %v", fixture.EmitsEvents, events)
-	}
-	for _, event := range events {
-		if !storageServiceEmitsEvent(spec, event) {
-			t.Fatalf("Spec().Events does not include %s", event)
-		}
-	}
-}
-
-func assertFastTransferExternalAPIStatusesAndEvents(t *testing.T, fixture storageExternalAPIFixture, spec platform.ServiceSpec, success, errors []int, events []string) {
+func assertStorageExternalAPIStatusesAndEvents(t *testing.T, fixture storageExternalAPIFixture, spec platform.ServiceSpec, success, errors []int, events []string) {
 	t.Helper()
 	if !reflect.DeepEqual(fixture.SuccessStatuses, success) {
 		t.Fatalf("success_statuses = %v, want %v", fixture.SuccessStatuses, success)
@@ -1014,6 +971,14 @@ func assertCreateProjectStorageBindingExternalAPIRouteMetadata(t *testing.T, rou
 
 func assertCacheBindingExternalAPIRouteMetadata(t *testing.T, route platform.RouteSpec, fixture storageExternalAPIFixture, method, path, action string) {
 	t.Helper()
+	assertCacheBindingExternalAPIRouteCore(t, route, method, path, action)
+	assertCacheBindingExternalAPIRouteIDParam(t, route, action)
+	assertCacheBindingExternalAPIRouteFlags(t, route, action)
+	assertStorageExternalAPIFixtureRouteParity(t, fixture, route)
+}
+
+func assertCacheBindingExternalAPIRouteCore(t *testing.T, route platform.RouteSpec, method, path, action string) {
+	t.Helper()
 	if got, want := route.Resource, "cache_bindings"; got != want {
 		t.Fatalf("route resource = %q, want %q", got, want)
 	}
@@ -1026,12 +991,20 @@ func assertCacheBindingExternalAPIRouteMetadata(t *testing.T, route platform.Rou
 	if !route.AuthRequired {
 		t.Fatal("route AuthRequired = false, want true")
 	}
+}
+
+func assertCacheBindingExternalAPIRouteIDParam(t *testing.T, route platform.RouteSpec, action string) {
+	t.Helper()
 	if route.IDParam != "id" && action == "list" {
 		t.Fatalf("route IDParam = %q, want id", route.IDParam)
 	}
 	if route.IDParam != "cacheBindingId" && action != "list" {
 		t.Fatalf("route IDParam = %q, want cacheBindingId", route.IDParam)
 	}
+}
+
+func assertCacheBindingExternalAPIRouteFlags(t *testing.T, route platform.RouteSpec, action string) {
+	t.Helper()
 	if route.Admin {
 		t.Fatal("route Admin = true, want false")
 	}
@@ -1047,6 +1020,10 @@ func assertCacheBindingExternalAPIRouteMetadata(t *testing.T, route platform.Rou
 	if route.ExternalAdapter != "" {
 		t.Fatalf("route ExternalAdapter = %q, want none", route.ExternalAdapter)
 	}
+}
+
+func assertStorageExternalAPIFixtureRouteParity(t *testing.T, fixture storageExternalAPIFixture, route platform.RouteSpec) {
+	t.Helper()
 	if fixture.Method != route.Method || fixture.Path != route.Pattern {
 		t.Fatalf("fixture route = %s %s, want %s %s", fixture.Method, fixture.Path, route.Method, route.Pattern)
 	}

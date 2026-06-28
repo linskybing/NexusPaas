@@ -473,6 +473,18 @@ correctness, resume, production secret handling, external storage backends,
 multi-node behavior, performance, durability, storage GA, Full GA, or V1 launch
 readiness.
 
+FastTransfer progress callback-to-storage now also has env-gated kind evidence
+via `backend/internal/e2e/fast_transfer_progress_storage_kind_e2e_test.go`: a
+storage fast-stage request created a mover Job, the mover copied one tiny file,
+the mover POSTed progress callbacks back to a storage-service handler, the
+storage FastTransfer record reached `succeeded` / `progress_pct=100`, and
+`FastTransferProgressed` plus `FastTransferCompleted` were emitted in the
+in-memory event bus. This does not prove Redis delivery, durable Postgres
+persistence, production service identity/secret handling, accurate byte
+accounting, checksum correctness, resume, external storage backends, multi-node
+behavior, performance, durability, storage GA, Full GA, or V1 external
+production launch readiness.
+
 FastTransfer custom external API routes now have local/static typed fixture
 parity for fast-stage start, get, and DELETE cancel. This proves contract/Spec
 parity and response-shape documentation only; it does not prove generic/legacy
