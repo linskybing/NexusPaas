@@ -414,6 +414,17 @@ only; it does not prove live kind, live Kubernetes/CSI data-plane execution,
 byte-mover behavior, live mount execution, full storage GA, Full GA, or
 first-version readiness.
 
+StorageProfile-to-HPC-StorageClass manifest drift now has local/static test
+evidence only: `storage-service` startup seeds default profile records, the
+storage package test parses `backend/deploy/hpc/storage/*.yaml`, and every
+non-object seeded profile with `storage_class_name` must match a
+`storage.k8s.io/v1` `StorageClass` whose `metadata.name` and
+`nexuspaas.io/storage-profile` label match the profile id. The
+`minio-artifact` object profile is explicitly allowed to have no StorageClass
+manifest. This does not prove live kind, Kubernetes API discovery/admission,
+CSI provisioning, local PV binding, byte-mover behavior, storage GA, Full GA,
+or first-version readiness.
+
 Storage permission management now has local handler-level `STORAGE-003` RBAC
 proof: direct handler tests cover plain group member / Project reader denial
 for direct create/set, batch set, and batch delete group/project storage
