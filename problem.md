@@ -417,6 +417,17 @@ contract evidence and API admission evidence only; it does not prove live
 Kubernetes/CSI data-plane execution, byte-mover behavior, live mount execution,
 full storage GA, Full GA, or first-version readiness.
 
+Storage DataPlane cache-hit dispatch now also has env-gated kind runtime
+evidence via
+`backend/internal/e2e/storage_data_plane_cache_hit_kind_runtime_e2e_test.go`:
+storage-service built a cache-hit DataPlanePlan, workload-service dispatched a
+Pod with a pre-created scratch PVC, the Pod reached `Succeeded`, injected
+checkpoint env matched the plan, a marker was written to and read back from the
+scratch PVC, and no stage target PVC was materialized. This does not prove
+stage-in byte copy, CSI/local NVMe/CephFS/Longhorn runtime, scratch PVC
+auto-provisioning, checkpoint flush, performance, multi-node behavior, storage
+GA, Full GA, or V1 external production launch readiness.
+
 FastTransfer mover Job dispatch now also has env-gated live Kubernetes API
 admission evidence via
 `backend/internal/e2e/fast_transfer_mover_kind_admission_e2e_test.go`: the test

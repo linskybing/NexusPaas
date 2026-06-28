@@ -424,6 +424,15 @@ admission evidence for storage DataPlane dispatch exists via
 `backend/internal/e2e/storage_data_plane_kind_admission_e2e_test.go`; remaining
 gaps stay open for CSI mount, scheduler success, local PV binding, byte mover
 behavior, StorageClass runtime validation, storage GA, and Full GA.
+Env-gated kind cache-hit runtime evidence now exists via
+`backend/internal/e2e/storage_data_plane_cache_hit_kind_runtime_e2e_test.go`:
+storage-service built a cache-hit DataPlanePlan, workload-service dispatched a
+Pod with a pre-created scratch PVC, the Pod reached `Succeeded`, injected
+checkpoint env matched the plan, a marker was written to and read back from the
+scratch PVC, and no stage target PVC was materialized. This does not prove
+stage-in byte copy, CSI/local NVMe/CephFS/Longhorn runtime, scratch PVC
+auto-provisioning, checkpoint flush, performance, multi-node behavior, storage
+GA, Full GA, or V1 external production launch readiness.
 Env-gated live Kubernetes API admission evidence for FastTransfer mover Job
 creation and repeat `already_exists` now exists via
 `backend/internal/e2e/fast_transfer_mover_kind_admission_e2e_test.go`; it proves
