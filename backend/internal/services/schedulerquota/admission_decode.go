@@ -36,6 +36,7 @@ func decodeSubmitAdmissionRequest(payload map[string]any) (submitAdmissionReques
 	if pinned := shared.TextValue(payload, "pinned_memory_limit", "pinnedMemoryLimit", "pinned_memory", "pinnedMemory"); pinned != "" {
 		req.PinnedMemoryLimit = &pinned
 	}
+	req.MPSShareProjectID = shared.TextValue(payload, "mps_share_project_id", "mpsShareProjectId", "shared_claim_project_id", "sharedClaimProjectId")
 	return req, nil
 }
 

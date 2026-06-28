@@ -6,7 +6,7 @@ CI_GATE := ./scripts/ci-security-gate.sh
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build fmt-check vet lint test coverage check ci-local ci-quick ci-docker ci-security ci-sonar ci-all beta-rc perf-k6-core-read perf-k6-stream-credentials clean
+.PHONY: help build fmt-check vet lint test coverage check ci-local ci-quick ci-docker ci-security ci-sonar ci-all beta-rc perf-k6-core-read perf-k6-stream-credentials dra-up dra-down dra-e2e clean
 
 help:
 	@printf '%s\n' 'Backend developer targets:'
@@ -26,6 +26,9 @@ help:
 	@printf '%s\n' '  make beta-rc      Run production beta RC gate'
 	@printf '%s\n' '  make perf-k6-core-read  Run optional k6 core read performance harness'
 	@printf '%s\n' '  make perf-k6-stream-credentials  Run optional k6 stream credential performance harness'
+	@printf '%s\n' '  make dra-up       Bring up a GPU-less kind cluster with dra-example-driver'
+	@printf '%s\n' '  make dra-e2e      Run the live DRA E2E against the fake-GPU cluster'
+	@printf '%s\n' '  make dra-down     Delete the dra-example-driver kind cluster'
 	@printf '%s\n' '  make clean        Remove local coverage output'
 
 build:
@@ -74,6 +77,17 @@ perf-k6-core-read:
 perf-k6-stream-credentials:
 	mkdir -p .tmp
 	k6 run scripts/perf/stream-credentials-100vu.js
+
+DRA_E2E_TEST ?= ^TestLiveK8sConfigFileDRADispatchE2E$$
+
+dra-up:
+	$(BASH) scripts/dra-kind-up.sh
+
+dra-down:
+	$(BASH) scripts/dra-kind-down.sh
+
+dra-e2e:
+	TEST_LIVE_K8S_CONFIGFILE_DRA=1 $(GO) test -tags e2e ./internal/e2e -run '$(DRA_E2E_TEST)' -count=1 -v
 
 clean:
 	rm -f $(COVERAGE_FILE)

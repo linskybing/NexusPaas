@@ -76,6 +76,7 @@ type MPSGPUSlot struct {
 	SMUtilizationSource   string
 	SMAttributionSource   string
 	SMAttributionMeasured bool
+	SMAttribution         string
 	MemUtilization        float64
 	MemUtilizationSource  string
 	MemoryUsedBytes       int64

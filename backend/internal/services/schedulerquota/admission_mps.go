@@ -21,7 +21,7 @@ const (
 	errInvalidQueueMPSPolicy = "invalid queue MPS policy: %w"
 )
 
-func enforceAdmissionMPSPolicy(ctx context.Context, reader admissionReader, project, plan, queue admissionRecord, queueFound bool, req submitAdmissionRequest) error {
+func enforceAdmissionMPSPlanQueuePolicy(ctx context.Context, reader admissionReader, project, plan, queue admissionRecord, queueFound bool, req submitAdmissionRequest) error {
 	if !admissionMPSRequested(req) {
 		return nil
 	}

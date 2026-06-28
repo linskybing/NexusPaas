@@ -71,9 +71,6 @@ func withRuntimeDefaults(cfg Config) Config {
 	if strings.TrimSpace(cfg.LonghornNamespace) == "" {
 		cfg.LonghornNamespace = "longhorn-system"
 	}
-	if strings.TrimSpace(cfg.WebUIDir) == "" {
-		cfg.WebUIDir = defaultWebUIDir
-	}
 	if cfg.LonghornRWXHealthInterval == 0 {
 		cfg.LonghornRWXHealthInterval = 30 * time.Second
 	}

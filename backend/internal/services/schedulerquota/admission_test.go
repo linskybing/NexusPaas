@@ -1174,6 +1174,7 @@ type admissionFixture struct {
 	withoutMember    bool
 	ownerID          string
 	projectOverrides map[string]any
+	planOverrides    map[string]any
 }
 
 func seedAdmissionProject(t *testing.T, app *platform.App, fixture admissionFixture) {
@@ -1193,6 +1194,9 @@ func seedAdmissionProject(t *testing.T, app *platform.App, fixture admissionFixt
 	}
 	if fixture.weekWindows != nil {
 		plan["week_windows"] = fixture.weekWindows
+	}
+	for key, value := range fixture.planOverrides {
+		plan[key] = value
 	}
 	createSchedulerRecord(t, app, queuesResource, map[string]any{"id": "q1", "name": "default-batch", "priority_value": 1000, "is_preemptible": true, "max_runtime_seconds": 3600})
 	createSchedulerRecord(t, app, plansResource, plan)

@@ -42,6 +42,7 @@ type submitAdmissionRequest struct {
 	RequiredMemory         int
 	GPUCount               int
 	SMPercentage           *int
+	MPSShareProjectID      string
 	StreamingSession       bool
 	StreamMaxBitrateKbps   int
 	StreamBitrateCapKbps   int
@@ -261,7 +262,10 @@ func enforceAdmissionProfilePolicies(ctx context.Context, reader admissionReader
 	if req.PinnedMemoryLimit != nil {
 		review.PinnedMemoryLimit = strings.TrimSpace(*req.PinnedMemoryLimit)
 	}
-	if err := enforceAdmissionMPSPolicy(ctx, reader, admissionCtx.project, admissionCtx.plan, admissionCtx.queue, admissionCtx.queueFound, req); err != nil {
+	if err := enforceAdmissionMPSPolicy(admissionCtx.plan, req); err != nil {
+		return err
+	}
+	if err := enforceAdmissionMPSPlanQueuePolicy(ctx, reader, admissionCtx.project, admissionCtx.plan, admissionCtx.queue, admissionCtx.queueFound, req); err != nil {
 		return err
 	}
 	return resolveAdmissionNetworkProfile(ctx, reader, req, review)

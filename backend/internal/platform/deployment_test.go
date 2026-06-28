@@ -21,14 +21,9 @@ func TestDeploymentManifestsAreProductionHardened(t *testing.T) {
 	}
 
 	rootDockerignore := readTextFile(t, "../../../.dockerignore")
-	requireContains(t, "../../../.dockerignore", rootDockerignore, "frontend/node_modules/")
-	requireContains(t, "../../../.dockerignore", rootDockerignore, "frontend/dist/")
 	requireContains(t, "../../../.dockerignore", rootDockerignore, "**/.env")
 
 	sharedDockerfile := readTextFile(t, "../../Dockerfile")
-	requireContains(t, "../../Dockerfile", sharedDockerfile, "FROM node:24.15.0-alpine AS web-build")
-	requireContains(t, "../../Dockerfile", sharedDockerfile, "RUN npm ci")
-	requireContains(t, "../../Dockerfile", sharedDockerfile, "RUN npm run build")
 	requireContains(t, "../../Dockerfile", sharedDockerfile, "COPY backend/go.mod backend/go.sum ./")
 	requireContains(t, "../../Dockerfile", sharedDockerfile, "RUN go mod download")
 	requireContains(t, "../../Dockerfile", sharedDockerfile, "COPY backend/cmd ./cmd")
@@ -38,8 +33,6 @@ func TestDeploymentManifestsAreProductionHardened(t *testing.T) {
 	requireContains(t, "../../Dockerfile", sharedDockerfile, "RUN apk add --no-cache --upgrade ca-certificates libcrypto3 libssl3 \\")
 	requireContains(t, "../../Dockerfile", sharedDockerfile, "&& addgroup -S -g 10001 app \\")
 	requireContains(t, "../../Dockerfile", sharedDockerfile, "&& adduser -S -D -H -u 10001 -G app app")
-	requireContains(t, "../../Dockerfile", sharedDockerfile, "COPY --from=web-build --chown=app:app /src/frontend/dist ./web")
-	requireContains(t, "../../Dockerfile", sharedDockerfile, "ENV WEB_UI_DIR=/app/web")
 	requireContains(t, "../../Dockerfile", sharedDockerfile, "USER app:app")
 	requireFileExists(t, "../../go.sum")
 

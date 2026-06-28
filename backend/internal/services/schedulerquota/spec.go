@@ -24,7 +24,7 @@ func Spec() platform.ServiceSpec {
 		RequiresCluster: true,
 		Description:     "Resource plans, queues, quota reservation, priority, preemption, and queue dispatch arbitration.",
 		Tables:          []string{"plans", "queues", "resource_quotas", "submit_admissions", "priority_classes", "reservations", "preemption_records", "gpu_claim_snapshots", "network_profiles", "placement_profiles", "accelerator_profiles", "outbox", "inbox"},
-		Events:          []string{"PlanChanged", "QueueChanged", "QuotaReserved", "QuotaCommitted", "QuotaReleased", "ReservationDriftDetected", "SubmitAdmissionReviewed", "SecretAccessRejected", "QueueDepthChanged", "JobPreempted", "PriorityClassSyncCompleted", "NetworkProfileChanged", "PlacementProfileChanged", "AcceleratorProfileChanged"},
+		Events:          []string{"PlanChanged", "QueueChanged", "QuotaReserved", "QuotaCommitted", "QuotaReleased", "ReservationDriftDetected", "GPUReservationDriftDetected", "SubmitAdmissionReviewed", "SecretAccessRejected", "QueueDepthChanged", "JobPreempted", "PriorityClassSyncCompleted", "NetworkProfileChanged", "PlacementProfileChanged", "AcceleratorProfileChanged"},
 		Routes: []platform.RouteSpec{
 			route(http.MethodGet, "/api/v1/accelerator-profiles", "accelerator_profiles", "list", admin()),
 			route(http.MethodPost, "/api/v1/accelerator-profiles", "accelerator_profiles", "create", admin()),

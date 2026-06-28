@@ -83,7 +83,8 @@ MPS must not be represented as hard isolation across mutually untrusted tenants.
 
 `scheduler-quota-service` enforces MPS policy during submit admission. The
 cross-project guard is a conservative control-plane check over active workload
-records using the same active statuses as quota accounting. It is not yet
+records using the same active statuses as quota accounting, plus a declarative
+plan-level `mps_share_project_id` / `allow_cross_project_mps` gate. It is not yet
 node-level placement proof; live DRA/MPS hardware validation remains `GPU-016`.
 
 ## Current Local Control-Plane Evidence
@@ -101,7 +102,7 @@ node-level placement proof; live DRA/MPS hardware validation remains `GPU-016`.
   `ReservationDriftDetected` when an active reservation has a missing or terminal
   workload record.
 
-`GPU-017` and `GPU-018` now also have local read-model/UI coverage in the
+`GPU-017` and `GPU-018` now also have local read-model coverage in the
 `storage-data-path` branch slice documented by
 [`2026-06-27-gpu-usage-reserved-observed.md`](../plan/2026-06-27-gpu-usage-reserved-observed.md)
 and synced by
@@ -112,11 +113,22 @@ and synced by
   `reserved_gpu_source`, and `sm_attribution_source`;
 - reserved GPU fraction is derived from Project GPU read-model rows, fresh
   usage-observability snapshots, then co-hosted workload job reservation data;
-- the first-party frontend Usage panel displays Observed GPU pods, Reserved GPU
-  fraction, and SM attribution separately;
 - MPS source labeling preserves measured source metadata and marks
   allocation-derived or unavailable true per-process SM as
   `estimated_mps_allocation` or `unavailable`, not measured.
 
 This does not close `GPU-016`; live DRA/MPS behavior still requires evidence
 from a real GPU cluster.
+
+## Frontend-deferred note
+
+The web frontend has been removed (backend-only phase). GPU-017 and GPU-018 are
+UI-facing: their **UI rendering** is deferred until a frontend is rebuilt. The
+backend satisfies the data side now — the GPU usage API exposes the reserved GPU
+fraction and observed usage as **separate** fields, and labels SM attribution so
+SM is never reported as measured when true per-process SM is unavailable. The
+`RTC` (WebRTC GUI) acceptance area is likewise deferred with the frontend;
+backend Selkies sidecar streaming dispatch remains in the codebase.
+
+GPU-001…016 are verifiable on a GPU-less machine via the `dra-example-driver`
+harness — see `backend/docs/e2e-testing.md`.

@@ -261,9 +261,6 @@ func TestConfigVPNUsageDefaultsAndParsing(t *testing.T) {
 
 func TestConfigServiceEnvDefaults(t *testing.T) {
 	cfg := ConfigFromEnv()
-	if cfg.WebUIDir != defaultWebUIDir {
-		t.Fatalf("WebUIDir default = %q, want %q", cfg.WebUIDir, defaultWebUIDir)
-	}
 	if !strings.Contains(cfg.CLICACertPEM, "NEXUSPAAS-LOCAL-CLI-CA") {
 		t.Fatalf("CLICACertPEM default = %q, want local placeholder", cfg.CLICACertPEM)
 	}
@@ -279,12 +276,6 @@ func TestConfigServiceEnvDefaults(t *testing.T) {
 	assertStringSlice(t, cfg.StorageClassOptions, []string{"standard", "fast"})
 	assertStringSlice(t, cfg.GroupStorageClassOptions, nil)
 	assertStringSlice(t, cfg.GroupRegistryProfileOptions, nil)
-
-	t.Setenv(envWebUIDir, "/tmp/nexuspaas-web")
-	cfg = ConfigFromEnv()
-	if cfg.WebUIDir != "/tmp/nexuspaas-web" {
-		t.Fatalf("WebUIDir env = %q, want /tmp/nexuspaas-web", cfg.WebUIDir)
-	}
 }
 
 func TestConfigProductNameDefaultsAndParsing(t *testing.T) {

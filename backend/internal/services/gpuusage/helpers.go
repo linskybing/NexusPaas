@@ -82,6 +82,18 @@ func runningUserJobs(app *platform.App, r *http.Request, userID string, summariz
 	return out
 }
 
+// smAttribution implements GPU-018: SM usage for an MPS-shared GPU is only
+// labelled "measured" when the sample comes from a true per-process source.
+// DCGM rollups and any other per-GPU source are shared across MPS clients, so
+// they are reported as "allocation-based" (estimated) — never as measured.
+func smAttribution(source string) string {
+	s := strings.ToLower(strings.TrimSpace(source))
+	if strings.Contains(s, "per-process") || strings.Contains(s, "per_process") || strings.Contains(s, "process-accounting") {
+		return "measured"
+	}
+	return "allocation-based"
+}
+
 func mpsMapping(app *platform.App, r *http.Request) []MPSGPUSlot {
 	latest := map[string]snapshotRow{}
 	for _, row := range snapshotRows(app, r, activeSnapshotCutoff(app.Config)) {
@@ -96,7 +108,7 @@ func mpsMapping(app *platform.App, r *http.Request) []MPSGPUSlot {
 	out := make([]MPSGPUSlot, 0, len(latest))
 	for _, row := range latest {
 		smSource := gpuSMUtilizationSource(row.metrics, row.mpsUnits)
-		smAttribution := gpuSMAttributionSource(row.metrics, row.mpsUnits)
+		smAttributionSrc := gpuSMAttributionSource(row.metrics, row.mpsUnits)
 		out = append(out, MPSGPUSlot{
 			Node:                  textValue(row.data, "node", "Node"),
 			PhysicalGPUIndex:      row.mpsGPUIdx,
@@ -109,8 +121,9 @@ func mpsMapping(app *platform.App, r *http.Request) []MPSGPUSlot {
 			GPUMemoryBytes:        row.memoryByte,
 			SMUtilization:         floatValue(row.metrics, "gpu_sm_utilization", "gpuSMUtilization"),
 			SMUtilizationSource:   smSource,
-			SMAttributionSource:   smAttribution,
-			SMAttributionMeasured: smAttribution == gpuSMAttributionMeasured,
+			SMAttributionSource:   smAttributionSrc,
+			SMAttributionMeasured: smAttributionSrc == gpuSMAttributionMeasured,
+			SMAttribution:         smAttribution(textValue(row.metrics, "gpu_sm_util_source", "gpuSMUtilSource")),
 			MemUtilization:        floatValue(row.metrics, "gpu_mem_utilization", "gpuMemUtilization"),
 			MemUtilizationSource:  textValue(row.metrics, "gpu_mem_util_source", "gpuMemUtilSource"),
 			MemoryUsedBytes:       int64Value(row.metrics, "gpu_memory_used_bytes", "gpuMemoryUsedBytes"),

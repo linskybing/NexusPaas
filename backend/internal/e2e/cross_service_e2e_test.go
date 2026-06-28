@@ -134,6 +134,7 @@ func TestIsolatedRuntimeRegistrationE2E(t *testing.T) {
 			"audit-log-retention",
 			"cluster-resource-collector",
 			"event-outbox-relay",
+			"gpu-reservation-drift",
 			"gpu-usage-telemetry-collector",
 			"harbor-catalog-sync",
 			"harbor-health",
