@@ -8,6 +8,7 @@ import (
 
 	"github.com/linskybing/nexuspaas/backend/internal/platform/cluster"
 	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -64,6 +65,9 @@ func prepareDataPlaneDispatchResources(plan dataPlanePlan, resources []dispatchR
 }
 
 func ensureDispatchDataPlanePVCMounts(ctx context.Context, cl *cluster.Client, plan dataPlanePlan, namespace string) error {
+	if err := ensureDispatchDataPlaneScratchPVC(ctx, cl, plan, namespace); err != nil {
+		return err
+	}
 	for _, op := range plan.StageInOperations {
 		if op.CacheHit || op.SourceNamespace == "" || op.SourcePVC == "" || op.TargetPVC == "" {
 			continue
@@ -73,6 +77,29 @@ func ensureDispatchDataPlanePVCMounts(ctx context.Context, cl *cluster.Client, p
 		}
 	}
 	return nil
+}
+
+func ensureDispatchDataPlaneScratchPVC(ctx context.Context, cl *cluster.Client, plan dataPlanePlan, namespace string) error {
+	if plan.Scratch.ClaimName == "" {
+		return nil
+	}
+	return cl.EnsurePVC(ctx, cluster.PVCSpec{
+		Namespace:        namespace,
+		Name:             plan.Scratch.ClaimName,
+		StorageClassName: plan.Scratch.StorageClassName,
+		AccessMode:       dataPlaneScratchAccessMode(plan.Scratch.AccessMode),
+	})
+}
+
+func dataPlaneScratchAccessMode(mode string) corev1.PersistentVolumeAccessMode {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "rwx", strings.ToLower(string(corev1.ReadWriteMany)):
+		return corev1.ReadWriteMany
+	case "rox", strings.ToLower(string(corev1.ReadOnlyMany)):
+		return corev1.ReadOnlyMany
+	default:
+		return corev1.ReadWriteOnce
+	}
 }
 
 type dispatchDataPlaneSpec struct {

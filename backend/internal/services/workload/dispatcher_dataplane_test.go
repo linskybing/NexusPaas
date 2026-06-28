@@ -155,6 +155,67 @@ func TestEnsureDispatchDataPlanePVCMountsMaterializesStageSource(t *testing.T) {
 	}
 }
 
+func TestEnsureDispatchDataPlanePVCMountsCreatesScratchPVC(t *testing.T) {
+	ctx := context.Background()
+	cl := cluster.New(fake.NewSimpleClientset(), "proj")
+	plan := dataPlanePlan{
+		Scratch: dataPlaneScratchPlan{
+			ClaimName:        "scratch-job-train-1",
+			StorageClassName: "local-nvme-scratch",
+			AccessMode:       string(corev1.ReadWriteOnce),
+		},
+		StageInOperations: []dataPlaneStageInOperation{{
+			SourceNamespace: "missing-source",
+			SourcePVC:       "missing-dataset",
+			TargetPVC:       "cached-dataset",
+			CacheHit:        true,
+		}},
+	}
+
+	if err := ensureDispatchDataPlanePVCMounts(ctx, cl, plan, "proj-p1"); err != nil {
+		t.Fatal(err)
+	}
+	pvc, err := cl.Clientset().CoreV1().PersistentVolumeClaims("proj-p1").Get(ctx, "scratch-job-train-1", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("scratch PVC was not created: %v", err)
+	}
+	if pvc.Spec.StorageClassName == nil || *pvc.Spec.StorageClassName != "local-nvme-scratch" {
+		t.Fatalf("storageClassName = %#v, want local-nvme-scratch", pvc.Spec.StorageClassName)
+	}
+	if !hasDispatchAccessMode(pvc.Spec.AccessModes, corev1.ReadWriteOnce) {
+		t.Fatalf("scratch accessModes = %#v, want ReadWriteOnce", pvc.Spec.AccessModes)
+	}
+	if got := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; got.String() != "1Gi" {
+		t.Fatalf("scratch storage request = %s, want default 1Gi", got.String())
+	}
+	if _, err := cl.Clientset().CoreV1().PersistentVolumeClaims("proj-p1").Get(ctx, "cached-dataset", metav1.GetOptions{}); err == nil {
+		t.Fatal("cache-hit source should not materialize a target PVC")
+	}
+}
+
+func TestDataPlaneScratchAccessModeNormalizesProfileAndKubernetesValues(t *testing.T) {
+	tests := []struct {
+		name string
+		mode string
+		want corev1.PersistentVolumeAccessMode
+	}{
+		{name: "profile rwo", mode: "rwo", want: corev1.ReadWriteOnce},
+		{name: "profile rwx", mode: "rwx", want: corev1.ReadWriteMany},
+		{name: "profile rox", mode: "rox", want: corev1.ReadOnlyMany},
+		{name: "kubernetes RWO", mode: string(corev1.ReadWriteOnce), want: corev1.ReadWriteOnce},
+		{name: "kubernetes RWX", mode: string(corev1.ReadWriteMany), want: corev1.ReadWriteMany},
+		{name: "kubernetes ROX", mode: string(corev1.ReadOnlyMany), want: corev1.ReadOnlyMany},
+		{name: "unknown defaults RWO", mode: "object", want: corev1.ReadWriteOnce},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := dataPlaneScratchAccessMode(tt.mode); got != tt.want {
+				t.Fatalf("access mode %q = %s, want %s", tt.mode, got, tt.want)
+			}
+		})
+	}
+}
+
 func decodeDispatchObject(t *testing.T, raw []byte) map[string]any {
 	t.Helper()
 	var obj map[string]any
@@ -226,4 +287,13 @@ func assertNamedEnv(t *testing.T, container map[string]any, name, value string) 
 		}
 	}
 	t.Fatalf("container %s env = %#v, want %s=%s", container["name"], env, name, value)
+}
+
+func hasDispatchAccessMode(modes []corev1.PersistentVolumeAccessMode, want corev1.PersistentVolumeAccessMode) bool {
+	for _, mode := range modes {
+		if mode == want {
+			return true
+		}
+	}
+	return false
 }

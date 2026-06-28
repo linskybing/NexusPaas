@@ -82,6 +82,55 @@ func (c *Client) EnsurePVCMounted(ctx context.Context, sourceNs, sourcePVC, targ
 	}
 }
 
+type PVCSpec struct {
+	Namespace        string
+	Name             string
+	StorageClassName string
+	AccessMode       corev1.PersistentVolumeAccessMode
+	Size             resource.Quantity
+}
+
+func (c *Client) EnsurePVC(ctx context.Context, spec PVCSpec) error {
+	if c == nil || c.clientset == nil {
+		return ErrUnavailable
+	}
+	if strings.TrimSpace(spec.Namespace) == "" || strings.TrimSpace(spec.Name) == "" {
+		return fmt.Errorf("%w: pvc namespace and name are required", ErrInvalidManifest)
+	}
+	if spec.AccessMode == "" {
+		spec.AccessMode = corev1.ReadWriteOnce
+	}
+	if spec.Size.IsZero() {
+		spec.Size = resource.MustParse("1Gi")
+	}
+	pvc, err := c.clientset.CoreV1().PersistentVolumeClaims(spec.Namespace).Get(ctx, spec.Name, metav1.GetOptions{})
+	if err == nil {
+		if !hasAccessMode(pvc.Spec.AccessModes, spec.AccessMode) {
+			return fmt.Errorf("existing pvc %s/%s does not allow %s", spec.Namespace, spec.Name, spec.AccessMode)
+		}
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("check pvc %s/%s: %w", spec.Namespace, spec.Name, err)
+	}
+	var storageClass *string
+	if strings.TrimSpace(spec.StorageClassName) != "" {
+		storageClass = &spec.StorageClassName
+	}
+	_, err = c.clientset.CoreV1().PersistentVolumeClaims(spec.Namespace).Create(ctx, &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: spec.Name, Namespace: spec.Namespace},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes:      []corev1.PersistentVolumeAccessMode{spec.AccessMode},
+			StorageClassName: storageClass,
+			Resources:        corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: spec.Size}},
+		},
+	}, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create pvc %s/%s: %w", spec.Namespace, spec.Name, err)
+	}
+	return nil
+}
+
 func validatePVCMountRefs(sourceNs, sourcePVC, targetNs, targetPVC string) error {
 	if strings.TrimSpace(sourceNs) == "" || strings.TrimSpace(sourcePVC) == "" ||
 		strings.TrimSpace(targetNs) == "" || strings.TrimSpace(targetPVC) == "" {

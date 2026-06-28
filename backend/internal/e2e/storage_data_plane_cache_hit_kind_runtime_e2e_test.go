@@ -51,6 +51,7 @@ func TestStorageDataPlaneCacheHitKindRuntimeE2E(t *testing.T) {
 	storageApp := newStorageDataPlaneDispatchStorageApp(store, events)
 	storageServer := httptest.NewServer(storageApp)
 	t.Cleanup(storageServer.Close)
+	overrideStorageDataPlaneScratchProfileForKind(t, store)
 
 	ids := seedLiveStorageDataPlaneKindAdmissionRecords(t, store)
 	seedStorageDataPlaneCacheHitRecord(t, store, ids)
@@ -59,19 +60,28 @@ func TestStorageDataPlaneCacheHitKindRuntimeE2E(t *testing.T) {
 		t.Fatalf("create runtime namespace %s: %v", ids.namespace, err)
 	}
 	scratchPVC := "scratch-" + ids.jobID
-	createFastTransferMoverExecutionPVC(t, ctx, cl, ids.namespace, scratchPVC)
 
 	workloadApp := newStorageDataPlaneDispatchWorkloadApp(store, events, cl, storageServer.URL)
 	createStorageDataPlaneCacheHitRuntimeJob(t, store, ids)
 
 	pod := waitForStorageDataPlaneCacheHitRuntimeDispatch(t, ctx, workloadApp, cl, store, ids)
 	assertStorageDataPlaneCacheHitRuntimePod(t, pod, ids)
+	assertStorageDataPlaneRuntimeScratchPVC(t, ctx, cl, ids, scratchPVC)
 	waitFastTransferMoverExecutionPodSucceeded(t, ctx, cl, ids.namespace, storageDataPlaneRuntimeWorkerPod)
 	runFastTransferMoverExecutionPVCPod(t, ctx, cl, ids.namespace, "verify-"+ids.jobID, scratchPVC, `set -eu
 grep -q cache-hit-runtime /pvc/checkpoints/runtime.txt`)
 
 	assertDataPlanePlanBuiltEvent(t, events, ids)
 	assertStorageDataPlaneCacheHitSkippedTargetPVC(t, ctx, cl, ids)
+}
+
+func overrideStorageDataPlaneScratchProfileForKind(t *testing.T, store *platform.Store) {
+	t.Helper()
+	if _, ok := store.Update(context.Background(), e2eStorageProfilesResource, "local-nvme-scratch", map[string]any{
+		"storage_class_name": "",
+	}); !ok {
+		t.Fatal("local-nvme-scratch storage profile was not seeded")
+	}
 }
 
 func seedStorageDataPlaneCacheHitRecord(t *testing.T, store *platform.Store, ids storageDataPlanePlanIDs) {
@@ -186,6 +196,23 @@ func assertStorageDataPlaneCacheHitRuntimePod(t *testing.T, pod *corev1.Pod, ids
 	}
 }
 
+func assertStorageDataPlaneRuntimeScratchPVC(t *testing.T, ctx context.Context, cl *cluster.Client, ids storageDataPlanePlanIDs, scratchPVC string) {
+	t.Helper()
+	pvc, err := cl.Clientset().CoreV1().PersistentVolumeClaims(ids.namespace).Get(ctx, scratchPVC, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("dispatcher did not create scratch PVC %s/%s: %v", ids.namespace, scratchPVC, err)
+	}
+	if !hasStorageDataPlaneRuntimeAccessMode(pvc.Spec.AccessModes, corev1.ReadWriteOnce) {
+		t.Fatalf("scratch PVC accessModes = %#v, want ReadWriteOnce", pvc.Spec.AccessModes)
+	}
+	if got := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; got.String() != "1Gi" {
+		t.Fatalf("scratch PVC storage request = %s, want default 1Gi", got.String())
+	}
+	if pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName == "local-nvme-scratch" {
+		t.Fatalf("scratch PVC storageClassName = %q; kind test should use default StorageClass override", *pvc.Spec.StorageClassName)
+	}
+}
+
 func assertStorageDataPlaneCacheHitSkippedTargetPVC(t *testing.T, ctx context.Context, cl *cluster.Client, ids storageDataPlanePlanIDs) {
 	t.Helper()
 	_, err := cl.Clientset().CoreV1().PersistentVolumeClaims(ids.namespace).Get(ctx, ids.targetPVC, metav1.GetOptions{})
@@ -195,4 +222,13 @@ func assertStorageDataPlaneCacheHitSkippedTargetPVC(t *testing.T, ctx context.Co
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("get target PVC %s/%s: %v", ids.namespace, ids.targetPVC, err)
 	}
+}
+
+func hasStorageDataPlaneRuntimeAccessMode(modes []corev1.PersistentVolumeAccessMode, want corev1.PersistentVolumeAccessMode) bool {
+	for _, mode := range modes {
+		if mode == want {
+			return true
+		}
+	}
+	return false
 }
