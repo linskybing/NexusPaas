@@ -340,4 +340,4 @@ expected.
 
 ## 20. Status
 
-Status: Implemented and Reviewer approved
+Status: Approved

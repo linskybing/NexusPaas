@@ -1,6 +1,6 @@
 # AC Completion — GA Gap Tracker
 
-_Updated: 2026-06-22 (re-verified). Bar: **Full GA**
+_Updated: 2026-06-28 (re-verified; plan-ledger hygiene pass). Bar: **Full GA**
 (`docs/acceptance/ga-checklist.md`), not just the v1 launch bar._
 
 ## First Version (V1) Status — single source of truth
