@@ -96,6 +96,9 @@ func withRuntimeDefaults(cfg Config) Config {
 	if strings.TrimSpace(cfg.DockerCleanupImage) == "" {
 		cfg.DockerCleanupImage = "docker:24-dind"
 	}
+	if strings.TrimSpace(cfg.FastTransferMoverImage) == "" {
+		cfg.FastTransferMoverImage = "instrumentisto/rsync-ssh:alpine"
+	}
 	return cfg
 }
 

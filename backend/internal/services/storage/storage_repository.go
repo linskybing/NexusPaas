@@ -289,6 +289,10 @@ func (r recordStoreStorageRepository) UpdateFastTransferWithEvent(
 	return r.updateWithEvent(ctx, app, fastTransfersResource, fastTransferID(projectID, namespace, name), data, build)
 }
 
+func (r recordStoreStorageRepository) UpdateFastTransferDispatch(ctx context.Context, projectID, namespace, name string, data map[string]any) (map[string]any, bool) {
+	return r.update(ctx, fastTransfersResource, fastTransferID(projectID, namespace, name), data)
+}
+
 func (r recordStoreStorageRepository) CancelFastTransfer(
 	ctx context.Context,
 	projectID, namespace, name string,

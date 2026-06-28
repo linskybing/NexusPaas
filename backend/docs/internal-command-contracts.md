@@ -12,12 +12,13 @@ Canonical v1 command fixtures live under `backend/internal/contracts/fixtures/co
 | Clear plan bindings | `org-project-clear-plan-bindings.json` | `org-project-service` | `scheduler-quota-service` | `DELETE` | `/internal/org-project/plans/{plan_id}/project-bindings` | Same `plan_id` can be retried; zero cleared is a valid success. | `ProjectUpdated` when bindings change |
 | Preempt workload job | `workload-preempt-job.json` | `workload-service` | `scheduler-quota-service` | `POST` | `/internal/workload/jobs/{id}/preempt` | Same `id` and `preemption_id` can be retried and returns the existing job record. | None in current handler |
 | Evict workload job | `workload-evict-job.json` | `workload-service` | `scheduler-quota-service` | `POST` | `/internal/workload/jobs/{id}/evict` | Same `id` can be retried after eviction and returns the existing job record. | None in current handler |
+| Dispatch FastTransfer mover | `k8s-control-dispatch-fast-transfer-mover.json` | `k8s-control-service` | `storage-service` | `POST` | `/internal/k8s-control/fast-transfers/mover-jobs` | Same `target_namespace`, `name`, and `transfer_id` can be retried and returns `already_exists`. | None |
 
 ## Contract Rules
 
 - Fixtures use `schema_version: 1` and must remain additive-only. Consumers must tolerate unknown top-level, request, and response fields.
 - Every fixture declares `auth: service_key` and `service_key_required: true`; user auth bypass in route metadata does not replace handler-level service-key checks.
-- Command fixtures describe owner-write boundaries only. Project plan binding writes remain inside `org-project-service`; job preemption and eviction writes remain inside `workload-service`.
+- Command fixtures describe owner-write boundaries only. Project plan binding writes remain inside `org-project-service`; job preemption and eviction writes remain inside `workload-service`; Kubernetes mover Job creation remains inside `k8s-control-service`.
 - Fixture examples are synthetic and must not include raw database primary keys, internal row IDs, secrets, tokens, passwords, cookies, credentials, owner passwords, connector auth, tunnel tokens, or local metadata.
 - External `/api/v1` routes and response envelopes are unchanged by these artifacts.
 - Breaking command changes require a new versioned fixture or compatibility migration plan before a deployable-unit split relies on the contract.

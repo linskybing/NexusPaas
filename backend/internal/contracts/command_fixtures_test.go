@@ -15,6 +15,7 @@ import (
 func TestCommandFixturesAreValidV1(t *testing.T) {
 	fixtures := commandFixtureFiles(t)
 	want := []string{
+		"k8s-control-dispatch-fast-transfer-mover.json",
 		"org-project-bind-project-plan.json",
 		"org-project-clear-plan-bindings.json",
 		"workload-evict-job.json",
@@ -25,6 +26,13 @@ func TestCommandFixturesAreValidV1(t *testing.T) {
 	}
 
 	wantRoutes := map[string]commandFixtureRoute{
+		"k8s-control-dispatch-fast-transfer-mover.json": {
+			ownerService: "k8s-control-service",
+			resource:     "k8s-control-service:fast_transfer_mover_jobs",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/internal/k8s-control/fast-transfers/mover-jobs",
+		},
 		"org-project-bind-project-plan.json": {
 			ownerService: "org-project-service",
 			resource:     "org-project-service:projects",
@@ -259,8 +267,8 @@ func validateCommandRoute(fixture commandContractFixture) error {
 	if fixture.Auth != "service_key" || !fixture.ServiceKeyRequired {
 		return fmt.Errorf("command fixture auth = %q service_key_required=%v, want service_key/true", fixture.Auth, fixture.ServiceKeyRequired)
 	}
-	if fixture.ConsumerService != "scheduler-quota-service" {
-		return fmt.Errorf("command fixture consumer_service = %q, want scheduler-quota-service", fixture.ConsumerService)
+	if fixture.ConsumerService != "scheduler-quota-service" && fixture.ConsumerService != "storage-service" {
+		return fmt.Errorf("command fixture consumer_service = %q, want known internal consumer", fixture.ConsumerService)
 	}
 	if !strings.HasPrefix(fixture.Path, "/internal/") {
 		return fmt.Errorf("command fixture path = %q, want internal path", fixture.Path)

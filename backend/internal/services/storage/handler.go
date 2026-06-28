@@ -494,6 +494,7 @@ func startFastTransfer(app *platform.App, r *http.Request, _ platform.RouteSpec)
 		return http.StatusConflict, shared.ErrorData("fast transfer already exists"), nil
 	}
 	publishEvent(app, r, fastTransferQueuedEvent, fastTransferEventPayload(record, "queued"))
+	record = dispatchFastTransferMoverJob(r.Context(), app, repo, record, time.Now().UTC())
 	return http.StatusAccepted, record, nil
 }
 
