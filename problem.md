@@ -438,6 +438,17 @@ the configured k8s-control service URL, admits one restricted mover `Job`, emits
 prove PVC binding, Pod scheduling, rsync execution, bytes moved, progress
 callback behavior, CSI, storage GA, Full GA, or first-version readiness.
 
+FastTransfer mover execution now also has env-gated kind evidence via
+`backend/internal/e2e/fast_transfer_mover_execution_kind_e2e_test.go`: the test
+starts at storage fast-stage, dispatches to k8s-control, creates source/target
+PVCs with the kind default StorageClass, seeds one source file, waits for the
+mover Job to `Complete`, and verifies the target PVC contains the expected
+content and byte count. This proves only kind default PVC binding, Pod
+scheduling, rsync command execution, and bytes moved for one tiny file; it does
+not prove CSI or storage GA, external storage backends, multi-node behavior,
+multi-file sync, progress callbacks, performance, durability, Full GA, or
+first-version readiness.
+
 StorageProfile-to-HPC-StorageClass manifest drift now has local/static test
 evidence only: `storage-service` startup seeds default profile records, the
 storage package test parses `backend/deploy/hpc/storage/*.yaml`, and every

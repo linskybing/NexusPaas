@@ -238,7 +238,7 @@ func buildFastTransferMoverJob(opts FastTransferMoverJobOptions) *batchv1.Job {
 func fastTransferMoverScript(opts FastTransferMoverJobOptions) string {
 	source := path.Join(fastTransferMoverSourceMount, strings.TrimPrefix(opts.Source.Path, "/")) + "/"
 	target := path.Join(fastTransferMoverTargetMount, strings.TrimPrefix(opts.Target.Path, "/")) + "/"
-	return fmt.Sprintf("set -eu\nrsync -a --delete -- %q %q", source, target)
+	return fmt.Sprintf("set -eu\nmkdir -p %q\nrsync -a --delete -- %q %q", target, source, target)
 }
 
 func fastTransferMoverManagedLabels() map[string]string {

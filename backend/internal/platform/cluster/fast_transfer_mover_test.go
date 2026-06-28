@@ -132,8 +132,14 @@ func assertFastTransferMoverJob(t *testing.T, job *batchv1.Job) {
 	if len(container.Command) != 2 || container.Command[0] != "/bin/sh" || container.Command[1] != "-c" {
 		t.Fatalf("command = %#v, want fixed shell", container.Command)
 	}
-	if len(container.Args) != 1 || !strings.Contains(container.Args[0], `rsync -a --delete -- "/mnt/source/data/source/" "/mnt/target/data/target/"`) {
-		t.Fatalf("args = %#v, want allowlisted rsync script", container.Args)
+	if len(container.Args) != 1 {
+		t.Fatalf("args = %#v, want one restricted script", container.Args)
+	}
+	mkdirCommand := `mkdir -p "/mnt/target/data/target/"`
+	rsyncCommand := `rsync -a --delete -- "/mnt/source/data/source/" "/mnt/target/data/target/"`
+	mkdirIndex, rsyncIndex := strings.Index(container.Args[0], mkdirCommand), strings.Index(container.Args[0], rsyncCommand)
+	if mkdirIndex < 0 || rsyncIndex < 0 || mkdirIndex > rsyncIndex {
+		t.Fatalf("args = %#v, want target mkdir before allowlisted rsync", container.Args)
 	}
 	if len(pod.Volumes) != 2 || pod.Volumes[0].HostPath != nil || pod.Volumes[1].HostPath != nil {
 		t.Fatalf("volumes = %#v, want PVC-only volumes", pod.Volumes)
