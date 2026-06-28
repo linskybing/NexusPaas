@@ -195,6 +195,28 @@ func TestProxyRoleUserExternalAPIFixturesMatchSpec(t *testing.T) {
 	assertProxyRoleUserExternalAPIFixturesMatchSpec(t, cases)
 }
 
+func TestProxySystemRoleExternalAPIFixturesMatchSpec(t *testing.T) {
+	cases := []proxyRoleUserFixtureCase{
+		{
+			name:           "list",
+			fixtureName:    "authorization-policy-list-proxy-system-roles.json",
+			contractName:   "authorization-policy.list_proxy_system_roles",
+			method:         http.MethodGet,
+			path:           "/api/v1/admin/proxy-rbac/system-roles",
+			resource:       "proxy_system_roles",
+			action:         "list",
+			pathParameters: []string{},
+			requiredFields: []string{},
+			success:        []int{http.StatusOK},
+			errors:         []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError},
+			emitsEvents:    []string{},
+			collection:     true,
+		},
+	}
+
+	assertProxyRoleUserExternalAPIFixturesMatchSpec(t, cases)
+}
+
 func TestProxyPolicyAssignmentExternalAPIFixturesMatchSpec(t *testing.T) {
 	cases := []proxyRoleUserFixtureCase{
 		{
@@ -543,7 +565,9 @@ func assertProxyRoleUserExamples(t *testing.T, fixture authorizationPolicyExtern
 	if want.collection {
 		row = firstResponseItem(t, fixture.ResponseExample)
 	}
-	if want.resource == "proxy_policy_assignments" || want.resource == "proxy_target_assignments" {
+	if want.resource == "proxy_system_roles" {
+		assertProxySystemRoleResponseRow(t, row)
+	} else if want.resource == "proxy_policy_assignments" || want.resource == "proxy_target_assignments" {
 		assertProxyPolicyAssignmentResponseRow(t, row)
 	} else {
 		assertProxyRoleUserResponseRow(t, row)
@@ -658,6 +682,11 @@ func assertProxyPolicyAssignmentResponseRow(t *testing.T, row map[string]any) {
 	if _, ok := policy["is_system"].(bool); !ok {
 		t.Fatalf("response row policy.is_system = %v, want bool", policy["is_system"])
 	}
+}
+
+func assertProxySystemRoleResponseRow(t *testing.T, row map[string]any) {
+	t.Helper()
+	assertResponseStringFields(t, row, []string{"id", "name"})
 }
 
 func assertProxyRBACRouteMetadata(t *testing.T, route platform.RouteSpec, fixture authorizationPolicyExternalAPIFixture, want proxyRBACFixtureCase) {
