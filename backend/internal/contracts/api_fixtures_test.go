@@ -25,6 +25,7 @@ func TestExternalAPIFixturesAreValidV1(t *testing.T) {
 		"authorization-policy-list-proxy-policy-assignments.json",
 		"authorization-policy-list-proxy-role-users.json",
 		"authorization-policy-list-proxy-services.json",
+		"authorization-policy-list-proxy-target-assignments.json",
 		"authorization-policy-unassign-proxy-policy.json",
 		"authorization-policy-unassign-proxy-role-user.json",
 		"authorization-policy-update-proxy-policy.json",
@@ -146,6 +147,13 @@ func TestExternalAPIFixturesAreValidV1(t *testing.T) {
 			action:       "list",
 			method:       http.MethodGet,
 			path:         "/api/v1/admin/proxy-rbac/roles/{id}/users",
+		},
+		"authorization-policy-list-proxy-target-assignments.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_target_assignments",
+			action:       "list",
+			method:       http.MethodGet,
+			path:         "/api/v1/admin/proxy-rbac/targets/{type}/{id}/assignments",
 		},
 		"authorization-policy-unassign-proxy-policy.json": {
 			ownerService: "authorization-policy-service",

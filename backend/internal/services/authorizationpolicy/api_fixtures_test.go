@@ -214,6 +214,22 @@ func TestProxyPolicyAssignmentExternalAPIFixturesMatchSpec(t *testing.T) {
 			collection:     true,
 		},
 		{
+			name:           "list-target",
+			fixtureName:    "authorization-policy-list-proxy-target-assignments.json",
+			contractName:   "authorization-policy.list_proxy_target_assignments",
+			method:         http.MethodGet,
+			path:           "/api/v1/admin/proxy-rbac/targets/{type}/{id}/assignments",
+			resource:       "proxy_target_assignments",
+			action:         "list",
+			idParam:        "id",
+			pathParameters: []string{"type", "id"},
+			requiredFields: []string{},
+			success:        []int{http.StatusOK},
+			errors:         []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError},
+			emitsEvents:    []string{},
+			collection:     true,
+		},
+		{
 			name:           "assign",
 			fixtureName:    "authorization-policy-assign-proxy-policy.json",
 			contractName:   "authorization-policy.assign_proxy_policy",
@@ -527,7 +543,7 @@ func assertProxyRoleUserExamples(t *testing.T, fixture authorizationPolicyExtern
 	if want.collection {
 		row = firstResponseItem(t, fixture.ResponseExample)
 	}
-	if want.resource == "proxy_policy_assignments" {
+	if want.resource == "proxy_policy_assignments" || want.resource == "proxy_target_assignments" {
 		assertProxyPolicyAssignmentResponseRow(t, row)
 	} else {
 		assertProxyRoleUserResponseRow(t, row)
