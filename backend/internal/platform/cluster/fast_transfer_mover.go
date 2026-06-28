@@ -52,15 +52,17 @@ type FastTransferMoverEndpoint struct {
 }
 
 type FastTransferMoverJobOptions struct {
-	ProjectID   string
-	TransferID  string
-	Namespace   string
-	Name        string
-	Source      FastTransferMoverEndpoint
-	Target      FastTransferMoverEndpoint
-	Tool        string
-	Image       string
-	ProgressURL string
+	ProjectID           string
+	TransferID          string
+	Namespace           string
+	Name                string
+	Source              FastTransferMoverEndpoint
+	Target              FastTransferMoverEndpoint
+	Tool                string
+	Image               string
+	ProgressURL         string
+	ProgressServiceName string
+	ProgressServiceKey  string
 }
 
 type FastTransferMoverJobResult struct {
@@ -209,6 +211,7 @@ func buildFastTransferMoverJob(opts FastTransferMoverJobOptions) *batchv1.Job {
 						Image:   opts.Image,
 						Command: []string{"/bin/sh", "-c"},
 						Args:    []string{fastTransferMoverScript(opts)},
+						Env:     fastTransferMoverEnv(opts),
 						VolumeMounts: []corev1.VolumeMount{
 							{Name: fastTransferMoverSourceVolume, MountPath: fastTransferMoverSourceMount, ReadOnly: true},
 							{Name: fastTransferMoverTargetVolume, MountPath: fastTransferMoverTargetMount},
@@ -238,7 +241,41 @@ func buildFastTransferMoverJob(opts FastTransferMoverJobOptions) *batchv1.Job {
 func fastTransferMoverScript(opts FastTransferMoverJobOptions) string {
 	source := path.Join(fastTransferMoverSourceMount, strings.TrimPrefix(opts.Source.Path, "/")) + "/"
 	target := path.Join(fastTransferMoverTargetMount, strings.TrimPrefix(opts.Target.Path, "/")) + "/"
-	return fmt.Sprintf("set -eu\nmkdir -p %q\nrsync -a --delete -- %q %q", target, source, target)
+	return fmt.Sprintf(`set -eu
+post_progress() {
+  [ -n "${NEXUSPAAS_FAST_TRANSFER_PROGRESS_URL:-}" ] || return 0
+  [ -n "${NEXUSPAAS_FAST_TRANSFER_PROGRESS_KEY:-}" ] || return 0
+  if [ -n "${NEXUSPAAS_FAST_TRANSFER_PROGRESS_SERVICE_NAME:-}" ]; then
+    wget -q -O- --header "Content-Type: application/json" --header "X-Service-Name: ${NEXUSPAAS_FAST_TRANSFER_PROGRESS_SERVICE_NAME}" --header "X-Service-Key: ${NEXUSPAAS_FAST_TRANSFER_PROGRESS_KEY}" --post-data "$1" "$NEXUSPAAS_FAST_TRANSFER_PROGRESS_URL" >/dev/null || true
+  else
+    wget -q -O- --header "Content-Type: application/json" --header "X-Service-Key: ${NEXUSPAAS_FAST_TRANSFER_PROGRESS_KEY}" --post-data "$1" "$NEXUSPAAS_FAST_TRANSFER_PROGRESS_URL" >/dev/null || true
+  fi
+}
+post_progress '{"status":"running","progress_pct":1}'
+mkdir -p %q
+set +e
+rsync -a --delete -- %q %q
+code=$?
+set -e
+if [ "$code" -ne 0 ]; then
+  post_progress '{"status":"failed","error":"rsync failed"}'
+  exit "$code"
+fi
+post_progress '{"status":"succeeded","progress_pct":100}'`, target, source, target)
+}
+
+func fastTransferMoverEnv(opts FastTransferMoverJobOptions) []corev1.EnvVar {
+	if opts.ProgressURL == "" || opts.ProgressServiceKey == "" {
+		return nil
+	}
+	env := []corev1.EnvVar{
+		{Name: "NEXUSPAAS_FAST_TRANSFER_PROGRESS_URL", Value: opts.ProgressURL},
+		{Name: "NEXUSPAAS_FAST_TRANSFER_PROGRESS_KEY", Value: opts.ProgressServiceKey},
+	}
+	if opts.ProgressServiceName != "" {
+		env = append(env, corev1.EnvVar{Name: "NEXUSPAAS_FAST_TRANSFER_PROGRESS_SERVICE_NAME", Value: opts.ProgressServiceName})
+	}
+	return env
 }
 
 func fastTransferMoverManagedLabels() map[string]string {

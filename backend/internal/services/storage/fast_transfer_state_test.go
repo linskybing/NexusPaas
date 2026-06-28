@@ -114,6 +114,50 @@ func TestFastTransferProgressRequiresServiceKey(t *testing.T) {
 	}
 }
 
+func TestFastTransferProgressAcceptsScopedServiceIdentity(t *testing.T) {
+	app := newStorageTestApp(t)
+	app.Config.ServiceTrustedIdentities = map[string]platform.ServiceTrustedIdentity{
+		"k8s-control-service": {Key: "scoped-key", Audiences: []string{"storage-service"}},
+	}
+	seedFastTransferStateRecord(t, app, map[string]any{
+		"id":               fastTransferID("P1", "project-P1", "copy1"),
+		"project_id":       "P1",
+		"target_namespace": "project-P1",
+		"name":             "copy1",
+		"status":           fastTransferStatusQueued,
+		"progress_pct":     0,
+	})
+
+	req := fastTransferProgressRequest(`{"status":"running","progress_pct":1}`, "scoped-key")
+	req.Header.Set("X-Service-Name", "k8s-control-service")
+	code, data, _ := updateFastTransferProgress(app, req, platform.RouteSpec{})
+	assertStorageStatus(t, code, data, http.StatusOK)
+	if got := data.(map[string]any)["status"]; got != fastTransferStatusRunning {
+		t.Fatalf("status = %v, want running", got)
+	}
+
+	req = fastTransferProgressRequest(`{"status":"running","progress_pct":2}`, "wrong-key")
+	req.Header.Set("X-Service-Name", "k8s-control-service")
+	code, data, _ = updateFastTransferProgress(app, req, platform.RouteSpec{})
+	if code != http.StatusUnauthorized || data == nil {
+		t.Fatalf("status=%d data=%#v, want unauthorized for wrong scoped key", code, data)
+	}
+}
+
+func TestFastTransferProgressRejectsWrongScopedAudience(t *testing.T) {
+	app := newStorageTestApp(t)
+	app.Config.ServiceTrustedIdentities = map[string]platform.ServiceTrustedIdentity{
+		"k8s-control-service": {Key: "scoped-key", Audiences: []string{"workload-service"}},
+	}
+	req := fastTransferProgressRequest(`{"status":"running","progress_pct":1}`, "scoped-key")
+	req.Header.Set("X-Service-Name", "k8s-control-service")
+
+	code, data, _ := updateFastTransferProgress(app, req, platform.RouteSpec{})
+	if code != http.StatusUnauthorized || data == nil {
+		t.Fatalf("status=%d data=%#v, want unauthorized for wrong scoped audience", code, data)
+	}
+}
+
 func newFastTransferProgressTestApp(t *testing.T) *platform.App {
 	t.Helper()
 	app := newStorageTestApp(t)

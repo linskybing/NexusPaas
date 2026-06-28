@@ -69,10 +69,10 @@ func resolveStorageMountPlanContract(app *platform.App, r *http.Request, _ platf
 }
 
 func requireStorageServiceAuth(app *platform.App, r *http.Request) (int, map[string]any, bool) {
-	if app.Config.ServiceAPIKey == "" {
+	if app == nil || (app.Config.ServiceAPIKey == "" && len(app.Config.ServiceTrustedIdentities) == 0) {
 		return http.StatusNotFound, shared.ErrorData("not found"), false
 	}
-	if !app.ServiceRequestAuthorized(r) {
+	if !app.ServiceRequestAuthorizedForAudience(r, "storage-service") {
 		return http.StatusUnauthorized, shared.ErrorData("service authentication is required"), false
 	}
 	return 0, nil, true

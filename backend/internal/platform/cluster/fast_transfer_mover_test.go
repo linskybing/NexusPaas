@@ -26,6 +26,57 @@ func TestFastTransferMoverCreatesSafeJob(t *testing.T) {
 	assertFastTransferMoverJob(t, job)
 }
 
+func TestFastTransferMoverAddsBestEffortProgressCallback(t *testing.T) {
+	cl := New(fake.NewSimpleClientset(), "proj")
+	opts := fastTransferMoverTestOptions()
+	opts.ProgressURL = "http://storage/internal/progress"
+	opts.ProgressServiceName = "k8s-control-service"
+	opts.ProgressServiceKey = "secret-key"
+
+	result := cl.EnsureFastTransferMoverJob(context.Background(), opts)
+	if result.Action != FastTransferMoverActionCreated {
+		t.Fatalf("result = %#v, want created", result)
+	}
+
+	container := getFastTransferMoverJob(t, cl, "project-p1", "fast-transfer-copy1").Spec.Template.Spec.Containers[0]
+	env := fastTransferMoverEnvMap(container.Env)
+	if env["NEXUSPAAS_FAST_TRANSFER_PROGRESS_URL"] != opts.ProgressURL ||
+		env["NEXUSPAAS_FAST_TRANSFER_PROGRESS_SERVICE_NAME"] != opts.ProgressServiceName ||
+		env["NEXUSPAAS_FAST_TRANSFER_PROGRESS_KEY"] != opts.ProgressServiceKey {
+		t.Fatalf("env = %#v, want progress callback env", env)
+	}
+	script := container.Args[0]
+	for _, want := range []string{
+		`wget -q -O-`,
+		`--header "X-Service-Name: ${NEXUSPAAS_FAST_TRANSFER_PROGRESS_SERVICE_NAME}"`,
+		`--header "X-Service-Key: ${NEXUSPAAS_FAST_TRANSFER_PROGRESS_KEY}"`,
+		`post_progress '{"status":"running","progress_pct":1}'`,
+		`post_progress '{"status":"succeeded","progress_pct":100}'`,
+		`|| true`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("script missing %q:\n%s", want, script)
+		}
+	}
+	if strings.Contains(script, opts.ProgressServiceKey) {
+		t.Fatalf("script contains literal progress key: %s", script)
+	}
+	if strings.Index(script, `"status":"running"`) > strings.Index(script, `rsync -a --delete --`) ||
+		strings.Index(script, `"status":"succeeded"`) < strings.Index(script, `rsync -a --delete --`) {
+		t.Fatalf("script progress order is wrong:\n%s", script)
+	}
+}
+
+func TestFastTransferMoverOmitsIncompleteProgressCallback(t *testing.T) {
+	opts := fastTransferMoverTestOptions()
+	opts.ProgressURL = "http://storage/internal/progress"
+
+	job := buildFastTransferMoverJob(normalizeFastTransferMoverOptions(opts))
+	if env := job.Spec.Template.Spec.Containers[0].Env; len(env) != 0 {
+		t.Fatalf("env = %#v, want no callback env without key", env)
+	}
+}
+
 func TestFastTransferMoverAlreadyExistsForMatchingTransfer(t *testing.T) {
 	existing := buildFastTransferMoverJob(normalizeFastTransferMoverOptions(fastTransferMoverTestOptions()))
 	cl := New(fake.NewSimpleClientset(existing), "proj")
@@ -144,4 +195,12 @@ func assertFastTransferMoverJob(t *testing.T, job *batchv1.Job) {
 	if len(pod.Volumes) != 2 || pod.Volumes[0].HostPath != nil || pod.Volumes[1].HostPath != nil {
 		t.Fatalf("volumes = %#v, want PVC-only volumes", pod.Volumes)
 	}
+}
+
+func fastTransferMoverEnvMap(env []corev1.EnvVar) map[string]string {
+	values := map[string]string{}
+	for _, entry := range env {
+		values[entry.Name] = entry.Value
+	}
+	return values
 }
