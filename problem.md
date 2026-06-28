@@ -472,6 +472,19 @@ manifest. This does not prove live kind, Kubernetes API discovery/admission,
 CSI provisioning, local PV binding, byte-mover behavior, storage GA, Full GA,
 or first-version readiness.
 
+Storage CacheBinding and StorageBenchmarkRecord now have local/static
+storage-service evidence: CacheBinding project-manager scoped CRUD and
+DataPlanePlan cache-hit marking from an existing CacheBinding are covered by
+focused storage tests; `CacheBindingChanged` is implemented by the handler and
+declared in service Spec/API/event fixtures; StorageBenchmarkRecord create/list
+behavior, required `storage_profile`, and `StorageBenchmarkRecorded` event
+emission are covered by focused storage tests, with typed create/list fixture
+coverage in the contracts suite. This is local/static storage metadata evidence
+only; it does not prove live cache residency, node-local NVMe reuse, cache
+eviction, live benchmark execution, fio/IOR/NCCL measurement collection,
+performance baselines, Kubernetes storage backend behavior, storage GA, Full
+GA, or V1 external production launch readiness.
+
 Storage permission management now has local handler-level `STORAGE-003` RBAC
 proof: direct handler tests cover plain group member / Project reader denial
 for direct create/set, batch set, and batch delete group/project storage

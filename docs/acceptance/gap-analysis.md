@@ -473,6 +473,19 @@ broader storage isolation and mount validation criteria below still should not
 be treated as fully proven unless `gap.md` records explicit evidence for those
 slices.
 
+Storage CacheBinding and StorageBenchmarkRecord now also have local/static
+storage-service evidence: CacheBinding project-manager scoped CRUD and
+DataPlanePlan cache-hit marking from an existing CacheBinding are covered by
+focused storage tests; `CacheBindingChanged` is implemented by the handler and
+declared in service Spec/API/event fixtures; StorageBenchmarkRecord create/list
+behavior, required `storage_profile`, and `StorageBenchmarkRecorded` event
+emission are covered by focused storage tests, with typed create/list fixture
+coverage in the contracts suite. This is local/static storage metadata evidence
+only; it does not prove live cache residency, node-local NVMe reuse, cache
+eviction, live benchmark execution, fio/IOR/NCCL measurement collection,
+performance baselines, Kubernetes storage backend behavior, storage GA, Full
+GA, or V1 external production launch readiness.
+
 Storage project permission delete now also has local/static external REST
 fixture coverage for
 `DELETE /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/{userId}`,
