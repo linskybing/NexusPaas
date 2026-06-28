@@ -424,6 +424,12 @@ admission evidence for storage DataPlane dispatch exists via
 `backend/internal/e2e/storage_data_plane_kind_admission_e2e_test.go`; remaining
 gaps stay open for CSI mount, scheduler success, local PV binding, byte mover
 behavior, StorageClass runtime validation, storage GA, and Full GA.
+Env-gated live Kubernetes API admission evidence for FastTransfer mover Job
+creation and repeat `already_exists` now exists via
+`backend/internal/e2e/fast_transfer_mover_kind_admission_e2e_test.go`; it proves
+only the k8s-control internal route can create the restricted mover Job manifest
+in Kubernetes and does not prove PVC binding, Pod scheduling, rsync execution,
+bytes moved, progress callbacks, CSI, storage GA, or Full GA.
 StorageProfile-to-HPC-StorageClass
 drift now also has local/static repository evidence: `storage-service` startup
 seeds the default profiles, the storage package test parses

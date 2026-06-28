@@ -417,6 +417,17 @@ contract evidence and API admission evidence only; it does not prove live
 Kubernetes/CSI data-plane execution, byte-mover behavior, live mount execution,
 full storage GA, Full GA, or first-version readiness.
 
+FastTransfer mover Job dispatch now also has env-gated live Kubernetes API
+admission evidence via
+`backend/internal/e2e/fast_transfer_mover_kind_admission_e2e_test.go`: the test
+posts through the k8s-control internal HTTP route, creates one restricted mover
+`Job`, verifies fixed rsync command shape, PVC-only volumes, source read-only,
+target writable, `RestartPolicy=Never`, `AutomountServiceAccountToken=false`,
+no privileged container, no `hostPath`, and repeats the request with
+`already_exists`. This does not prove PVC binding, Pod scheduling, rsync
+execution, bytes moved, progress callback behavior, CSI, storage GA, Full GA,
+or first-version readiness.
+
 StorageProfile-to-HPC-StorageClass manifest drift now has local/static test
 evidence only: `storage-service` startup seeds default profile records, the
 storage package test parses `backend/deploy/hpc/storage/*.yaml`, and every
