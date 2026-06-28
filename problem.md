@@ -116,7 +116,13 @@ create response, stored record, and `ImageBuildStarted` event while historical
 payloads without those additive fields remain schema-v1 compatible. This is
 metadata/event-shape evidence only and does not prove image conversion/prewarm,
 completed SBOM generation, signing, scan enforcement, allow-list admission, live
-Harbor/Tekton/BuildKit execution, or full image workflow GA. Image build create
+Harbor/Tekton/BuildKit execution, or full image workflow GA.
+Scheduler accelerator, network, and placement profile creation now also have
+local/static external REST fixture parity against `schedulerquota.Spec()` for
+the three existing profile create fixtures and matching service event names.
+This is static contract evidence only and does not prove live scheduler/profile
+behavior, Kubernetes placement, full typed API coverage, V1 external launch, or
+Full GA. Image build create
 and cancel routes now also have partial local
 deterministic `DATA-014` evidence for optional `Idempotency-Key` replay/conflict
 behavior: create covers same-request replay and changed-request conflict, while

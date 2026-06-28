@@ -74,6 +74,11 @@ without those fields remain tolerated. This is metadata and event-shape evidence
 only; it does not prove image conversion/prewarm execution, completed SBOM
 generation, signing, scan enforcement, allow-list admission, live Harbor build
 execution, or full image workflow GA.
+Scheduler accelerator, network, and placement profile creation now also have
+local/static external REST fixture parity for the three profile create fixtures
+against `schedulerquota.Spec()` route metadata and service event names. This is
+static contract evidence only; it does not prove live scheduler/profile
+behavior, Kubernetes placement, or full typed API coverage.
 Identity auth/session entrypoints now also have local/static typed external REST
 fixture coverage for `POST /api/v1/register`, `POST /api/v1/login`,
 `POST /api/v1/refresh`, and `POST /api/v1/cli/login`: the fixtures declare
