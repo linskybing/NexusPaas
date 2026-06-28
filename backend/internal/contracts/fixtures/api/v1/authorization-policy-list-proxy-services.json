@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "contract_name": "authorization-policy.list_proxy_services",
+  "owner_service": "authorization-policy-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "authorization-policy-service:proxy_services",
+  "action": "list",
+  "method": "GET",
+  "path": "/api/v1/admin/proxy-rbac/services",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [],
+  "required_request_fields": [],
+  "optional_request_fields": [],
+  "request_example": {},
+  "success_statuses": [
+    200
+  ],
+  "error_statuses": [
+    401,
+    403,
+    500
+  ],
+  "emits_events": [],
+  "response_example": {
+    "items": [
+      {
+        "id": "SVC_HARBOR",
+        "name": "Harbor Registry",
+        "description": "Container image registry",
+        "category": "services",
+        "route_path": "/admin/registry",
+        "api_patterns": [
+          "/api/v1/harbor/*"
+        ],
+        "actions": [
+          "view",
+          "create",
+          "update",
+          "delete"
+        ],
+        "sort_order": 20,
+        "created_at": "2026-06-28T00:00:00Z",
+        "updated_at": "2026-06-28T00:00:00Z"
+      }
+    ]
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

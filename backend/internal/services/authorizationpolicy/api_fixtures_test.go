@@ -116,6 +116,33 @@ func TestProxyPolicyExternalAPIFixturesMatchSpec(t *testing.T) {
 	assertProxyRBACExternalAPIFixturesMatchSpec(t, cases)
 }
 
+func TestProxyServiceReadExternalAPIFixturesMatchSpec(t *testing.T) {
+	cases := []proxyServiceReadFixtureCase{
+		{
+			name:           "list",
+			fixtureName:    "authorization-policy-list-proxy-services.json",
+			contractName:   "authorization-policy.list_proxy_services",
+			path:           "/api/v1/admin/proxy-rbac/services",
+			action:         "list",
+			pathParameters: []string{},
+			errors:         []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError},
+			collection:     true,
+		},
+		{
+			name:           "get",
+			fixtureName:    "authorization-policy-get-proxy-service.json",
+			contractName:   "authorization-policy.get_proxy_service",
+			path:           "/api/v1/admin/proxy-rbac/services/{id}",
+			action:         "get",
+			idParam:        "id",
+			pathParameters: []string{"id"},
+			errors:         []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError},
+		},
+	}
+
+	assertProxyServiceReadExternalAPIFixturesMatchSpec(t, cases)
+}
+
 func assertProxyRBACExternalAPIFixturesMatchSpec(t *testing.T, cases []proxyRBACFixtureCase) {
 	t.Helper()
 	spec := Spec()
@@ -138,6 +165,25 @@ func assertProxyRBACExternalAPIFixturesMatchSpec(t *testing.T, cases []proxyRBAC
 	}
 }
 
+func assertProxyServiceReadExternalAPIFixturesMatchSpec(t *testing.T, cases []proxyServiceReadFixtureCase) {
+	t.Helper()
+	spec := Spec()
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := readAuthorizationPolicyExternalAPIFixture(t, tt.fixtureName)
+			route, ok := findAuthorizationPolicyRoute(spec.Routes, fixture.Method, fixture.Path)
+			if !ok {
+				t.Fatalf("route %s %s not found in Spec()", fixture.Method, fixture.Path)
+			}
+
+			assertProxyServiceReadFixtureMetadata(t, fixture, spec, route, tt)
+			assertProxyServiceReadRouteMetadata(t, route, fixture, tt)
+			assertProxyServiceReadExamples(t, fixture, tt)
+		})
+	}
+}
+
 type proxyRBACFixtureCase struct {
 	name           string
 	fixtureName    string
@@ -154,6 +200,18 @@ type proxyRBACFixtureCase struct {
 	errors         []int
 	responseFields []string
 	expectRules    bool
+}
+
+type proxyServiceReadFixtureCase struct {
+	name           string
+	fixtureName    string
+	contractName   string
+	path           string
+	action         string
+	idParam        string
+	pathParameters []string
+	errors         []int
+	collection     bool
 }
 
 type authorizationPolicyExternalAPIFixture struct {
@@ -174,6 +232,71 @@ type authorizationPolicyExternalAPIFixture struct {
 	ErrorStatuses         []int          `json:"error_statuses"`
 	EmitsEvents           []string       `json:"emits_events"`
 	ResponseExample       map[string]any `json:"response_example"`
+}
+
+func assertProxyServiceReadFixtureMetadata(t *testing.T, fixture authorizationPolicyExternalAPIFixture, spec platform.ServiceSpec, route platform.RouteSpec, want proxyServiceReadFixtureCase) {
+	t.Helper()
+	if fixture.ContractName != want.contractName {
+		t.Fatalf("contract_name = %q, want %q", fixture.ContractName, want.contractName)
+	}
+	if fixture.OwnerService != spec.Name {
+		t.Fatalf("owner_service = %q, want %q", fixture.OwnerService, spec.Name)
+	}
+	if got, want := fixture.Resource, spec.Name+":"+route.Resource; got != want {
+		t.Fatalf("resource = %q, want %q", got, want)
+	}
+	if fixture.Action != route.Action || fixture.Action != want.action {
+		t.Fatalf("action = %q, want %q", fixture.Action, want.action)
+	}
+	if fixture.Auth != "user" || !fixture.AuthRequired || fixture.ServiceKeyRequired {
+		t.Fatalf("auth metadata = %q/%v/%v, want user/true/false", fixture.Auth, fixture.AuthRequired, fixture.ServiceKeyRequired)
+	}
+	if !reflect.DeepEqual(fixture.PathParameters, want.pathParameters) {
+		t.Fatalf("path_parameters = %v, want %v", fixture.PathParameters, want.pathParameters)
+	}
+	if len(fixture.RequiredRequestFields) != 0 || len(fixture.OptionalRequestFields) != 0 {
+		t.Fatalf("request fields = %v/%v, want empty", fixture.RequiredRequestFields, fixture.OptionalRequestFields)
+	}
+	if !reflect.DeepEqual(fixture.SuccessStatuses, []int{http.StatusOK}) {
+		t.Fatalf("success_statuses = %v, want [200]", fixture.SuccessStatuses)
+	}
+	if !reflect.DeepEqual(fixture.ErrorStatuses, want.errors) {
+		t.Fatalf("error_statuses = %v, want %v", fixture.ErrorStatuses, want.errors)
+	}
+	if len(fixture.EmitsEvents) != 0 {
+		t.Fatalf("emits_events = %v, want none", fixture.EmitsEvents)
+	}
+}
+
+func assertProxyServiceReadRouteMetadata(t *testing.T, route platform.RouteSpec, fixture authorizationPolicyExternalAPIFixture, want proxyServiceReadFixtureCase) {
+	t.Helper()
+	if route.Method != http.MethodGet || route.Pattern != want.path {
+		t.Fatalf("route = %s %s, want GET %s", route.Method, route.Pattern, want.path)
+	}
+	if route.Resource != "proxy_services" || route.Action != want.action {
+		t.Fatalf("route metadata = %#v, want proxy_services/%s", route, want.action)
+	}
+	if route.IDParam != want.idParam {
+		t.Fatalf("route IDParam = %q, want %q", route.IDParam, want.idParam)
+	}
+	if !route.Admin || !route.AuthRequired || route.ServiceAuthRequired || route.StateChanging {
+		t.Fatalf("route auth/change metadata = admin:%v auth:%v service:%v state:%v, want true/true/false/false", route.Admin, route.AuthRequired, route.ServiceAuthRequired, route.StateChanging)
+	}
+	if fixture.Method != route.Method || fixture.Path != route.Pattern {
+		t.Fatalf("fixture route = %s %s, want %s %s", fixture.Method, fixture.Path, route.Method, route.Pattern)
+	}
+}
+
+func assertProxyServiceReadExamples(t *testing.T, fixture authorizationPolicyExternalAPIFixture, want proxyServiceReadFixtureCase) {
+	t.Helper()
+	if len(fixture.RequestExample) != 0 {
+		t.Fatalf("request_example = %v, want empty object", fixture.RequestExample)
+	}
+	row := fixture.ResponseExample
+	if want.collection {
+		row = firstProxyServiceReadItem(t, fixture.ResponseExample)
+	}
+	assertProxyServiceReadResponseRow(t, row)
 }
 
 func assertProxyRBACFixtureMetadata(t *testing.T, fixture authorizationPolicyExternalAPIFixture, spec platform.ServiceSpec, route platform.RouteSpec, want proxyRBACFixtureCase) {
@@ -210,6 +333,53 @@ func assertProxyRBACFixtureMetadata(t *testing.T, fixture authorizationPolicyExt
 	}
 	if !reflect.DeepEqual(fixture.EmitsEvents, []string{"ProxyPolicyChanged"}) {
 		t.Fatalf("emits_events = %v, want [ProxyPolicyChanged]", fixture.EmitsEvents)
+	}
+}
+
+func firstProxyServiceReadItem(t *testing.T, response map[string]any) map[string]any {
+	t.Helper()
+	items, ok := response["items"].([]any)
+	if !ok || len(items) == 0 {
+		t.Fatalf("response_example.items = %v, want non-empty array", response["items"])
+	}
+	row, ok := items[0].(map[string]any)
+	if !ok {
+		t.Fatalf("response_example.items[0] = %v, want object", items[0])
+	}
+	return row
+}
+
+func assertProxyServiceReadResponseRow(t *testing.T, row map[string]any) {
+	t.Helper()
+	assertResponseStringFields(t, row, []string{"id", "name", "description", "category", "route_path", "created_at", "updated_at"})
+	assertResponseStringArray(t, row, "api_patterns")
+	assertResponseStringArray(t, row, "actions")
+	if _, ok := row["sort_order"].(float64); !ok {
+		t.Fatalf("response row sort_order = %v, want number", row["sort_order"])
+	}
+}
+
+func assertResponseStringFields(t *testing.T, row map[string]any, fields []string) {
+	t.Helper()
+	for _, field := range fields {
+		value, ok := row[field].(string)
+		if !ok || value == "" {
+			t.Fatalf("response row %s = %v, want non-empty string", field, row[field])
+		}
+	}
+}
+
+func assertResponseStringArray(t *testing.T, row map[string]any, field string) {
+	t.Helper()
+	values, ok := row[field].([]any)
+	if !ok || len(values) == 0 {
+		t.Fatalf("response row %s = %v, want non-empty string array", field, row[field])
+	}
+	for i, value := range values {
+		text, ok := value.(string)
+		if !ok || text == "" {
+			t.Fatalf("response row %s[%d] = %v, want non-empty string", field, i, value)
+		}
 	}
 }
 
