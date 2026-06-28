@@ -485,6 +485,13 @@ eviction, live benchmark execution, fio/IOR/NCCL measurement collection,
 performance baselines, Kubernetes storage backend behavior, storage GA, Full
 GA, or V1 external production launch readiness.
 
+Storage CacheBinding now also has local/static typed external API fixture
+parity for list/get/update/delete alongside the existing create fixture. This
+evidence is contract/Spec parity and service-local fixture checks only; it does
+not prove live CRUD behavior, live authorization, node-local cache residency,
+DataPlanePlan runtime behavior, storage GA, Full GA, or V1 external production
+launch readiness.
+
 Storage permission management now has local handler-level `STORAGE-003` RBAC
 proof: direct handler tests cover plain group member / Project reader denial
 for direct create/set, batch set, and batch delete group/project storage
