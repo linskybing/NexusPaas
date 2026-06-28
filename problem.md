@@ -455,11 +455,23 @@ test creates an in-cluster BusyBox callback sink Service, waits for it to become
 Ready, dispatches a mover Job with the k8s-control callback env wiring, waits
 for the Job to `Complete`, verifies the target PVC content, and polls sink logs
 for the `running` and `succeeded` POST bodies plus the service identity header.
-This proves only in-cluster callback emission. It does not prove storage-service
-progress-state transitions, storage record updates, storage events, accurate
-byte accounting, checksum, resume, progress streaming, external storage backend,
-multi-node behavior, performance, durability, production-grade secret handling,
-workload identity, storage GA, Full GA, or first-version readiness.
+This proves only in-cluster callback emission. It does not prove live
+k8s-control-to-storage-service callback delivery, live storage record updates,
+accurate byte accounting, checksum, resume, progress streaming, external
+storage backend, multi-node behavior, performance, durability, production-grade
+secret handling, workload identity, storage GA, Full GA, or first-version
+readiness.
+
+FastTransfer progress callbacks now also have local/in-memory storage-service
+handler evidence: focused storage tests cover queued -> running -> succeeded
+record updates, monotonic progress/bytes checks, terminal transition rejection,
+scoped service identity authorization, and `FastTransferProgressed` /
+`FastTransferCompleted` event emission. This does not prove live
+k8s-control-to-storage-service callback delivery, live record updates from a
+Kubernetes mover Job, Redis delivery, accurate byte accounting, checksum
+correctness, resume, production secret handling, external storage backends,
+multi-node behavior, performance, durability, storage GA, Full GA, or V1 launch
+readiness.
 
 StorageProfile-to-HPC-StorageClass manifest drift now has local/static test
 evidence only: `storage-service` startup seeds default profile records, the
