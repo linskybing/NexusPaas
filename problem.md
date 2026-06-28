@@ -23,7 +23,7 @@
   disclaimers means the V1 *external production launch* state above (OPEN)** — it
   does **not** mean the individual slice is unfinished.
 
-_Updated: 2026-06-24 (re-verified, scheduled backend gap/code review;
+_Updated: 2026-06-28 (re-verified, scheduled backend gap/code review;
 independently re-confirmed this pass — `go build ./...`, `go vet ./...`, and
 full `go test ./...` all green across all 24 packages on the current working
 tree, including uncommitted PERF/MON/DATA-014/IMG work; cron parity re-checked
@@ -108,15 +108,103 @@ local/static typed external REST fixture coverage for `POST /api/v1/images/build
 route, path params, state-changing, and `harbor` adapter metadata. This is
 static contract evidence only; it does not prove live Harbor build execution,
 SBOM/signing, allow-list enforcement, image scan lifecycle, or full image
-workflow GA. Image build create and cancel routes now also have partial local
+workflow GA. Image-registry image acceleration and queued supply-chain metadata
+now also have local evidence: `ImageAccelerationProfile` admin CRUD, seeded
+defaults, create fixture, and `ImageAccelerationProfileChanged` event fixture
+exist, and queued image builds expose pending supply-chain status fields in the
+create response, stored record, and `ImageBuildStarted` event while historical
+payloads without those additive fields remain schema-v1 compatible. This is
+metadata/event-shape evidence only and does not prove image conversion/prewarm,
+completed SBOM generation, signing, scan enforcement, allow-list admission, live
+Harbor/Tekton/BuildKit execution, or full image workflow GA.
+Scheduler accelerator, network, and placement profile creation now also have
+local/static external REST fixture parity against `schedulerquota.Spec()` for
+the three existing profile create fixtures and matching service event names.
+This is static contract evidence only and does not prove live scheduler/profile
+behavior, Kubernetes placement, full typed API coverage, V1 external launch, or
+Full GA. Authorization-policy proxy role create/update/delete now also have
+local/static external REST fixture parity against `authorizationpolicy.Spec()`
+for admin route metadata, authenticated-user/no-service-key posture,
+path params, success/error statuses, and `ProxyPolicyChanged` linkage; the
+event fixture uses role-map public fields plus `action`. This is static
+contract evidence only and does not prove live admin authorization, live proxy
+role mutation behavior, full typed API coverage, V1 external launch, or Full
+GA. Authorization-policy proxy policy create/update/delete now also have
+local/static external REST fixture parity against `authorizationpolicy.Spec()`
+for admin route metadata, authenticated-user/no-service-key posture,
+path params, partial-update optional request fields, success/error statuses,
+and `ProxyPolicyChanged` linkage; the existing `ProxyPolicyChanged` event
+fixture is reused. Typed API coverage remains Open, and this does not prove
+live admin authorization, live proxy policy mutation behavior, DATA GA, V1
+external launch, or Full GA. Authorization-policy proxy service list/get now
+also have local/static external REST fixture parity against
+`authorizationpolicy.Spec()` for admin route metadata,
+authenticated-user/no-service-key posture, path params, read-only/no-event
+behavior, success/error statuses, and service-row response examples. Typed API
+coverage remains Open, and this does not prove live admin authorization, live
+proxy service behavior, DATA GA, or Full GA.
+Authorization-policy proxy role-user list/assign/unassign now also have
+local/static external REST fixture parity against `authorizationpolicy.Spec()`
+for admin route metadata, authenticated-user/no-service-key posture,
+path params, delete route `IDParam` `user_id`, read-only/no-event list
+behavior, assign/unassign `ProxyPolicyChanged` linkage, success/error statuses,
+and role-user response examples with nested public role data. Typed API
+coverage remains Open, and this does not prove live admin authorization, live
+role-user mutation behavior, DATA GA, V1 external launch, or Full GA.
+Authorization-policy proxy policy assignment list/assign/unassign now also
+have local/static external REST fixture parity against
+`authorizationpolicy.Spec()` for admin route metadata,
+authenticated-user/no-service-key posture, path params, read-only/no-event list
+behavior, assign/unassign `ProxyPolicyChanged` linkage, success/error statuses,
+`target_type`/`target_id` request examples, assignment response examples with
+nested public policy data, and unassign's empty response without a `404` error
+status. Typed API coverage remains Open, and this does not prove live admin
+authorization, live proxy policy assignment mutation behavior, DATA GA, V1
+external launch, or Full GA. Authorization-policy proxy target assignment list
+now also has local/static external REST fixture parity against
+`authorizationpolicy.Spec()` for admin route metadata,
+authenticated-user/no-service-key posture, `type`/`id` path params,
+read-only/no-event behavior, `400`/`401`/`403`/`500` error statuses, and
+assignment response examples with nested public policy data. Typed API coverage
+remains Open, and this does not prove live admin authorization, live proxy
+target assignment behavior, DATA GA, V1 external launch, or Full GA.
+Authorization-policy proxy system role list now also has local/static external
+REST fixture parity against `authorizationpolicy.Spec()` for admin route
+metadata, authenticated-user/no-service-key posture, no path params,
+read-only/no-event behavior, `401`/`403`/`500` error statuses, and stable public
+role `id`/`name` response fields. Typed API coverage remains Open, and this does
+not prove live admin authorization, live route behavior, DATA GA, V1 external
+launch, Full GA, or kind/e2e coverage. Authorization-policy permissions batch
+now also has local/static external REST fixture parity against
+`authorizationpolicy.Spec()` for `POST /api/v1/permissions/batch`, including
+the `admin` Spec metadata repair, authenticated-user/no-service-key posture,
+required `operations`, `200` success, `project_member`/`add` happy-path
+operation vocabulary, `400`/`401`/`403`/`500` error statuses, empty object
+response, `PolicyChanged` linkage, and local/static `PolicyChanged`
+event-envelope fixture plus service-local producer contract evidence for that
+payload. Typed API coverage remains Open, and this fixture/producer-test
+evidence does not prove live event bus delivery, live admin authorization, live
+permissions batch mutation behavior, DATA GA, V1 external launch, Full GA, or
+kind/e2e coverage.
+Image build create and cancel routes now also have partial local
 deterministic `DATA-014` evidence for optional `Idempotency-Key` replay/conflict
 behavior: create covers same-request replay and changed-request conflict, while
 cancel covers same-target replay across both cancel route aliases and
 different-target conflict without duplicate `ImageBuildCancelled` events. This
 is local image-build command evidence only and does not prove full DATA-014,
 deploy idempotency, live executor cancellation, live Harbor/Tekton/BuildKit or
-Kubernetes execution, full IMG/DATA, V1 external launch, or Full GA. Workload
-submit now also has partial local deterministic `DATA-014` evidence for
+Kubernetes execution, full IMG/DATA, V1 external launch, or Full GA. Identity
+auth/session routes now also have local/static typed external REST fixture
+coverage for `POST /api/v1/register`, `POST /api/v1/login`,
+`POST /api/v1/refresh`, and `POST /api/v1/cli/login`: the fixtures declare
+public auth posture, exact required credential fields, success statuses, and
+`UserCreated` only for registration, with credential-shaped example allowances
+scoped to those four identity fixtures and checked against `identity.Spec()`.
+This is local/static contract evidence only and does not prove live auth
+availability, browser cookie behavior, OIDC/LDAP behavior, token
+rotation/revocation, all-critical API typed coverage, DATA GA, Full GA, or V1
+external launch readiness. Workload submit now also has partial local
+deterministic `DATA-014` evidence for
 `POST /api/v1/jobs`: same-key same-semantic-payload replays return the existing
 submitted job without duplicate scheduler admission, auto-preemption, job record,
 or `JobSubmitted` event side effects, and same-key different-payload attempts
@@ -310,6 +398,155 @@ effective PVC permission, project-level `read_only` precedence over group
 and other-user permission denial. This is mount-plan authorization/isolation
 proof only; it does not prove live Kubernetes mount execution, cluster PVC
 isolation, CSI behavior, full storage GA, Full GA, or first-version readiness.
+
+Storage DataPlanePlan now has local/lightweight `internal/e2e` contract
+evidence for the storage route and workload dispatch path. The storage-service
+route resolves `POST /internal/storage/projects/{project_id}/data-plane-plan`,
+rejects wrong service keys, uses seeded storage-owned
+binding/source/project-permission records instead of forged request PVC
+details, returns default local scratch and CephFS checkpoint profiles, and
+publishes `DataPlanePlanBuilt`. The workload dispatch path now also has a
+fake-cluster cross-service proof: workload-service calls the storage-service
+`httptest` endpoint through its real internal data-plane client and creates a
+Pod with scratch PVC wiring, stage-in PVC wiring/initContainer copy command,
+and checkpoint env from the storage-owned plan. An env-gated live Kubernetes
+API admission E2E now covers storage DataPlane dispatch object creation only;
+it does not prove CSI mount, scheduler success, local PV binding, byte mover
+behavior, StorageClass runtime validation, storage GA, or Full GA. This is local
+contract evidence and API admission evidence only; it does not prove live
+Kubernetes/CSI data-plane execution, byte-mover behavior, live mount execution,
+full storage GA, Full GA, or first-version readiness.
+
+Storage DataPlane cache-hit dispatch now also has env-gated kind runtime
+evidence via
+`backend/internal/e2e/storage_data_plane_cache_hit_kind_runtime_e2e_test.go`:
+storage-service built a cache-hit DataPlanePlan, workload-service dispatched a
+Pod after creating the scratch PVC from that plan, the Pod reached `Succeeded`,
+injected checkpoint env matched the plan, a marker was written to and read back
+from the scratch PVC, and no stage target PVC was materialized. This does not
+prove stage-in byte copy, CSI/local NVMe/CephFS/Longhorn runtime, quota-aware
+scratch sizing, checkpoint flush, performance, multi-node behavior, storage GA,
+Full GA, or V1 external production launch readiness.
+
+Storage DataPlane stage-in byte copy now has env-gated workload-service kind
+runtime evidence via
+`backend/internal/services/workload/dispatcher_dataplane_stagein_kind_e2e_test.go`:
+a pre-populated stage PVC and stub DataPlanePlan drove workload dispatch,
+workload-service created the scratch PVC, the generated initContainer copied a
+small payload from stage PVC to scratch, the main container read that payload and
+wrote a checkpoint marker, and a verify Pod read both files back from scratch.
+This does not prove storage-service resolver runtime, storage permission
+trust-boundary enforcement, `EnsurePVCMounted`/CSI source projection, local
+NVMe/CephFS/Longhorn/JuiceFS runtime, checkpoint flush to authority storage,
+quota-aware scratch sizing, performance, multi-node behavior, storage GA, Full
+GA, or V1 external production launch readiness.
+
+FastTransfer mover Job dispatch now also has env-gated live Kubernetes API
+admission evidence via
+`backend/internal/e2e/fast_transfer_mover_kind_admission_e2e_test.go`: the test
+posts through the k8s-control internal HTTP route, creates one restricted mover
+`Job`, verifies fixed rsync command shape, PVC-only volumes, source read-only,
+target writable, `RestartPolicy=Never`, `AutomountServiceAccountToken=false`,
+no privileged container, no `hostPath`, and repeats the request with
+`already_exists`. This does not prove PVC binding, Pod scheduling, rsync
+execution, bytes moved, progress callback behavior, CSI, storage GA, Full GA,
+or first-version readiness.
+
+FastTransfer start-to-mover dispatch now also has env-gated live storage
+fast-stage-to-k8s-control mover Job admission evidence via
+`backend/internal/e2e/fast_transfer_start_mover_kind_admission_e2e_test.go`: the
+test posts through the storage external fast-stage route with storage-local
+project access projections, creates a queued transfer record, dispatches over
+the configured k8s-control service URL, admits one restricted mover `Job`, emits
+`FastTransferQueued`, and proves idempotent replay keeps one Job. This does not
+prove PVC binding, Pod scheduling, rsync execution, bytes moved, progress
+callback behavior, CSI, storage GA, Full GA, or first-version readiness.
+
+FastTransfer mover execution now also has env-gated kind evidence via
+`backend/internal/e2e/fast_transfer_mover_execution_kind_e2e_test.go`: the test
+starts at storage fast-stage, dispatches to k8s-control, creates source/target
+PVCs with the kind default StorageClass, seeds one source file, waits for the
+mover Job to `Complete`, and verifies the target PVC contains the expected
+content and byte count. This proves only kind default PVC binding, Pod
+scheduling, rsync command execution, and bytes moved for one tiny file; it does
+not prove CSI or storage GA, external storage backends, multi-node behavior,
+multi-file sync, progress callbacks, performance, durability, Full GA, or
+first-version readiness.
+
+FastTransfer progress callback emission now also has env-gated kind evidence via
+`backend/internal/e2e/fast_transfer_progress_callback_kind_e2e_test.go`: the
+test creates an in-cluster BusyBox callback sink Service, waits for it to become
+Ready, dispatches a mover Job with the k8s-control callback env wiring, waits
+for the Job to `Complete`, verifies the target PVC content, and polls sink logs
+for the `running` and `succeeded` POST bodies plus the service identity header.
+This proves only in-cluster callback emission. It does not prove live
+k8s-control-to-storage-service callback delivery, live storage record updates,
+accurate byte accounting, checksum, resume, progress streaming, external
+storage backend, multi-node behavior, performance, durability, production-grade
+secret handling, workload identity, storage GA, Full GA, or first-version
+readiness.
+
+FastTransfer progress callbacks now also have local/in-memory storage-service
+handler evidence: focused storage tests cover queued -> running -> succeeded
+record updates, monotonic progress/bytes checks, terminal transition rejection,
+scoped service identity authorization, and `FastTransferProgressed` /
+`FastTransferCompleted` event emission. This does not prove live
+k8s-control-to-storage-service callback delivery, live record updates from a
+Kubernetes mover Job, Redis delivery, accurate byte accounting, checksum
+correctness, resume, production secret handling, external storage backends,
+multi-node behavior, performance, durability, storage GA, Full GA, or V1 launch
+readiness.
+
+FastTransfer progress callback-to-storage now also has env-gated kind evidence
+via `backend/internal/e2e/fast_transfer_progress_storage_kind_e2e_test.go`: a
+storage fast-stage request created a mover Job, the mover copied one tiny file,
+the mover POSTed progress callbacks back to a storage-service handler, the
+storage FastTransfer record reached `succeeded` / `progress_pct=100`, and
+`FastTransferProgressed` plus `FastTransferCompleted` were emitted in the
+in-memory event bus. This does not prove Redis delivery, durable Postgres
+persistence, production service identity/secret handling, accurate byte
+accounting, checksum correctness, resume, external storage backends, multi-node
+behavior, performance, durability, storage GA, Full GA, or V1 external
+production launch readiness.
+
+FastTransfer custom external API routes now have local/static typed fixture
+parity for fast-stage start, get, and DELETE cancel. This proves contract/Spec
+parity and response-shape documentation only; it does not prove generic/legacy
+transfer route coverage, live transfer execution, live authorization, live
+k8s-control callback delivery, bytes moved, checksum correctness, resume,
+external storage backends, storage GA, Full GA, or V1 external production launch
+readiness.
+
+StorageProfile-to-HPC-StorageClass manifest drift now has local/static test
+evidence only: `storage-service` startup seeds default profile records, the
+storage package test parses `backend/deploy/hpc/storage/*.yaml`, and every
+non-object seeded profile with `storage_class_name` must match a
+`storage.k8s.io/v1` `StorageClass` whose `metadata.name` and
+`nexuspaas.io/storage-profile` label match the profile id. The
+`minio-artifact` object profile is explicitly allowed to have no StorageClass
+manifest. This does not prove live kind, Kubernetes API discovery/admission,
+CSI provisioning, local PV binding, byte-mover behavior, storage GA, Full GA,
+or first-version readiness.
+
+Storage CacheBinding and StorageBenchmarkRecord now have local/static
+storage-service evidence: CacheBinding project-manager scoped CRUD and
+DataPlanePlan cache-hit marking from an existing CacheBinding are covered by
+focused storage tests; `CacheBindingChanged` is implemented by the handler and
+declared in service Spec/API/event fixtures; StorageBenchmarkRecord create/list
+behavior, required `storage_profile`, and `StorageBenchmarkRecorded` event
+emission are covered by focused storage tests, with typed create/list fixture
+coverage in the contracts suite. This is local/static storage metadata evidence
+only; it does not prove live cache residency, node-local NVMe reuse, cache
+eviction, live benchmark execution, fio/IOR/NCCL measurement collection,
+performance baselines, Kubernetes storage backend behavior, storage GA, Full
+GA, or V1 external production launch readiness.
+
+Storage CacheBinding now also has local/static typed external API fixture
+parity for list/get/update/delete alongside the existing create fixture. This
+evidence is contract/Spec parity and service-local fixture checks only; it does
+not prove live CRUD behavior, live authorization, node-local cache residency,
+DataPlanePlan runtime behavior, storage GA, Full GA, or V1 external production
+launch readiness.
 
 Storage permission management now has local handler-level `STORAGE-003` RBAC
 proof: direct handler tests cover plain group member / Project reader denial
@@ -509,7 +746,7 @@ The accurate description is:
 | 8-unit GA direction | Done | ADRs and architecture docs define the target deployable units. |
 | Physical 8-unit runtime split | Done | Production Beta kustomize, runtime config, local compose smoke, and CI gates define/use 8 backend units hosting 15 logical services. Live rollback evidence is currently for the 15-deployment namespace only, so 8-unit staging rollback remains open. |
 | Identity data boundary | Started | Identity-owned records and migrations exist; other core domains still need typed ownership work. |
-| Contract fixtures | Started | Core event, owner-read, command, producer, and consumer fixture coverage exists for initial slices. |
+| Contract fixtures | Started | Core event, owner-read, command, producer, and consumer fixture coverage exists for initial slices. Local/static typed external REST fixtures now include the already committed identity auth/session entrypoints plus the current-user identity API-token lifecycle slice. |
 | Projection visibility | Started | Projection lag, retry, replay, dead-letter visibility, local/in-memory authorization-policy drift comparison, local/in-memory IDE drift comparison for six IDE read-model pairs, local/in-memory dashboard drift comparison for six dashboard read-model pairs, local/in-memory clusterread drift comparison for six clusterread read-model pairs, local/in-memory request-notification project-access drift comparison for three project-access read-model pairs, local/in-memory GPU usage drift comparison for five GPU usage read-model pairs, local/in-memory image-registry drift comparison for five image-registry access read-model pairs, and local/in-memory storage drift comparison for five storage read-model pairs now exist. Durable transactional outbox delivery evidence is tracked as done in the next row; remaining projection work is live drift jobs, read-model rebuild/replay cutover, all-service DATA-016 coverage, DATA GA, Full GA, and first-version readiness evidence. |
 | Transactional outbox/inbox | Done for delivery evidence | Outbox/inbox tables + relay + inbox dedupe wired in `runtime.go`. Single-record coupling via `App.*RecordWithEvent` and `App.UpsertRecordWithEvent`, plus multi-record coupling via `App.WithTx` (`StoreTx`/`RunInTx`), now cover single-record sites in 7 services plus non-batch authorizationpolicy mutations (role create/update, policy rule replacement update, policy assignments, role users, raw permissions), authorizationpolicy policy/role cascades, schedulerquota queue cascade, storage non-batch upsert/update/delete mutations and cascades, orgproject group/project delete cascades, and batch per-item/custom mutation coverage across authorizationpolicy, storage, schedulerquota, identity, orgproject, imageregistry, and workload. Reviewer-approved live RKE2 evidence captured final image `localhost:5000/nexuspaas-backend:ci-ga-pdp-scope-20260620163744` (`sha256:1817b0c42c37fe6e4d75e1155f7022084aac675dfb52857f16f7b45299b6af62`), 15 backend deployments ready, PDP service-key scope check, HTTP 201 `POST /api/v1/forms`, and matching `FormCreated` row in `platform_event_outbox`. Expanded-surface publish-lag evidence passed with storage API events `940df12e-f953-4460-bc06-3aa487209016`, `6c749a52-a980-4d9f-9f6b-834f5f6e0068`, and `a70177d7-f0da-48a8-84f3-44bee283a54f` reaching `published` / `relay_attempts=0` and appearing in Redis DB1. Relay recovery evidence passed for `ga-outbox-crash-20260621103919`: the row stayed pending under a short sentinel relay lease, a relay-capable pod restart occurred, the sentinel was released, the row reached `published|0|true`, Redis DB1 retained the event, and exact cleanup left zero synthetic outbox rows. This proves controlled relay unavailability plus relay-capable pod restart recovery, not handler mid-transaction crash interleavings or the exact restarted pod as publisher. |
 | Route auth and collision hardening | Done | Centralized internal-route service auth and route collision validators are implemented, wired into startup checks, covered by focused/full tests, vet, build, quick gate, Sonar Quality Gate, reviewer approval, and live RKE2 missing/wrong/valid service-key evidence. |
@@ -582,8 +819,8 @@ cleanup deleted 2 exact platform rows and left no API catalog leftovers.
 | Service identity | First-release scoped per-service HTTP credentials are implemented for internal callers: `X-Service-Name` + `X-Service-Key`, trusted caller keys, audience checks, shared client/PDP/remote-identity header injection, and strict staging/production config failure for legacy-only remote service auth. `SERVICE_API_KEY` remains local/dev/test compatibility only. | Keep this scoped-key slice as v1 evidence; add rotation and move the later GA path to workload identity, mTLS, or SPIFFE/SPIRE. |
 | JWT/JWKS verification | Done for the first-release library-verifier slice: production JWT verification now uses `github.com/coreos/go-oidc/v3` for compact JWT/JWKS/signature handling with an explicit RS*/ES* algorithm allow-list, while local checks preserve the existing trusted-audience map, required `sub`/`exp`, one-minute `exp`/`nbf`/future-`iat` skew, `jti` revocation, and user/role mapping. | Keep this slice as v1 evidence; broader live OIDC/provider proof, service credential rotation, workload identity, mTLS/SPIFFE, and full GA security maturity remain separate gaps. |
 | Migration runner | Started — the existing pgx runner now has a first-release ledger/checksum/advisory-lock/dirty-state implementation slice with DB-free validation, focused/full backend tests, and live PostgreSQL integration evidence through redacted `platform-gateway-runtime-secret:DATABASE_URL` for temporary-schema isolation, dirty persistence, checksum mismatch blocking, first ledger adoption/skip, and lock contention. | Keep live staging migration/rollback drill, full schema-change rollback evidence, and broader migration-runner GA maturity open. |
-| Provider coupling | Longhorn, Harbor, MinIO, Dex, Redis Streams, and k3s are still reference-stack assumptions in several places. | Separate core contracts from provider implementations before claiming portability. |
-| Typed API contracts | Started for local/static external REST fixtures: request-notification create-form has fixture validation and spec parity coverage for `POST /api/v1/forms`, image-registry image build create routes have fixture validation plus `imageregistry.Spec()` parity coverage for `POST /api/v1/images/build`, `POST /api/v1/images/build/from-storage`, and `POST /api/v1/images/build/dockerfile`, workload job submission has fixture validation plus `workload.Spec()` parity coverage for `POST /api/v1/jobs`, workload ConfigFile creation/update has fixture validation plus `workload.Spec()` parity coverage for `POST /api/v1/configfiles` and `PUT /api/v1/configfiles/{id}` with a `ConfigFileChanged` service event metadata repair, workload job cancellation has fixture validation plus `workload.Spec()` parity coverage for `POST /api/v1/jobs/{id}/cancel` and a `JobCancelRequested` service event metadata repair, org-project Project creation has fixture validation plus `orgproject.Spec()` parity coverage for `POST /api/v1/projects`, org-project Project update has fixture validation plus `orgproject.Spec()` parity coverage for `PUT /api/v1/projects/{id}`, org-project Project delete has fixture validation plus `orgproject.Spec()` parity coverage for `DELETE /api/v1/projects/{id}`, org-project Project batch delete has fixture validation plus `orgproject.Spec()` parity coverage for `DELETE /api/v1/projects/batch`, org-project Group creation has fixture validation plus `orgproject.Spec()` parity coverage for `POST /api/v1/groups`, org-project Group update has fixture validation plus `orgproject.Spec()` parity coverage for `PUT /api/v1/groups/{id}` and a `GroupUpdated` service event metadata repair, org-project Group delete has fixture validation plus `orgproject.Spec()` parity coverage for `DELETE /api/v1/groups/{id}` and a `GroupDeleted` service event metadata repair, org-project Group batch delete has fixture validation plus `orgproject.Spec()` parity coverage for `DELETE /api/v1/groups/batch`, storage permission creation has fixture validation plus `storage.Spec()` parity coverage for `POST /api/v1/storage/permissions`, storage project permission update has fixture validation plus `storage.Spec()` parity coverage for `PUT /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions`, storage project permission delete has fixture validation plus `storage.Spec()` parity coverage for `DELETE /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/{userId}`, storage project permission batch update has fixture validation plus `storage.Spec()` parity coverage for `PUT /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/batch`, and storage project permission batch delete has fixture validation plus `storage.Spec()` parity coverage for `DELETE /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/batch`. Broader critical APIs still rely on route specs/generated OpenAPI instead of typed request/response contracts. | Continue moving critical APIs toward OpenAPI-first or explicit typed DTO contracts with fixtures; do not treat these fixtures as DATA GA, live ConfigFile update proof, live admin authorization proof, full Project/Group lifecycle, tenant isolation, live scheduler cancellation, Kubernetes job termination, cancellation propagation, live scheduler/Kubernetes execution, live permission enforcement, Kubernetes mount execution, cluster PVC isolation, namespace enforcement, CSI behavior, full workload workflow, full image workflow, first-version readiness, or Full GA coverage. |
+| Provider coupling | Started boundary documentation in [ADR 0007](docs/adr/0007-provider-coupling-boundary.md): portable core contracts are separated from Longhorn/reference storage, Harbor, MinIO/S3, Dex/OIDC, Redis Streams, and k3s/dev reference providers. Implementation adapters and live portability proof remain open. | Implement provider adapters or replacement paths and prove live portability before claiming portability. |
+| Typed API contracts | Started for local/static external REST fixtures: request-notification create-form has fixture validation and spec parity coverage for `POST /api/v1/forms`, image-registry image build create routes have fixture validation plus `imageregistry.Spec()` parity coverage for `POST /api/v1/images/build`, `POST /api/v1/images/build/from-storage`, and `POST /api/v1/images/build/dockerfile`, image-registry acceleration profile creation has fixture/event coverage, queued `ImageBuildStarted` supply-chain status metadata has event fixture and historical schema-v1 compatibility coverage, identity auth/session routes have fixture validation plus `identity.Spec()` parity coverage for `POST /api/v1/register`, `POST /api/v1/login`, `POST /api/v1/refresh`, and `POST /api/v1/cli/login`, identity API-token lifecycle routes have fixture validation plus `identity.Spec()` parity coverage for `GET /api/v1/me/api-tokens`, `POST /api/v1/me/api-tokens`, `DELETE /api/v1/me/api-tokens/{id}`, and `DELETE /api/v1/me/api-tokens/current`, workload job submission has fixture validation plus `workload.Spec()` parity coverage for `POST /api/v1/jobs`, workload ConfigFile creation/update has fixture validation plus `workload.Spec()` parity coverage for `POST /api/v1/configfiles` and `PUT /api/v1/configfiles/{id}` with a `ConfigFileChanged` service event metadata repair, workload job cancellation has fixture validation plus `workload.Spec()` parity coverage for `POST /api/v1/jobs/{id}/cancel` and a `JobCancelRequested` service event metadata repair, org-project Project creation has fixture validation plus `orgproject.Spec()` parity coverage for `POST /api/v1/projects`, org-project Project update has fixture validation plus `orgproject.Spec()` parity coverage for `PUT /api/v1/projects/{id}`, org-project Project delete has fixture validation plus `orgproject.Spec()` parity coverage for `DELETE /api/v1/projects/{id}`, org-project Project batch delete has fixture validation plus `orgproject.Spec()` parity coverage for `DELETE /api/v1/projects/batch`, org-project Group creation has fixture validation plus `orgproject.Spec()` parity coverage for `POST /api/v1/groups`, org-project Group update has fixture validation plus `orgproject.Spec()` parity coverage for `PUT /api/v1/groups/{id}` and a `GroupUpdated` service event metadata repair, org-project Group delete has fixture validation plus `orgproject.Spec()` parity coverage for `DELETE /api/v1/groups/{id}` and a `GroupDeleted` service event metadata repair, org-project Group batch delete has fixture validation plus `orgproject.Spec()` parity coverage for `DELETE /api/v1/groups/batch`, storage permission creation has fixture validation plus `storage.Spec()` parity coverage for `POST /api/v1/storage/permissions`, storage project permission update has fixture validation plus `storage.Spec()` parity coverage for `PUT /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions`, storage project permission delete has fixture validation plus `storage.Spec()` parity coverage for `DELETE /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/{userId}`, storage project permission batch update has fixture validation plus `storage.Spec()` parity coverage for `PUT /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/batch`, storage project permission batch delete has fixture validation plus `storage.Spec()` parity coverage for `DELETE /api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/batch`, authorization-policy proxy role create/update/delete has fixture validation plus `authorizationpolicy.Spec()` parity coverage for `POST /api/v1/admin/proxy-rbac/roles`, `PUT /api/v1/admin/proxy-rbac/roles/{id}`, and `DELETE /api/v1/admin/proxy-rbac/roles/{id}` with `ProxyPolicyChanged` event fixture coverage, authorization-policy proxy policy create/update/delete has fixture validation plus `authorizationpolicy.Spec()` parity coverage for `POST /api/v1/admin/proxy-rbac/policies`, `PUT /api/v1/admin/proxy-rbac/policies/{id}`, and `DELETE /api/v1/admin/proxy-rbac/policies/{id}` while reusing the existing `ProxyPolicyChanged` event fixture, authorization-policy proxy service list/get has fixture validation plus `authorizationpolicy.Spec()` parity coverage for `GET /api/v1/admin/proxy-rbac/services` and `GET /api/v1/admin/proxy-rbac/services/{id}` with no emitted events, authorization-policy proxy role-user list/assign/unassign has fixture validation plus `authorizationpolicy.Spec()` parity coverage for `GET /api/v1/admin/proxy-rbac/roles/{id}/users`, `POST /api/v1/admin/proxy-rbac/roles/{id}/users`, and `DELETE /api/v1/admin/proxy-rbac/roles/{id}/users/{user_id}` with list emitting no events and assign/unassign reusing `ProxyPolicyChanged`, authorization-policy proxy policy assignment list/assign/unassign has fixture validation plus `authorizationpolicy.Spec()` parity coverage for `GET`, `POST`, and `DELETE /api/v1/admin/proxy-rbac/policies/{id}/assignments` with list emitting no events, assign/unassign reusing `ProxyPolicyChanged`, and unassign intentionally excluding `404`, authorization-policy proxy target assignment list has fixture validation plus `authorizationpolicy.Spec()` parity coverage for `GET /api/v1/admin/proxy-rbac/targets/{type}/{id}/assignments` with no emitted events and `400`/`401`/`403`/`500` error statuses, and authorization-policy proxy system role list has fixture validation plus `authorizationpolicy.Spec()` parity coverage for `GET /api/v1/admin/proxy-rbac/system-roles` with no emitted events, no path parameters, `401`/`403`/`500` error statuses, and stable public role `id`/`name` response fields. Broader critical APIs still rely on route specs/generated OpenAPI instead of typed request/response contracts. | Continue moving critical APIs toward OpenAPI-first or explicit typed DTO contracts with fixtures; do not treat these fixtures as DATA GA, live auth/API-token lifecycle proof, live ConfigFile update proof, live admin authorization proof, live route behavior proof, live proxy role mutation proof, live proxy policy mutation proof, live proxy service behavior proof, live role-user mutation proof, live proxy policy assignment mutation proof, live proxy target assignment proof, full Project/Group lifecycle, tenant isolation, live scheduler cancellation, Kubernetes job termination, cancellation propagation, live scheduler/Kubernetes execution, live permission enforcement, Kubernetes mount execution, cluster PVC isolation, namespace enforcement, CSI behavior, full workload workflow, completed image conversion/prewarm, completed SBOM/signing/scan enforcement, full image workflow, first-version readiness, kind/e2e coverage, or Full GA coverage. |
 | Read-model drift and replay | Replay idempotency now has focused evidence: dead-letter replay retries only unresolved events and does not double-apply successful events. Authorization-policy, IDE, dashboard, clusterread, request-notification project-access, GPU usage, and image-registry local/in-memory drift comparisons now cover raw owner/source vs local projection missing, orphan, and stale rows for their scoped read-model pairs. GPU usage evidence covers the five identity/role/project/job pairs, deterministic ordering, canonical id normalization, nil app/store fail-closed behavior, exact pair coverage, snapshot/summary exclusion, blank-id skip behavior, and the co-hosted fallback trap. Image-registry evidence covers the five identity/role/project/member/group access read-model pairs, deterministic ordering, canonical id normalization, nil app/store fail-closed behavior, exact pair coverage, catalog/build/image-request/sync exclusion, blank-id skip behavior, and the co-hosted fallback trap. Live drift jobs, all-service DATA-016 coverage, and rebuild/cutover evidence are still not enough for cutover; this does not claim DATA GA, Full GA, first-version readiness, rebuild/replay cutover readiness, or production readiness. | Add live drift jobs, all-service DATA-016 coverage, and rebuild/cutover proof before retiring owner-read/shared-store paths. |
 | Per-unit runtime isolation | Non-live 8-unit runtime isolation is proven locally, and current live 15 first-party deployments now have same-image rollout/undo evidence. Deployable-unit RBAC, network policy, migration ownership, target 8-unit staging rollback, previous-image rollback, and live staging evidence are not fully proven. | Capture staging deploy, smoke, previous-image rollback, and redeploy evidence for each of the 8 units. |
 
@@ -595,7 +832,7 @@ cleanup deleted 2 exact platform rows and left no API catalog leftovers.
 | CI script size | The central security gate is useful but large. | Split checks only when there is real maintenance pain; keep the top-level script as the orchestrator. |
 | Service ownership docs | Service-level ownership is partially documented across several files. | Consolidate owner, API, data, config, test, and deployment responsibility per deployable unit. |
 | Provider ADRs | Provider abstraction is a target but not yet documented as concrete ADRs. | Add ADRs when replacing or abstracting current reference-stack assumptions. |
-| Supply chain | SBOM generation and image signing are GA goals but not enforced. | Add Syft/Cosign or equivalent after staging promotion is stable. |
+| Supply chain | SBOM generation and image signing are GA goals but not enforced. Queued image builds now expose pending supply-chain metadata and event-shape evidence, but that is not completed SBOM/signing/scan enforcement. | Add Syft/Cosign or equivalent after staging promotion is stable. |
 | Course-monitoring scope | Decided by ADR 0006: the reference course-monitoring reconciler is out of scope for current NexusPaaS GA. | Done for scope decision only; MON GA, usage reporting, Prometheus retention, alerting, live monitoring evidence, V1 external launch, and Full GA remain open. |
 | Remote Sonar | PR #33 external `SonarCloud Code Analysis` and Backend Quality Gate evidence is passing. | Keep the external SonarCloud PR check required by repository policy; live P0.2-P0.5 staging evidence remains open. |
 

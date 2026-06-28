@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
 	"github.com/linskybing/nexuspaas/backend/internal/platform/cluster"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -95,6 +97,73 @@ func TestDispatchSubmittedWorkloadCreatesNativeJobAndMarksRunning(t *testing.T) 
 	}
 }
 
+func TestDispatchWaitingInfraRetryTreatsAlreadyExistingJobAsRunning(t *testing.T) {
+	now := time.Date(2026, 6, 27, 16, 20, 0, 0, time.UTC)
+	ctx := context.Background()
+	clientset := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "proj-p1"}},
+		&batchv1.Job{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "retry-train",
+				Namespace: "proj-p1",
+				Labels: map[string]string{
+					cluster.LabelJobID:     "J2600098",
+					cluster.LabelProjectID: "P1",
+					cluster.LabelUserID:    "U1",
+				},
+			},
+			Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyNever,
+					Containers:    []corev1.Container{{Name: "main", Image: "busybox"}},
+				},
+			}},
+		},
+	)
+	cl := cluster.New(clientset, "proj")
+	app := platform.NewApp(platform.Config{ServiceName: serviceName}, platform.WithCluster(cl))
+	createWorkloadRecord(t, app, jobsResource, map[string]any{
+		"id":              "J2600098",
+		"job_id":          "J2600098",
+		"project_id":      "P1",
+		"user_id":         "U1",
+		"status":          jobStatusWaitingInfra,
+		"namespace":       "proj-p1",
+		"queue_name":      "default-batch",
+		"priority":        10000,
+		"created_at":      now.Add(-time.Minute).Format(time.RFC3339),
+		"retry_count":     1,
+		"next_retry_at":   now.Add(-time.Second).Format(time.RFC3339),
+		"error_message":   "previous api timeout",
+		"status_reason":   "previous api timeout",
+		"resources":       []any{nativeJobResource("retry-train")},
+		"required_cpu":    1,
+		"required_memory": 1024,
+	})
+
+	if err := dispatchSubmittedWorkloads(ctx, app.Cluster, app.Store, now); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := cl.Clientset().BatchV1().Jobs("proj-p1").Get(ctx, "retry-train", metav1.GetOptions{}); err != nil {
+		t.Fatalf("pre-existing retry job was removed or not found: %v", err)
+	}
+	record, _ := app.Store.Get(ctx, jobsResource, "J2600098")
+	if record.Data["status"] != jobStatusRunning || record.Data["started_at"] == nil || record.Data["dispatched_at"] == nil {
+		t.Fatalf("retry dispatch record = %#v, want running with dispatch timestamps", record.Data)
+	}
+	if record.Data["next_retry_at"] != nil || record.Data["error_message"] != "" || record.Data["status_reason"] != "" {
+		t.Fatalf("retry dispatch record = %#v, want retry/error fields cleared", record.Data)
+	}
+	if record.Data["retry_count"] != 1 {
+		t.Fatalf("retry_count = %#v, want existing retry count retained for audit", record.Data["retry_count"])
+	}
+	resources, ok := record.Data["created_resources"].([]map[string]any)
+	if !ok || len(resources) != 1 || resources[0]["kind"] != "Job" || resources[0]["namespace"] != "proj-p1" || resources[0]["name"] != "retry-train" {
+		t.Fatalf("created resources = %#v, want existing Job recorded once", record.Data["created_resources"])
+	}
+}
+
 func TestDispatchSubmittedWorkloadsAppliesAtMostBatchLimitPerRun(t *testing.T) {
 	now := time.Date(2026, 6, 14, 16, 32, 0, 0, time.UTC)
 	cl := cluster.New(fake.NewSimpleClientset(), "proj")
@@ -174,6 +243,43 @@ func TestDispatchResourcesRejectsRawSecret(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "super-secret") {
 		t.Fatalf("raw Secret rejection leaked plaintext: %v", err)
+	}
+}
+
+func TestDispatchFailureReleasesReservation(t *testing.T) {
+	now := time.Date(2026, 6, 27, 9, 0, 0, 0, time.UTC)
+	cl := cluster.New(fake.NewSimpleClientset(), "proj")
+	app := platform.NewApp(platform.Config{ServiceName: serviceName}, platform.WithCluster(cl))
+	ctx := context.Background()
+	createWorkloadRecord(t, app, jobsResource, map[string]any{
+		"id":             "J-secret",
+		"job_id":         "J-secret",
+		"project_id":     "P1",
+		"user_id":        "U1",
+		"status":         jobStatusSubmitted,
+		"namespace":      "proj-p1",
+		"reservation_id": "res-dispatch",
+		"resources": []any{map[string]any{
+			"name":     "db-creds",
+			"manifest": `{"apiVersion":"v1","kind":"Secret","metadata":{"name":"db-creds"},"stringData":{"password":"super-secret"}}`,
+		}},
+	})
+	released := []string{}
+	release := func(_ context.Context, _ http.Header, id string) (schedulerReservationResult, error) {
+		released = append(released, id)
+		return schedulerReservationResult{}, nil
+	}
+
+	if err := dispatchSubmittedWorkloadsWithReservationRelease(ctx, app.Cluster, app.Store, nil, nil, release, now); err != nil {
+		t.Fatal(err)
+	}
+
+	record, _ := app.Store.Get(ctx, jobsResource, "J-secret")
+	if record.Data["status"] != jobStatusFailed {
+		t.Fatalf("dispatch failed record = %#v, want failed", record.Data)
+	}
+	if len(released) != 1 || released[0] != "res-dispatch" {
+		t.Fatalf("released reservations = %#v, want res-dispatch", released)
 	}
 }
 

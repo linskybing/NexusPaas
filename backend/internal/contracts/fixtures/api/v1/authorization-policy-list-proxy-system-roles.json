@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "contract_name": "authorization-policy.list_proxy_system_roles",
+  "owner_service": "authorization-policy-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "authorization-policy-service:proxy_system_roles",
+  "action": "list",
+  "method": "GET",
+  "path": "/api/v1/admin/proxy-rbac/system-roles",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [],
+  "required_request_fields": [],
+  "optional_request_fields": [],
+  "request_example": {},
+  "success_statuses": [
+    200
+  ],
+  "error_statuses": [
+    401,
+    403,
+    500
+  ],
+  "emits_events": [],
+  "response_example": {
+    "items": [
+      {
+        "id": "identity-role-ga-admin",
+        "name": "platform_admin"
+      }
+    ]
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

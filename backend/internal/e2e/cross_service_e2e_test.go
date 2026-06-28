@@ -145,6 +145,7 @@ func TestIsolatedRuntimeRegistrationE2E(t *testing.T) {
 			"plan-window-reaper",
 			"policy-data-sync",
 			"priority-class-sync",
+			"reservation-drift-detector",
 			"resource-hours-collector",
 			"resource-quota-reconciler",
 			"vpn-usage-collector",

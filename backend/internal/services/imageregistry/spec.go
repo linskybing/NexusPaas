@@ -9,14 +9,20 @@ import (
 
 func Spec() platform.ServiceSpec {
 	route, id, admin, adapter, aliasOf := shared.Route, shared.ID, shared.Admin, shared.Adapter, shared.AliasOf
+	const imageAccelerationProfileID = "/api/v1/image-acceleration-profiles/{id}"
 	return platform.ServiceSpec{
 		Name:        "image-registry-service",
 		Category:    "supply-chain",
 		Phase:       "2",
 		Description: "Harbor catalog sync, project image governance, build workflows, allow-list publishing, and registry health.",
-		Tables:      []string{"container_repositories", "container_tags", "sync_targets", "image_allow_lists", "image_requests", "image_build_jobs", "outbox", "inbox"},
-		Events:      []string{"ImageRequested", "ImageApproved", "ImageBuildStarted", "ImageBuilt", "ImagePublished", "ImageSyncFailed"},
+		Tables:      []string{"container_repositories", "container_tags", "sync_targets", "image_allow_lists", "image_requests", "image_build_jobs", "image_acceleration_profiles", "outbox", "inbox"},
+		Events:      []string{"ImageRequested", "ImageApproved", "ImageBuildStarted", "ImageBuilt", "ImagePublished", "ImageSyncFailed", "ImageAccelerationProfileChanged"},
 		Routes: []platform.RouteSpec{
+			route(http.MethodGet, "/api/v1/image-acceleration-profiles", "image_acceleration_profiles", "list", admin()),
+			route(http.MethodPost, "/api/v1/image-acceleration-profiles", "image_acceleration_profiles", "create", admin()),
+			route(http.MethodGet, imageAccelerationProfileID, "image_acceleration_profiles", "get", id("id"), admin()),
+			route(http.MethodPut, imageAccelerationProfileID, "image_acceleration_profiles", "update", id("id"), admin()),
+			route(http.MethodDelete, imageAccelerationProfileID, "image_acceleration_profiles", "delete", id("id"), admin()),
 			route(http.MethodGet, "/api/v1/harbor-projects", "harbor_projects", "list", adapter("harbor")),
 			route(http.MethodGet, "/api/v1/projects/{id}/images", "project_images", "list", id("id")),
 			route(http.MethodPost, "/api/v1/projects/{id}/images", "project_images", "create", id("id")),

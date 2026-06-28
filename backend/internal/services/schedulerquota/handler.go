@@ -36,6 +36,27 @@ const (
 )
 
 func Register(app *platform.App) {
+	app.RegisterRequiredFields(acceleratorProfilesResource, "name")
+	app.RegisterRequiredFields(networkProfilesResource, "name", "primary_cni")
+	app.RegisterRequiredFields(placementProfilesResource, "name", "scheduler_backend")
+	if err := seedDefaultAcceleratorProfiles(app); err != nil {
+		slog.Error("accelerator profile seed failed", "error", err)
+	}
+	if err := seedDefaultNetworkProfiles(app); err != nil {
+		slog.Error("network profile seed failed", "error", err)
+	}
+	if err := seedDefaultPlacementProfiles(app); err != nil {
+		slog.Error("placement profile seed failed", "error", err)
+	}
+	app.RegisterCustomHandler(http.MethodPost, "/api/v1/accelerator-profiles", createAcceleratorProfile)
+	app.RegisterCustomHandler(http.MethodPut, "/api/v1/accelerator-profiles/{id}", updateAcceleratorProfile)
+	app.RegisterCustomHandler(http.MethodDelete, "/api/v1/accelerator-profiles/{id}", deleteAcceleratorProfile)
+	app.RegisterCustomHandler(http.MethodPost, "/api/v1/network-profiles", createNetworkProfile)
+	app.RegisterCustomHandler(http.MethodPut, "/api/v1/network-profiles/{id}", updateNetworkProfile)
+	app.RegisterCustomHandler(http.MethodDelete, "/api/v1/network-profiles/{id}", deleteNetworkProfile)
+	app.RegisterCustomHandler(http.MethodPost, "/api/v1/placement-profiles", createPlacementProfile)
+	app.RegisterCustomHandler(http.MethodPut, "/api/v1/placement-profiles/{id}", updatePlacementProfile)
+	app.RegisterCustomHandler(http.MethodDelete, "/api/v1/placement-profiles/{id}", deletePlacementProfile)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/queues", listQueues)
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/queues", createQueue)
 	app.RegisterCustomHandler(http.MethodGet, pathQueueID, getQueue)
@@ -62,6 +83,7 @@ func Register(app *platform.App) {
 	registerGPUReservationDriftDetector(app)
 	registerPlanWindowReaper(app)
 	registerPriorityClassSync(app)
+	registerReservationDriftDetector(app)
 }
 
 func listQueues(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {

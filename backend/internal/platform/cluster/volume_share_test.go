@@ -113,6 +113,59 @@ func TestEnsurePVCMountedRejectsInvalidAndUnsupportedShares(t *testing.T) {
 	}
 }
 
+func TestEnsurePVCCreatesScratchPVCIdempotently(t *testing.T) {
+	ctx := context.Background()
+	cl := New(fake.NewSimpleClientset(), "proj")
+	size := resource.MustParse("2Gi")
+	spec := PVCSpec{
+		Namespace:        "proj-p1",
+		Name:             "scratch-job-train-1",
+		StorageClassName: "local-nvme-scratch",
+		AccessMode:       corev1.ReadWriteOnce,
+		Size:             size,
+	}
+
+	if err := cl.EnsurePVC(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.EnsurePVC(ctx, spec); err != nil {
+		t.Fatalf("idempotent EnsurePVC returned error: %v", err)
+	}
+
+	pvc, err := cl.Clientset().CoreV1().PersistentVolumeClaims("proj-p1").Get(ctx, "scratch-job-train-1", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("scratch PVC was not created: %v", err)
+	}
+	if pvc.Spec.StorageClassName == nil || *pvc.Spec.StorageClassName != "local-nvme-scratch" {
+		t.Fatalf("storageClassName = %#v, want local-nvme-scratch", pvc.Spec.StorageClassName)
+	}
+	if !hasAccessMode(pvc.Spec.AccessModes, corev1.ReadWriteOnce) {
+		t.Fatalf("accessModes = %#v, want ReadWriteOnce", pvc.Spec.AccessModes)
+	}
+	if got := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; got.Cmp(size) != 0 {
+		t.Fatalf("storage request = %s, want %s", got.String(), size.String())
+	}
+}
+
+func TestEnsurePVCRejectsInvalidOrIncompatibleExistingPVC(t *testing.T) {
+	ctx := context.Background()
+	cl := New(fake.NewSimpleClientset(), "proj")
+	if err := cl.EnsurePVC(ctx, PVCSpec{Name: "scratch"}); !errors.Is(err, ErrInvalidManifest) {
+		t.Fatalf("missing namespace err = %v, want ErrInvalidManifest", err)
+	}
+
+	cl = New(fake.NewSimpleClientset(&corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "scratch", Namespace: "proj-p1"},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+		},
+	}), "proj")
+	err := cl.EnsurePVC(ctx, PVCSpec{Namespace: "proj-p1", Name: "scratch", AccessMode: corev1.ReadWriteMany})
+	if err == nil || !strings.Contains(err.Error(), "does not allow") {
+		t.Fatalf("incompatible existing PVC err = %v, want access mode rejection", err)
+	}
+}
+
 func TestResolveLonghornShareEndpointFromService(t *testing.T) {
 	ctx := context.Background()
 	cl := New(fake.NewSimpleClientset(

@@ -56,6 +56,12 @@ type imageBuildResources struct {
 }
 
 func Register(app *platform.App) {
+	if err := seedDefaultImageAccelerationProfiles(app); err != nil {
+		panic(err)
+	}
+	app.RegisterCustomHandler(http.MethodPost, "/api/v1/image-acceleration-profiles", createImageAccelerationProfile)
+	app.RegisterCustomHandler(http.MethodPut, "/api/v1/image-acceleration-profiles/{id}", updateImageAccelerationProfile)
+	app.RegisterCustomHandler(http.MethodDelete, "/api/v1/image-acceleration-profiles/{id}", deleteImageAccelerationProfile)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/harbor-status", getHarborStatus)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/harbor-statistics", getHarborStatistics)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/harbor-projects", listHarborProjects)
@@ -651,20 +657,26 @@ func createBuild(app *platform.App, r *http.Request, route platform.RouteSpec, b
 	id := shared.FirstNonBlank(requestedID, app.Store.NextID(imageBuildsResource, "build-", 1, 6))
 	now := time.Now().UTC()
 	build := map[string]any{
-		"id":                     id,
-		"job_name":               id,
-		"build_id":               id,
-		"project_id":             projectID,
-		"image_reference":        imageRef,
-		"build_type":             buildType,
-		"cpu_cores":              resources.cpuCores,
-		"memory_gib":             resources.memoryGiB,
-		"max_build_time_seconds": resources.maxBuildTimeSeconds,
-		"status":                 "queued",
-		"requested_by":           userID,
-		"created_at":             now,
-		"updated_at":             now,
-		"logs":                   "build queued\n",
+		"id":                      id,
+		"job_name":                id,
+		"build_id":                id,
+		"project_id":              projectID,
+		"image_reference":         imageRef,
+		"build_type":              buildType,
+		"cpu_cores":               resources.cpuCores,
+		"memory_gib":              resources.memoryGiB,
+		"max_build_time_seconds":  resources.maxBuildTimeSeconds,
+		"status":                  "queued",
+		"image_digest":            "",
+		"allow_list_decision":     "pending",
+		"sbom_status":             "pending",
+		"signature_status":        "pending",
+		"scan_status":             "pending",
+		"supply_chain_checked_at": nil,
+		"requested_by":            userID,
+		"created_at":              now,
+		"updated_at":              now,
+		"logs":                    "build queued\n",
 	}
 	if keyHash != "" {
 		build[internalImageBuildIdempotencyKeyHash] = keyHash

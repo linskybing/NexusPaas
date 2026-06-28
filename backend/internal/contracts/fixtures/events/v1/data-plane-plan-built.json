@@ -1,0 +1,19 @@
+{
+  "event_id": "77777777-7777-4777-8777-777777777777",
+  "schema_version": 1,
+  "event_type": "DataPlanePlanBuilt",
+  "producer": "storage-service",
+  "occurred_at": "2026-06-27T00:00:00Z",
+  "trace_id": "trace-data-plane-plan-built-v1",
+  "request_id": "req-data-plane-plan-built-v1",
+  "aggregate_id": "job-llm-train-1",
+  "payload": {
+    "action": "built",
+    "project_id": "project-1",
+    "job_id": "job-llm-train-1",
+    "namespace": "project-one",
+    "scratch_profile": "local-nvme-scratch",
+    "checkpoint_profile": "cephfs-rwx-authority",
+    "dataset_source_count": 1
+  }
+}

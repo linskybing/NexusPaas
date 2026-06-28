@@ -9,9 +9,12 @@ import (
 
 func Spec() platform.ServiceSpec {
 	const (
-		projectID = "/api/v1/projects/{id}"
-		queueID   = "/api/v1/queues/{id}"
-		planID    = "/api/v1/plans/{id}"
+		projectID            = "/api/v1/projects/{id}"
+		queueID              = "/api/v1/queues/{id}"
+		planID               = "/api/v1/plans/{id}"
+		acceleratorProfileID = "/api/v1/accelerator-profiles/{id}"
+		networkProfileID     = "/api/v1/network-profiles/{id}"
+		placementProfileID   = "/api/v1/placement-profiles/{id}"
 	)
 	route, id, admin, serviceInternal := shared.Route, shared.ID, shared.Admin, shared.ServiceInternal
 	return platform.ServiceSpec{
@@ -20,9 +23,24 @@ func Spec() platform.ServiceSpec {
 		Phase:           "5",
 		RequiresCluster: true,
 		Description:     "Resource plans, queues, quota reservation, priority, preemption, and queue dispatch arbitration.",
-		Tables:          []string{"plans", "queues", "resource_quotas", "submit_admissions", "priority_classes", "reservations", "preemption_records", "gpu_claim_snapshots", "outbox", "inbox"},
-		Events:          []string{"PlanChanged", "QueueChanged", "QuotaReserved", "QuotaCommitted", "QuotaReleased", "SubmitAdmissionReviewed", "SecretAccessRejected", "QueueDepthChanged", "JobPreempted", "PriorityClassSyncCompleted", "GPUReservationDriftDetected"},
+		Tables:          []string{"plans", "queues", "resource_quotas", "submit_admissions", "priority_classes", "reservations", "preemption_records", "gpu_claim_snapshots", "network_profiles", "placement_profiles", "accelerator_profiles", "outbox", "inbox"},
+		Events:          []string{"PlanChanged", "QueueChanged", "QuotaReserved", "QuotaCommitted", "QuotaReleased", "ReservationDriftDetected", "GPUReservationDriftDetected", "SubmitAdmissionReviewed", "SecretAccessRejected", "QueueDepthChanged", "JobPreempted", "PriorityClassSyncCompleted", "NetworkProfileChanged", "PlacementProfileChanged", "AcceleratorProfileChanged"},
 		Routes: []platform.RouteSpec{
+			route(http.MethodGet, "/api/v1/accelerator-profiles", "accelerator_profiles", "list", admin()),
+			route(http.MethodPost, "/api/v1/accelerator-profiles", "accelerator_profiles", "create", admin()),
+			route(http.MethodGet, acceleratorProfileID, "accelerator_profiles", "get", id("id"), admin()),
+			route(http.MethodPut, acceleratorProfileID, "accelerator_profiles", "update", id("id"), admin()),
+			route(http.MethodDelete, acceleratorProfileID, "accelerator_profiles", "delete", id("id"), admin()),
+			route(http.MethodGet, "/api/v1/network-profiles", "network_profiles", "list", admin()),
+			route(http.MethodPost, "/api/v1/network-profiles", "network_profiles", "create", admin()),
+			route(http.MethodGet, networkProfileID, "network_profiles", "get", id("id"), admin()),
+			route(http.MethodPut, networkProfileID, "network_profiles", "update", id("id"), admin()),
+			route(http.MethodDelete, networkProfileID, "network_profiles", "delete", id("id"), admin()),
+			route(http.MethodGet, "/api/v1/placement-profiles", "placement_profiles", "list", admin()),
+			route(http.MethodPost, "/api/v1/placement-profiles", "placement_profiles", "create", admin()),
+			route(http.MethodGet, placementProfileID, "placement_profiles", "get", id("id"), admin()),
+			route(http.MethodPut, placementProfileID, "placement_profiles", "update", id("id"), admin()),
+			route(http.MethodDelete, placementProfileID, "placement_profiles", "delete", id("id"), admin()),
 			route(http.MethodGet, "/api/v1/plans", "plans", "list"),
 			route(http.MethodPost, "/api/v1/plans", "plans", "create", admin()),
 			route(http.MethodGet, planID, "plans", "get", id("id"), admin()),

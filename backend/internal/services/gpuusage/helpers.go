@@ -107,29 +107,34 @@ func mpsMapping(app *platform.App, r *http.Request) []MPSGPUSlot {
 	}
 	out := make([]MPSGPUSlot, 0, len(latest))
 	for _, row := range latest {
+		smSource := gpuSMUtilizationSource(row.metrics, row.mpsUnits)
+		smAttributionSrc := gpuSMAttributionSource(row.metrics, row.mpsUnits)
 		out = append(out, MPSGPUSlot{
-			Node:                 textValue(row.data, "node", "Node"),
-			PhysicalGPUIndex:     row.mpsGPUIdx,
-			GPUUUID:              row.gpuUUID,
-			JobID:                row.jobID,
-			PodName:              row.podName,
-			PodNamespace:         row.namespace,
-			MPSVirtualUnits:      row.mpsUnits,
-			GPUMemoryBytes:       row.memoryByte,
-			SMUtilization:        floatValue(row.metrics, "gpu_sm_utilization", "gpuSMUtilization"),
-			SMUtilizationSource:  textValue(row.metrics, "gpu_sm_util_source", "gpuSMUtilSource"),
-			SMAttribution:        smAttribution(textValue(row.metrics, "gpu_sm_util_source", "gpuSMUtilSource")),
-			MemUtilization:       floatValue(row.metrics, "gpu_mem_utilization", "gpuMemUtilization"),
-			MemUtilizationSource: textValue(row.metrics, "gpu_mem_util_source", "gpuMemUtilSource"),
-			MemoryUsedBytes:      int64Value(row.metrics, "gpu_memory_used_bytes", "gpuMemoryUsedBytes"),
-			MemoryUsedSource:     textValue(row.metrics, "gpu_memory_used_source", "gpuMemoryUsedSource"),
-			EncUtilization:       floatValue(row.metrics, "gpu_enc_utilization", "gpuEncUtilization"),
-			DecUtilization:       floatValue(row.metrics, "gpu_dec_utilization", "gpuDecUtilization"),
-			PowerUsageWatts:      floatValue(row.metrics, "gpu_power_usage_watts", "gpuPowerUsageWatts"),
-			Timestamp:            row.timestamp,
-			UserID:               row.userID,
-			Username:             textValue(row.user, "username", "Username"),
-			ProjectName:          textValue(row.project, "project_name", "projectName", "name", "Name"),
+			Node:                  textValue(row.data, "node", "Node"),
+			PhysicalGPUIndex:      row.mpsGPUIdx,
+			GPUUUID:               row.gpuUUID,
+			JobID:                 row.jobID,
+			PodName:               row.podName,
+			PodNamespace:          row.namespace,
+			MPSVirtualUnits:       row.mpsUnits,
+			ReservedSMPercentage:  row.mpsUnits,
+			GPUMemoryBytes:        row.memoryByte,
+			SMUtilization:         floatValue(row.metrics, "gpu_sm_utilization", "gpuSMUtilization"),
+			SMUtilizationSource:   smSource,
+			SMAttributionSource:   smAttributionSrc,
+			SMAttributionMeasured: smAttributionSrc == gpuSMAttributionMeasured,
+			SMAttribution:         smAttribution(textValue(row.metrics, "gpu_sm_util_source", "gpuSMUtilSource")),
+			MemUtilization:        floatValue(row.metrics, "gpu_mem_utilization", "gpuMemUtilization"),
+			MemUtilizationSource:  textValue(row.metrics, "gpu_mem_util_source", "gpuMemUtilSource"),
+			MemoryUsedBytes:       int64Value(row.metrics, "gpu_memory_used_bytes", "gpuMemoryUsedBytes"),
+			MemoryUsedSource:      textValue(row.metrics, "gpu_memory_used_source", "gpuMemoryUsedSource"),
+			EncUtilization:        floatValue(row.metrics, "gpu_enc_utilization", "gpuEncUtilization"),
+			DecUtilization:        floatValue(row.metrics, "gpu_dec_utilization", "gpuDecUtilization"),
+			PowerUsageWatts:       floatValue(row.metrics, "gpu_power_usage_watts", "gpuPowerUsageWatts"),
+			Timestamp:             row.timestamp,
+			UserID:                row.userID,
+			Username:              textValue(row.user, "username", "Username"),
+			ProjectName:           textValue(row.project, "project_name", "projectName", "name", "Name"),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -400,6 +405,57 @@ func boolValue(data map[string]any, keys ...string) bool {
 		}
 	}
 	return false
+}
+
+func mpsVirtualUnits(primary, secondary map[string]any) int {
+	if units := intValue(primary, "mps_virtual_units", "mpsVirtualUnits", "MPSVirtualUnits", "mpsUnits", "MPSUnits"); units > 0 {
+		return units
+	}
+	return intValue(secondary, "mps_virtual_units", "mpsVirtualUnits", "MPSVirtualUnits", "mpsUnits", "MPSUnits")
+}
+
+func gpuSMUtilizationSource(metrics map[string]any, mpsUnits int) string {
+	if source := textValue(metrics, "gpu_sm_util_source", "gpuSMUtilSource", "GPUSMUtilSource"); source != "" {
+		return source
+	}
+	if mpsUnits > 0 {
+		return gpuSMAttributionEstimatedMPS
+	}
+	return ""
+}
+
+func gpuSMAttributionSource(metrics map[string]any, mpsUnits int) string {
+	source := textValue(metrics, "gpu_sm_util_source", "gpuSMUtilSource", "GPUSMUtilSource")
+	if source == "" {
+		if mpsUnits > 0 {
+			return gpuSMAttributionEstimatedMPS
+		}
+		return gpuSMAttributionUnavailable
+	}
+	if gpuSMSourceIsEstimated(source) {
+		return gpuSMAttributionEstimatedMPS
+	}
+	if gpuSMSourceIsUnavailable(source) {
+		if mpsUnits > 0 {
+			return gpuSMAttributionEstimatedMPS
+		}
+		return gpuSMAttributionUnavailable
+	}
+	return gpuSMAttributionMeasured
+}
+
+func gpuSMSourceIsEstimated(source string) bool {
+	source = strings.ToLower(source)
+	return strings.Contains(source, "estimated") || strings.Contains(source, "allocation") || strings.Contains(source, "mps")
+}
+
+func gpuSMSourceIsUnavailable(source string) bool {
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "", "unavailable", "unknown", "none", "n/a", "na", "not_available", "not available":
+		return true
+	default:
+		return false
+	}
 }
 
 func mapValue(data map[string]any, keys ...string) map[string]any {

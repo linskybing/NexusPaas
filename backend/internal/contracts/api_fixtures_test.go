@@ -14,18 +14,267 @@ import (
 
 func TestExternalAPIFixturesAreValidV1(t *testing.T) {
 	fixtures := externalAPIFixtureFiles(t)
-	want := []string{"image-registry-context-build.json", "image-registry-dockerfile-build.json", "image-registry-storage-build.json", "org-project-batch-delete-groups.json", "org-project-batch-delete-projects.json", "org-project-create-group.json", "org-project-create-project.json", "org-project-delete-group.json", "org-project-delete-project.json", "org-project-update-group.json", "org-project-update-project.json", "request-notification-create-form.json", "storage-batch-delete-project-permissions.json", "storage-batch-update-project-permissions.json", "storage-create-permission.json", "storage-create-project-binding.json", "storage-delete-project-permission.json", "storage-update-project-permission.json", "workload-cancel-job.json", "workload-commit-configfile-version.json", "workload-create-configfile.json", "workload-delete-configfile.json", "workload-get-configfile.json", "workload-patch-configfile.json", "workload-submit-job.json", "workload-update-configfile.json"}
+	want := []string{
+		"authorization-policy-assign-proxy-policy.json",
+		"authorization-policy-assign-proxy-role-user.json",
+		"authorization-policy-batch-permissions.json",
+		"authorization-policy-create-proxy-policy.json",
+		"authorization-policy-create-proxy-role.json",
+		"authorization-policy-delete-proxy-policy.json",
+		"authorization-policy-delete-proxy-role.json",
+		"authorization-policy-get-proxy-service.json",
+		"authorization-policy-list-proxy-policy-assignments.json",
+		"authorization-policy-list-proxy-role-users.json",
+		"authorization-policy-list-proxy-services.json",
+		"authorization-policy-list-proxy-system-roles.json",
+		"authorization-policy-list-proxy-target-assignments.json",
+		"authorization-policy-unassign-proxy-policy.json",
+		"authorization-policy-unassign-proxy-role-user.json",
+		"authorization-policy-update-proxy-policy.json",
+		"authorization-policy-update-proxy-role.json",
+		"identity-cli-login.json",
+		"identity-create-api-token.json",
+		"identity-list-api-tokens.json",
+		"identity-login.json",
+		"identity-refresh.json",
+		"identity-register.json",
+		"identity-revoke-api-token.json",
+		"identity-revoke-current-api-token.json",
+		"image-registry-context-build.json",
+		"image-registry-create-acceleration-profile.json",
+		"image-registry-dockerfile-build.json",
+		"image-registry-storage-build.json",
+		"org-project-batch-delete-groups.json",
+		"org-project-batch-delete-projects.json",
+		"org-project-create-group.json",
+		"org-project-create-project.json",
+		"org-project-delete-group.json",
+		"org-project-delete-project.json",
+		"org-project-update-group.json",
+		"org-project-update-project.json",
+		"request-notification-create-form.json",
+		"scheduler-create-accelerator-profile.json",
+		"scheduler-create-network-profile.json",
+		"scheduler-create-placement-profile.json",
+		"storage-batch-delete-project-permissions.json",
+		"storage-batch-update-project-permissions.json",
+		"storage-cancel-fast-transfer.json",
+		"storage-create-benchmark-record.json",
+		"storage-create-cache-binding.json",
+		"storage-create-permission.json",
+		"storage-create-profile.json",
+		"storage-create-project-binding.json",
+		"storage-delete-cache-binding.json",
+		"storage-delete-project-permission.json",
+		"storage-get-cache-binding.json",
+		"storage-get-fast-transfer.json",
+		"storage-list-benchmark-records.json",
+		"storage-list-cache-bindings.json",
+		"storage-start-fast-transfer.json",
+		"storage-update-cache-binding.json",
+		"storage-update-project-permission.json",
+		"workload-cancel-job.json",
+		"workload-commit-configfile-version.json",
+		"workload-create-configfile.json",
+		"workload-delete-configfile.json",
+		"workload-get-configfile.json",
+		"workload-patch-configfile.json",
+		"workload-submit-job.json",
+		"workload-update-configfile.json",
+	}
 	if !reflect.DeepEqual(fixtures, want) {
 		t.Fatalf("fixture files = %v, want %v", fixtures, want)
 	}
 
 	wantRoutes := map[string]externalAPIFixtureRoute{
+		"authorization-policy-assign-proxy-policy.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_policy_assignments",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/admin/proxy-rbac/policies/{id}/assignments",
+		},
+		"authorization-policy-assign-proxy-role-user.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_role_users",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/admin/proxy-rbac/roles/{id}/users",
+		},
+		"authorization-policy-batch-permissions.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:policies",
+			action:       "batch",
+			method:       http.MethodPost,
+			path:         "/api/v1/permissions/batch",
+		},
+		"authorization-policy-create-proxy-policy.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_policies",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/admin/proxy-rbac/policies",
+		},
+		"authorization-policy-create-proxy-role.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_roles",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/admin/proxy-rbac/roles",
+		},
+		"authorization-policy-delete-proxy-policy.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_policies",
+			action:       "delete",
+			method:       http.MethodDelete,
+			path:         "/api/v1/admin/proxy-rbac/policies/{id}",
+		},
+		"authorization-policy-delete-proxy-role.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_roles",
+			action:       "delete",
+			method:       http.MethodDelete,
+			path:         "/api/v1/admin/proxy-rbac/roles/{id}",
+		},
+		"authorization-policy-get-proxy-service.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_services",
+			action:       "get",
+			method:       http.MethodGet,
+			path:         "/api/v1/admin/proxy-rbac/services/{id}",
+		},
+		"authorization-policy-list-proxy-services.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_services",
+			action:       "list",
+			method:       http.MethodGet,
+			path:         "/api/v1/admin/proxy-rbac/services",
+		},
+		"authorization-policy-list-proxy-system-roles.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_system_roles",
+			action:       "list",
+			method:       http.MethodGet,
+			path:         "/api/v1/admin/proxy-rbac/system-roles",
+		},
+		"authorization-policy-list-proxy-policy-assignments.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_policy_assignments",
+			action:       "list",
+			method:       http.MethodGet,
+			path:         "/api/v1/admin/proxy-rbac/policies/{id}/assignments",
+		},
+		"authorization-policy-list-proxy-role-users.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_role_users",
+			action:       "list",
+			method:       http.MethodGet,
+			path:         "/api/v1/admin/proxy-rbac/roles/{id}/users",
+		},
+		"authorization-policy-list-proxy-target-assignments.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_target_assignments",
+			action:       "list",
+			method:       http.MethodGet,
+			path:         "/api/v1/admin/proxy-rbac/targets/{type}/{id}/assignments",
+		},
+		"authorization-policy-unassign-proxy-policy.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_policy_assignments",
+			action:       "delete",
+			method:       http.MethodDelete,
+			path:         "/api/v1/admin/proxy-rbac/policies/{id}/assignments",
+		},
+		"authorization-policy-unassign-proxy-role-user.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_role_users",
+			action:       "delete",
+			method:       http.MethodDelete,
+			path:         "/api/v1/admin/proxy-rbac/roles/{id}/users/{user_id}",
+		},
+		"authorization-policy-update-proxy-policy.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_policies",
+			action:       "update",
+			method:       http.MethodPut,
+			path:         "/api/v1/admin/proxy-rbac/policies/{id}",
+		},
+		"authorization-policy-update-proxy-role.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_roles",
+			action:       "update",
+			method:       http.MethodPut,
+			path:         "/api/v1/admin/proxy-rbac/roles/{id}",
+		},
+		"identity-cli-login.json": {
+			ownerService: "identity-service",
+			resource:     "identity-service:cli_sessions",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/cli/login",
+		},
+		"identity-create-api-token.json": {
+			ownerService: "identity-service",
+			resource:     "identity-service:api_tokens",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/me/api-tokens",
+		},
+		"identity-list-api-tokens.json": {
+			ownerService: "identity-service",
+			resource:     "identity-service:api_tokens",
+			action:       "list",
+			method:       http.MethodGet,
+			path:         "/api/v1/me/api-tokens",
+		},
+		"identity-login.json": {
+			ownerService: "identity-service",
+			resource:     "identity-service:sessions",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/login",
+		},
+		"identity-refresh.json": {
+			ownerService: "identity-service",
+			resource:     "identity-service:refresh_tokens",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/refresh",
+		},
+		"identity-register.json": {
+			ownerService: "identity-service",
+			resource:     "identity-service:users",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/register",
+		},
+		"identity-revoke-api-token.json": {
+			ownerService: "identity-service",
+			resource:     "identity-service:api_tokens",
+			action:       "delete",
+			method:       http.MethodDelete,
+			path:         "/api/v1/me/api-tokens/{id}",
+		},
+		"identity-revoke-current-api-token.json": {
+			ownerService: "identity-service",
+			resource:     "identity-service:api_tokens",
+			action:       "delete_current",
+			method:       http.MethodDelete,
+			path:         "/api/v1/me/api-tokens/current",
+		},
 		"image-registry-context-build.json": {
 			ownerService: "image-registry-service",
 			resource:     "image-registry-service:image_builds",
 			action:       "command",
 			method:       http.MethodPost,
 			path:         "/api/v1/images/build",
+		},
+		"image-registry-create-acceleration-profile.json": {
+			ownerService: "image-registry-service",
+			resource:     "image-registry-service:image_acceleration_profiles",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/image-acceleration-profiles",
 		},
 		"image-registry-dockerfile-build.json": {
 			ownerService: "image-registry-service",
@@ -104,6 +353,27 @@ func TestExternalAPIFixturesAreValidV1(t *testing.T) {
 			method:       http.MethodPost,
 			path:         "/api/v1/forms",
 		},
+		"scheduler-create-accelerator-profile.json": {
+			ownerService: "scheduler-quota-service",
+			resource:     "scheduler-quota-service:accelerator_profiles",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/accelerator-profiles",
+		},
+		"scheduler-create-network-profile.json": {
+			ownerService: "scheduler-quota-service",
+			resource:     "scheduler-quota-service:network_profiles",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/network-profiles",
+		},
+		"scheduler-create-placement-profile.json": {
+			ownerService: "scheduler-quota-service",
+			resource:     "scheduler-quota-service:placement_profiles",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/placement-profiles",
+		},
 		"storage-batch-delete-project-permissions.json": {
 			ownerService: "storage-service",
 			resource:     "storage-service:project_storage_permissions",
@@ -118,6 +388,48 @@ func TestExternalAPIFixturesAreValidV1(t *testing.T) {
 			method:       http.MethodPut,
 			path:         "/api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/batch",
 		},
+		"storage-cancel-fast-transfer.json": {
+			ownerService: "storage-service",
+			resource:     "storage-service:fast_transfers",
+			action:       "command",
+			method:       http.MethodDelete,
+			path:         "/api/v1/projects/{id}/storage/transfers/{targetNamespace}/{name}",
+		},
+		"storage-create-benchmark-record.json": {
+			ownerService: "storage-service",
+			resource:     "storage-service:storage_benchmark_records",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/storage/benchmark-records",
+		},
+		"storage-create-cache-binding.json": {
+			ownerService: "storage-service",
+			resource:     "storage-service:cache_bindings",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/projects/{id}/storage/cache-bindings",
+		},
+		"storage-delete-cache-binding.json": {
+			ownerService: "storage-service",
+			resource:     "storage-service:cache_bindings",
+			action:       "delete",
+			method:       http.MethodDelete,
+			path:         "/api/v1/projects/{id}/storage/cache-bindings/{cacheBindingId}",
+		},
+		"storage-get-cache-binding.json": {
+			ownerService: "storage-service",
+			resource:     "storage-service:cache_bindings",
+			action:       "get",
+			method:       http.MethodGet,
+			path:         "/api/v1/projects/{id}/storage/cache-bindings/{cacheBindingId}",
+		},
+		"storage-get-fast-transfer.json": {
+			ownerService: "storage-service",
+			resource:     "storage-service:fast_transfers",
+			action:       "get",
+			method:       http.MethodGet,
+			path:         "/api/v1/projects/{id}/storage/transfers/{targetNamespace}/{name}",
+		},
 		"storage-create-project-binding.json": {
 			ownerService: "storage-service",
 			resource:     "storage-service:storage_bindings",
@@ -131,6 +443,41 @@ func TestExternalAPIFixturesAreValidV1(t *testing.T) {
 			action:       "create",
 			method:       http.MethodPost,
 			path:         "/api/v1/storage/permissions",
+		},
+		"storage-create-profile.json": {
+			ownerService: "storage-service",
+			resource:     "storage-service:storage_profiles",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/storage-profiles",
+		},
+		"storage-list-benchmark-records.json": {
+			ownerService: "storage-service",
+			resource:     "storage-service:storage_benchmark_records",
+			action:       "list",
+			method:       http.MethodGet,
+			path:         "/api/v1/storage/benchmark-records",
+		},
+		"storage-list-cache-bindings.json": {
+			ownerService: "storage-service",
+			resource:     "storage-service:cache_bindings",
+			action:       "list",
+			method:       http.MethodGet,
+			path:         "/api/v1/projects/{id}/storage/cache-bindings",
+		},
+		"storage-start-fast-transfer.json": {
+			ownerService: "storage-service",
+			resource:     "storage-service:fast_transfers",
+			action:       "command",
+			method:       http.MethodPost,
+			path:         "/api/v1/projects/{id}/storage/transfers/fast-stage",
+		},
+		"storage-update-cache-binding.json": {
+			ownerService: "storage-service",
+			resource:     "storage-service:cache_bindings",
+			action:       "update",
+			method:       http.MethodPut,
+			path:         "/api/v1/projects/{id}/storage/cache-bindings/{cacheBindingId}",
 		},
 		"storage-update-project-permission.json": {
 			ownerService: "storage-service",
@@ -444,17 +791,20 @@ func validateExternalAPIFixture(fixture externalAPIContractFixture) error {
 	if !fixture.Compatibility.AdditiveFields || !fixture.Compatibility.TolerantReader {
 		return fmt.Errorf("external API fixture compatibility must allow additive fields and tolerant readers")
 	}
-	if err := validateExternalAPIExamplePayload("request_example", fixture.RequestExample); err != nil {
+	if err := validateExternalAPIExamplePayload(fixture, "request_example", fixture.RequestExample); err != nil {
 		return err
 	}
-	if err := validateExternalAPIExamplePayload("response_example", fixture.ResponseExample); err != nil {
+	if err := validateExternalAPIExamplePayload(fixture, "response_example", fixture.ResponseExample); err != nil {
 		return err
 	}
 	return nil
 }
 
 func allowsEmptyExternalAPIEvents(fixture externalAPIContractFixture) bool {
-	return fixture.Method == http.MethodGet && (fixture.Action == "get" || fixture.Action == "list")
+	if fixture.Method == http.MethodGet && (fixture.Action == "get" || fixture.Action == "list") {
+		return true
+	}
+	return isIdentityCredentialIssueFixture(fixture)
 }
 
 func validateExternalAPIRequiredMetadata(fixture externalAPIContractFixture) error {
@@ -511,7 +861,7 @@ func validateExternalAPIRoute(fixture externalAPIContractFixture) error {
 	if !strings.HasPrefix(fixture.Path, "/api/v1/") || strings.HasPrefix(fixture.Path, "/internal/") {
 		return fmt.Errorf("external API fixture path = %q, want external /api/v1 path", fixture.Path)
 	}
-	if fixture.Auth != "user" || !fixture.AuthRequired || fixture.ServiceKeyRequired {
+	if !isPublicIdentityAuthFixture(fixture) && (fixture.Auth != "user" || !fixture.AuthRequired || fixture.ServiceKeyRequired) {
 		return fmt.Errorf("external API fixture auth = %q auth_required=%v service_key_required=%v, want user/true/false", fixture.Auth, fixture.AuthRequired, fixture.ServiceKeyRequired)
 	}
 	if !externalAPIMethodAllowed(fixture.Method) {
@@ -542,7 +892,10 @@ func validateExternalAPIRequiredRequest(fixture externalAPIContractFixture) erro
 		return nil
 	}
 	if len(fixture.RequiredRequestFields) == 0 {
-		return fmt.Errorf("external API fixture required_request_fields is empty")
+		if len(fixture.OptionalRequestFields) == 0 || !hasDeclaredOptionalExternalAPIRequestExample(fixture) {
+			return fmt.Errorf("external API fixture required_request_fields is empty")
+		}
+		return nil
 	}
 	for _, field := range fixture.RequiredRequestFields {
 		value, ok := fixture.RequestExample[field]
@@ -554,6 +907,15 @@ func validateExternalAPIRequiredRequest(fixture externalAPIContractFixture) erro
 		}
 	}
 	return nil
+}
+
+func hasDeclaredOptionalExternalAPIRequestExample(fixture externalAPIContractFixture) bool {
+	for _, field := range fixture.OptionalRequestFields {
+		if _, ok := fixture.RequestExample[field]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func validateExternalAPIStatuses(fixture externalAPIContractFixture) error {
@@ -576,26 +938,61 @@ func validateExternalAPIStatuses(fixture externalAPIContractFixture) error {
 	return nil
 }
 
-func validateExternalAPIExamplePayload(path string, value any) error {
+func validateExternalAPIExamplePayload(fixture externalAPIContractFixture, path string, value any) error {
 	switch typed := value.(type) {
 	case map[string]any:
 		for key, item := range typed {
 			fieldPath := path + "." + key
-			if forbiddenEventEnvelopePayloadKey(key) {
+			if forbiddenEventEnvelopePayloadKey(key) && !allowsIdentityCredentialExampleField(fixture, fieldPath) {
 				return fmt.Errorf("external API example key %q is forbidden", fieldPath)
 			}
-			if err := validateExternalAPIExamplePayload(fieldPath, item); err != nil {
+			if err := validateExternalAPIExamplePayload(fixture, fieldPath, item); err != nil {
 				return err
 			}
 		}
 	case []any:
 		for i, item := range typed {
-			if err := validateExternalAPIExamplePayload(fmt.Sprintf("%s[%d]", path, i), item); err != nil {
+			if err := validateExternalAPIExamplePayload(fixture, fmt.Sprintf("%s[%d]", path, i), item); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func isPublicIdentityAuthFixture(fixture externalAPIContractFixture) bool {
+	if fixture.OwnerService != "identity-service" || fixture.Auth != "public" || fixture.AuthRequired || fixture.ServiceKeyRequired {
+		return false
+	}
+	switch fixture.Path {
+	case "/api/v1/register", "/api/v1/login", "/api/v1/refresh", "/api/v1/cli/login":
+		return fixture.Method == http.MethodPost
+	default:
+		return false
+	}
+}
+
+func isIdentityCredentialIssueFixture(fixture externalAPIContractFixture) bool {
+	return isPublicIdentityAuthFixture(fixture) && fixture.Action == "create" && fixture.Path != "/api/v1/register"
+}
+
+func allowsIdentityCredentialExampleField(fixture externalAPIContractFixture, fieldPath string) bool {
+	if fieldPath == "response_example.token" && fixture.OwnerService == "identity-service" && fixture.Method == http.MethodPost && fixture.Path == "/api/v1/me/api-tokens" {
+		return true
+	}
+	if !isPublicIdentityAuthFixture(fixture) {
+		return false
+	}
+	switch fieldPath {
+	case "request_example.password":
+		return fixture.Path == "/api/v1/register" || fixture.Path == "/api/v1/login" || fixture.Path == "/api/v1/cli/login"
+	case "request_example.refresh_token":
+		return fixture.Path == "/api/v1/refresh"
+	case "response_example.refresh_token":
+		return fixture.Path == "/api/v1/login" || fixture.Path == "/api/v1/refresh"
+	default:
+		return false
+	}
 }
 
 func externalAPIFixtureFiles(t *testing.T) []string {

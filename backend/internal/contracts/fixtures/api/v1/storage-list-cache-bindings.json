@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "contract_name": "storage.list_cache_bindings",
+  "owner_service": "storage-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "storage-service:cache_bindings",
+  "action": "list",
+  "method": "GET",
+  "path": "/api/v1/projects/{id}/storage/cache-bindings",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": ["id"],
+  "required_request_fields": [],
+  "optional_request_fields": [],
+  "request_example": {},
+  "success_statuses": [200],
+  "error_statuses": [401, 403, 404, 500],
+  "emits_events": [],
+  "response_example": {
+    "data": [
+      {
+        "id": "project-1-pvc-data-dataset-tokenized-v1-gpu-hpc",
+        "project_id": "project-1",
+        "storage_binding_id": "pvc-data",
+        "cache_key": "dataset-tokenized-v1",
+        "node_class": "gpu-hpc",
+        "scratch_profile": "local-nvme-scratch",
+        "last_staged_at": "2026-06-27T00:00:00Z"
+      }
+    ]
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

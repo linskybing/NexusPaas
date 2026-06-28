@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -65,6 +66,9 @@ func submitJob(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, a
 	}
 	applyAdmissionReview(job, review)
 	applyAutoPreemptionResult(job, preemption)
+	if err := reserveAndCommitSubmittedJobQuota(app, r, job); err != nil {
+		return http.StatusServiceUnavailable, shared.ErrorData("scheduler reservation unavailable"), nil
+	}
 	if keyHash != "" {
 		job[internalSubmitIdempotencyKeyHash] = keyHash
 		job[internalSubmitIdempotencyFingerprintHash] = fingerprintHash
@@ -73,6 +77,7 @@ func submitJob(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, a
 		return buildEvent(r, "JobSubmitted", "submitted", record.Data)
 	})
 	if err != nil {
+		releaseSubmittedJobReservation(r.Context(), app, schedulerReservationHeaders(r.Header, job, "submit-rollback"), job)
 		return createStatus(err), shared.ErrorData("job could not be submitted"), nil
 	}
 	return http.StatusCreated, publicWorkloadJobRecord(record), nil
@@ -259,10 +264,19 @@ func jobAdmissionPayload(job, payload map[string]any) map[string]any {
 		"gpu_count":               firstPayloadValue(payload, "gpu_count", "gpuCount", "GPUCount"),
 		"streaming_session":       firstPayloadValue(payload, "streaming_session", "streamingSession", "StreamingSession"),
 		"stream_max_bitrate_kbps": firstPayloadValue(payload, "stream_max_bitrate_kbps", "streamMaxBitrateKbps", "StreamMaxBitrateKbps"),
+		"network_profile":         firstPayloadValue(payload, "network_profile", "networkProfile", "NetworkProfile"),
+		"rdma_required":           firstPayloadValue(payload, "rdma_required", "rdmaRequired", "RDMARequired"),
+		"nic_class":               firstPayloadValue(payload, "nic_class", "nicClass", "NICClass"),
+		"topology_requirement":    firstPayloadValue(payload, "topology_requirement", "topologyRequirement", "TopologyRequirement"),
+		"placement_profile":       firstPayloadValue(payload, "placement_profile", "placementProfile", "PlacementProfile"),
+		"accelerator_profile":     firstPayloadValue(payload, "accelerator_profile", "acceleratorProfile", "AcceleratorProfile"),
 		"resources":               payload["resources"],
 	}
 	if value, ok := firstPresent(payload, "sm_percentage", "smPercentage", "SMPercentage"); ok {
 		admission["sm_percentage"] = value
+	}
+	if value, ok := firstPresent(payload, "pinned_memory_limit", "pinnedMemoryLimit", "pinned_memory", "pinnedMemory"); ok {
+		admission["pinned_memory_limit"] = value
 	}
 	return admission
 }
@@ -281,6 +295,24 @@ func applyAdmissionReview(job, review map[string]any) {
 		"required_memory",
 		"streaming_session",
 		"stream_max_bitrate_kbps",
+		"network_profile",
+		"rdma_required",
+		"nic_class",
+		"topology_requirement",
+		"network_annotations",
+		"network_env",
+		"placement_profile",
+		"scheduler_backend",
+		"scheduler_name",
+		"gang_enabled",
+		"gang_min_available",
+		"placement_labels",
+		"placement_annotations",
+		"accelerator_profile",
+		"accelerator_node_selector",
+		"accelerator_labels",
+		"sm_percentage",
+		"pinned_memory_limit",
 	} {
 		if value, ok := review[key]; ok {
 			job[key] = value
@@ -289,6 +321,74 @@ func applyAdmissionReview(job, review map[string]any) {
 	if value, ok := review["usage"]; ok {
 		job["admission_usage"] = value
 	}
+}
+
+func reserveAndCommitSubmittedJobQuota(app *platform.App, r *http.Request, job map[string]any) error {
+	client, err := newSchedulerReservationClient(app)
+	if err != nil {
+		return err
+	}
+	payload := submittedJobReservationPayload(job)
+	reserved, err := client.Reserve(r.Context(), schedulerReservationHeaders(r.Header, job, "reserve"), payload)
+	if err != nil {
+		return err
+	}
+	reservationID := reservationRecordID(reserved.Record)
+	if reservationID == "" {
+		return fmt.Errorf("scheduler reservation response missing id")
+	}
+	if _, err := client.Commit(r.Context(), schedulerReservationHeaders(r.Header, job, "commit"), reservationID); err != nil {
+		job["reservation_id"] = reservationID
+		releaseJobReservation(r.Context(), client.Release, schedulerReservationHeaders(r.Header, job, "commit-rollback"), job)
+		return err
+	}
+	job["reservation_id"] = reservationID
+	job["reservation_state"] = "committed"
+	job["reservation_payload"] = payload
+	return nil
+}
+
+func submittedJobReservationPayload(job map[string]any) map[string]any {
+	payload := map[string]any{
+		"job_id":            shared.TextValue(job, "job_id", "jobId", "id"),
+		"project_id":        shared.TextValue(job, "project_id", "projectId"),
+		"user_id":           shared.TextValue(job, "user_id", "userId"),
+		"queue_name":        shared.TextValue(job, "queue_name", "queueName"),
+		"device_class_name": shared.TextValue(job, "device_class_name", "deviceClassName"),
+		"required_gpu":      job["required_gpu"],
+		"required_cpu":      job["required_cpu"],
+		"required_memory":   job["required_memory"],
+	}
+	reserved := map[string]any{}
+	if value, ok := job["required_gpu"]; ok && value != nil {
+		reserved["gpu"] = value
+	}
+	if value, ok := job["required_cpu"]; ok && value != nil {
+		reserved["cpu"] = value
+	}
+	if value, ok := job["required_memory"]; ok && value != nil {
+		reserved["memory"] = value
+	}
+	if len(reserved) > 0 {
+		payload["reserved"] = reserved
+	}
+	for key, value := range payload {
+		if value == nil || strings.TrimSpace(fmt.Sprint(value)) == "" {
+			delete(payload, key)
+		}
+	}
+	return payload
+}
+
+func schedulerReservationHeaders(src http.Header, job map[string]any, action string) http.Header {
+	headers := src.Clone()
+	jobID := shared.TextValue(job, "job_id", "jobId", "id")
+	key := strings.TrimSpace(headers.Get(idempotencyKeyHeader))
+	if key == "" {
+		key = jobID
+	}
+	headers.Set(idempotencyKeyHeader, "workload-reservation:"+action+":"+jobID+":"+key)
+	return headers
 }
 
 func reviewJobAdmission(app *platform.App, r *http.Request, payload map[string]any) (int, map[string]any, error) {

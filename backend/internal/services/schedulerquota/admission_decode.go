@@ -21,11 +21,20 @@ func decodeSubmitAdmissionRequest(payload map[string]any) (submitAdmissionReques
 		GPUCount:             shared.IntValue(payload, "gpu_count", "gpuCount", "GPUCount"),
 		StreamingSession:     shared.BoolValue(payload, "streaming_session", "streamingSession", "StreamingSession"),
 		StreamMaxBitrateKbps: shared.IntValue(payload, "stream_max_bitrate_kbps", "streamMaxBitrateKbps", "StreamMaxBitrateKbps"),
+		NetworkProfile:       shared.TextValue(payload, "network_profile", "networkProfile", "NetworkProfile"),
+		RDMARequired:         shared.BoolValue(payload, "rdma_required", "rdmaRequired", "RDMARequired"),
+		NICClass:             shared.TextValue(payload, "nic_class", "nicClass", "NICClass"),
+		TopologyRequirement:  shared.TextValue(payload, "topology_requirement", "topologyRequirement", "TopologyRequirement"),
+		PlacementProfile:     shared.TextValue(payload, "placement_profile", "placementProfile", "PlacementProfile"),
+		AcceleratorProfile:   shared.TextValue(payload, "accelerator_profile", "acceleratorProfile", "AcceleratorProfile"),
 		Resources:            decodeAdmissionResources(payload["resources"]),
 	}
 	if rawSM, ok := firstPresent(payload, "sm_percentage", "smPercentage", "SMPercentage"); ok {
 		sm := int(getInt64(rawSM, 0))
 		req.SMPercentage = &sm
+	}
+	if pinned := shared.TextValue(payload, "pinned_memory_limit", "pinnedMemoryLimit", "pinned_memory", "pinnedMemory"); pinned != "" {
+		req.PinnedMemoryLimit = &pinned
 	}
 	req.MPSShareProjectID = shared.TextValue(payload, "mps_share_project_id", "mpsShareProjectId", "shared_claim_project_id", "sharedClaimProjectId")
 	return req, nil
@@ -117,7 +126,7 @@ func admissionDeniedReview(req submitAdmissionRequest, review admissionReview, r
 }
 
 func admissionReviewData(review admissionReview) map[string]any {
-	return map[string]any{
+	data := map[string]any{
 		"allowed":                 review.Allowed,
 		"reason":                  review.Reason,
 		"project_id":              review.ProjectID,
@@ -150,6 +159,73 @@ func admissionReviewData(review admissionReview) map[string]any {
 			"active_stream_bitrate_kbps": review.Usage.ActiveStreamBitrateKbps,
 			"stream_egress_budget_kbps":  review.Usage.StreamEgressBudgetKbps,
 		},
+	}
+	addAdmissionNetworkReviewData(data, review)
+	addAdmissionPlacementReviewData(data, review)
+	addAdmissionAcceleratorReviewData(data, review)
+	return data
+}
+
+func addAdmissionNetworkReviewData(data map[string]any, review admissionReview) {
+	if review.NetworkProfile != "" {
+		data["network_profile"] = review.NetworkProfile
+	}
+	if review.RDMARequired {
+		data["rdma_required"] = true
+	}
+	if review.NICClass != "" {
+		data["nic_class"] = review.NICClass
+	}
+	if review.TopologyRequirement != "" {
+		data["topology_requirement"] = review.TopologyRequirement
+	}
+	if len(review.NetworkAnnotations) > 0 {
+		data["network_annotations"] = shared.CloneMap(review.NetworkAnnotations)
+	}
+	if len(review.NetworkEnv) > 0 {
+		data["network_env"] = shared.CloneMap(review.NetworkEnv)
+	}
+}
+
+func addAdmissionPlacementReviewData(data map[string]any, review admissionReview) {
+	if review.PlacementProfile != "" {
+		data["placement_profile"] = review.PlacementProfile
+	}
+	if review.SchedulerBackend != "" {
+		data["scheduler_backend"] = review.SchedulerBackend
+	}
+	if review.SchedulerName != "" {
+		data["scheduler_name"] = review.SchedulerName
+	}
+	if review.GangEnabled {
+		data["gang_enabled"] = true
+	}
+	if review.GangMinAvailable > 0 {
+		data["gang_min_available"] = review.GangMinAvailable
+	}
+	if len(review.PlacementLabels) > 0 {
+		data["placement_labels"] = shared.CloneMap(review.PlacementLabels)
+	}
+	if len(review.PlacementAnnotations) > 0 {
+		data["placement_annotations"] = shared.CloneMap(review.PlacementAnnotations)
+	}
+}
+
+func addAdmissionAcceleratorReviewData(data map[string]any, review admissionReview) {
+	if review.AcceleratorProfile != "" {
+		data["accelerator_profile"] = review.AcceleratorProfile
+	}
+	if len(review.AcceleratorSelector) > 0 {
+		data["accelerator_node_selector"] = shared.CloneMap(review.AcceleratorSelector)
+	}
+	if len(review.AcceleratorLabels) > 0 {
+		data["accelerator_labels"] = shared.CloneMap(review.AcceleratorLabels)
+	}
+	if review.SMPercentage != nil {
+		data["sm_percentage"] = *review.SMPercentage
+	}
+	if review.PinnedMemoryLimit != "" {
+		data["pinned_memory_limit"] = review.PinnedMemoryLimit
 	}
 }
 

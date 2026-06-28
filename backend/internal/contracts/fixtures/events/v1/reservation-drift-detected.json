@@ -1,0 +1,22 @@
+{
+  "event_id": "99999999-9999-4999-8999-999999999998",
+  "schema_version": 1,
+  "event_type": "ReservationDriftDetected",
+  "producer": "scheduler-quota-service",
+  "occurred_at": "2026-06-27T00:00:00Z",
+  "trace_id": "trace-reservation-drift-detected-v1",
+  "request_id": "req-reservation-drift-detected-v1",
+  "aggregate_id": "reservation-drift-1",
+  "payload": {
+    "reservation_id": "reservation-drift-1",
+    "reservation_state": "committed",
+    "project_id": "P1",
+    "job_id": "J1",
+    "job_exists": true,
+    "job_status": "completed",
+    "job_record_id": "J1",
+    "drift_reason": "terminal_job_but_reservation_not_released",
+    "reason": "terminal_job_but_reservation_not_released",
+    "detected_at": "2026-06-27T00:00:00Z"
+  }
+}

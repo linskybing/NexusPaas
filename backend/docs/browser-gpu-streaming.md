@@ -101,3 +101,8 @@ NVIDIA MPS does not provide hard fault isolation between clients on one GPU. A
 GPU fault can affect co-located MPS sessions (including the app + its own
 sidecar). `pinned_memory_limit` bounds only the memory dimension. Use MIG or
 whole-GPU allocation for untrusted tenants or hard cross-tenant isolation.
+
+Submit admission treats `sm_percentage < 100` or `pinned_memory_limit` as an MPS
+request. Same-Project sharing can be allowed by plan and queue policy; active
+MPS workloads from other Projects on the same GPU device class are blocked
+unless cross-project MPS is explicitly enabled by platform policy.

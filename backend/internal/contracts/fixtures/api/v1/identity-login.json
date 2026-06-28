@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "contract_name": "identity.login",
+  "owner_service": "identity-service",
+  "api_surface": "external_rest",
+  "consumer": "public-auth-client",
+  "resource": "identity-service:sessions",
+  "action": "create",
+  "method": "POST",
+  "path": "/api/v1/login",
+  "auth": "public",
+  "auth_required": false,
+  "service_key_required": false,
+  "path_parameters": [],
+  "required_request_fields": [
+    "username",
+    "password"
+  ],
+  "optional_request_fields": [
+    "captcha_id",
+    "captcha_answer"
+  ],
+  "request_example": {
+    "username": "alice",
+    "password": "example-password-only"
+  },
+  "success_statuses": [
+    200
+  ],
+  "error_statuses": [
+    400,
+    401,
+    503
+  ],
+  "emits_events": [],
+  "response_example": {
+    "token": "fake-session-token",
+    "refresh_token": "fake-refresh-token",
+    "user": {
+      "id": "user-ga-alice",
+      "username": "alice",
+      "email": "alice@example.test",
+      "full_name": "Alice Example",
+      "name": "Alice Example",
+      "role": "user",
+      "role_id": "role-default",
+      "system_role": 2,
+      "permissions": [
+        "selfManage"
+      ]
+    }
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

@@ -36,12 +36,19 @@ type admissionReader interface {
 	Plan(ctx context.Context, planID string) (admissionRecord, bool)
 	Queue(ctx context.Context, queueID string) (admissionRecord, bool)
 	ListQueues(ctx context.Context) []admissionRecord
+	ListAcceleratorProfiles(ctx context.Context) []admissionRecord
+	ListNetworkProfiles(ctx context.Context) []admissionRecord
+	ListPlacementProfiles(ctx context.Context) []admissionRecord
 	ProjectMember(ctx context.Context, key string) (admissionRecord, bool)
 	ListProjectMembers(ctx context.Context) []admissionRecord
 	ListUserGroups(ctx context.Context) []admissionRecord
 	UserQuota(ctx context.Context, key string) (admissionRecord, bool)
 	ListUserQuotas(ctx context.Context) []admissionRecord
 	ListWorkloadJobs(ctx context.Context) []admissionRecord
+}
+
+type workloadJobAvailabilityReader interface {
+	ListWorkloadJobsAvailable(ctx context.Context) ([]admissionRecord, bool)
 }
 
 // storeAdmissionReader is the co-hosted/local implementation of admissionReader.
@@ -117,6 +124,18 @@ func (rdr storeAdmissionReader) ListQueues(ctx context.Context) []admissionRecor
 	return rdr.scheduler.ListQueues(ctx)
 }
 
+func (rdr storeAdmissionReader) ListAcceleratorProfiles(ctx context.Context) []admissionRecord {
+	return rdr.list(ctx, acceleratorProfilesResource)
+}
+
+func (rdr storeAdmissionReader) ListNetworkProfiles(ctx context.Context) []admissionRecord {
+	return rdr.list(ctx, networkProfilesResource)
+}
+
+func (rdr storeAdmissionReader) ListPlacementProfiles(ctx context.Context) []admissionRecord {
+	return rdr.list(ctx, placementProfilesResource)
+}
+
 func (rdr storeAdmissionReader) ProjectMember(ctx context.Context, key string) (admissionRecord, bool) {
 	return rdr.get(ctx, projectMembersResource, key)
 }
@@ -138,7 +157,15 @@ func (rdr storeAdmissionReader) ListUserQuotas(ctx context.Context) []admissionR
 }
 
 func (rdr storeAdmissionReader) ListWorkloadJobs(ctx context.Context) []admissionRecord {
-	return rdr.list(ctx, workloadJobsResource)
+	records, _ := rdr.ListWorkloadJobsAvailable(ctx)
+	return records
+}
+
+func (rdr storeAdmissionReader) ListWorkloadJobsAvailable(ctx context.Context) ([]admissionRecord, bool) {
+	if rdr.store == nil {
+		return nil, false
+	}
+	return rdr.list(ctx, workloadJobsResource), true
 }
 
 type ownerReadAdmissionReader struct {
@@ -167,6 +194,18 @@ func (rdr ownerReadAdmissionReader) ListQueues(ctx context.Context) []admissionR
 	return rdr.local.ListQueues(ctx)
 }
 
+func (rdr ownerReadAdmissionReader) ListAcceleratorProfiles(ctx context.Context) []admissionRecord {
+	return rdr.local.ListAcceleratorProfiles(ctx)
+}
+
+func (rdr ownerReadAdmissionReader) ListNetworkProfiles(ctx context.Context) []admissionRecord {
+	return rdr.local.ListNetworkProfiles(ctx)
+}
+
+func (rdr ownerReadAdmissionReader) ListPlacementProfiles(ctx context.Context) []admissionRecord {
+	return rdr.local.ListPlacementProfiles(ctx)
+}
+
 func (rdr ownerReadAdmissionReader) ProjectMember(ctx context.Context, key string) (admissionRecord, bool) {
 	return rdr.getOwner(ctx, projectMembersResource, key)
 }
@@ -188,7 +227,23 @@ func (rdr ownerReadAdmissionReader) ListUserQuotas(ctx context.Context) []admiss
 }
 
 func (rdr ownerReadAdmissionReader) ListWorkloadJobs(ctx context.Context) []admissionRecord {
-	return rdr.listOwner(ctx, workloadJobsResource)
+	records, _ := rdr.ListWorkloadJobsAvailable(ctx)
+	return records
+}
+
+func (rdr ownerReadAdmissionReader) ListWorkloadJobsAvailable(ctx context.Context) ([]admissionRecord, bool) {
+	if rdr.isLocalOwner(workloadJobsResource) {
+		return rdr.local.ListWorkloadJobsAvailable(ctx)
+	}
+	if rdr.owner == nil {
+		return nil, false
+	}
+	records, err := rdr.owner.List(ctx, workloadJobsResource)
+	if err != nil {
+		slog.Error("scheduler quota owner read list failed", "resource", workloadJobsResource, "error", err)
+		return nil, false
+	}
+	return records, true
 }
 
 func (rdr ownerReadAdmissionReader) getOwner(ctx context.Context, resource, id string) (admissionRecord, bool) {

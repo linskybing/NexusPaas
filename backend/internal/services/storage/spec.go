@@ -8,6 +8,10 @@ import (
 )
 
 func Spec() platform.ServiceSpec {
+	const (
+		storageProfileID = "/api/v1/storage-profiles/{id}"
+		cacheBindingID   = "/api/v1/projects/{id}/storage/cache-bindings/{cacheBindingId}"
+	)
 	route, id, admin, adapter, serviceInternal, aliasOf := shared.Route, shared.ID, shared.Admin, shared.Adapter, shared.ServiceInternal, shared.AliasOf
 	return platform.ServiceSpec{
 		Name:            "storage-service",
@@ -15,10 +19,19 @@ func Spec() platform.ServiceSpec {
 		Phase:           "2",
 		RequiresCluster: true,
 		Description:     "User/group storage, PVC lifecycle, FileBrowser, permissions, project bindings, fast-stage transfer, and Longhorn RWX health.",
-		Tables:          []string{"storages", "group_storage_permissions", "access_policies", "project_storage_bindings", "fast_transfer_records", "longhorn_rwx_health", "outbox", "inbox"},
-		Events:          []string{"PVCProvisioned", "StorageBound", "ProjectStorageBindingChanged", "ProjectStoragePermissionChanged", "StoragePermissionChanged", "StorageMountPlanResolved", "FastTransferCompleted", "LonghornRWXHealthChecked"},
+		Tables:          []string{"storages", "group_storage_permissions", "access_policies", "project_storage_bindings", "storage_profiles", "cache_bindings", "storage_benchmark_records", "fast_transfer_records", "longhorn_rwx_health", "outbox", "inbox"},
+		Events:          []string{"PVCProvisioned", "StorageBound", "ProjectStorageBindingChanged", "ProjectStoragePermissionChanged", "StoragePermissionChanged", "StorageProfileChanged", "StorageMountPlanResolved", "DataPlanePlanBuilt", "CacheBindingChanged", "StorageBenchmarkRecorded", "FastTransferChanged", "FastTransferQueued", "FastTransferProgressed", "FastTransferCompleted", "FastTransferFailed", "LonghornRWXHealthChecked"},
 		Routes: []platform.RouteSpec{
 			route(http.MethodPost, "/internal/storage/projects/{project_id}/mount-plan", "mount_plans", "resolve", id("project_id"), serviceInternal()),
+			route(http.MethodPost, "/internal/storage/projects/{project_id}/data-plane-plan", "data_plane_plans", "resolve", id("project_id"), serviceInternal()),
+			route(http.MethodPost, "/internal/storage/projects/{project_id}/transfers/{targetNamespace}/{name}/progress", "fast_transfers", "progress", id("name"), serviceInternal()),
+			route(http.MethodGet, "/api/v1/storage-profiles", "storage_profiles", "list", admin()),
+			route(http.MethodPost, "/api/v1/storage-profiles", "storage_profiles", "create", admin()),
+			route(http.MethodGet, storageProfileID, "storage_profiles", "get", id("id"), admin()),
+			route(http.MethodPut, storageProfileID, "storage_profiles", "update", id("id"), admin()),
+			route(http.MethodDelete, storageProfileID, "storage_profiles", "delete", id("id"), admin()),
+			route(http.MethodGet, "/api/v1/storage/benchmark-records", "storage_benchmark_records", "list"),
+			route(http.MethodPost, "/api/v1/storage/benchmark-records", "storage_benchmark_records", "create", admin()),
 			route(http.MethodGet, "/api/v1/storage/options", "storage_options", "list"),
 			route(http.MethodGet, "/api/v1/admin/user-storage", "user_storage", "list", admin(), adapter("minio")),
 			route(http.MethodPost, "/api/v1/admin/user-storage/batch-init", "user_storage", "command", admin(), adapter("minio")),
@@ -56,6 +69,11 @@ func Spec() platform.ServiceSpec {
 			route(http.MethodGet, "/api/v1/projects/{id}/storage/bindings", "storage_bindings", "list", id("id")),
 			route(http.MethodPost, "/api/v1/projects/{id}/storage/bindings", "storage_bindings", "create", id("id")),
 			route(http.MethodDelete, "/api/v1/projects/{id}/storage/bindings/{requestId}", "storage_bindings", "delete", id("requestId")),
+			route(http.MethodGet, "/api/v1/projects/{id}/storage/cache-bindings", "cache_bindings", "list", id("id")),
+			route(http.MethodPost, "/api/v1/projects/{id}/storage/cache-bindings", "cache_bindings", "create", id("id")),
+			route(http.MethodGet, cacheBindingID, "cache_bindings", "get", id("cacheBindingId")),
+			route(http.MethodPut, cacheBindingID, "cache_bindings", "update", id("cacheBindingId")),
+			route(http.MethodDelete, cacheBindingID, "cache_bindings", "delete", id("cacheBindingId")),
 			route(http.MethodGet, "/api/v1/projects/{id}/storage/bindings/{pvcId}/permissions", "project_storage_permissions", "list", id("pvcId")),
 			route(http.MethodPut, "/api/v1/projects/{id}/storage/bindings/{pvcId}/permissions", "project_storage_permissions", "update", id("pvcId")),
 			route(http.MethodDelete, "/api/v1/projects/{id}/storage/bindings/{pvcId}/permissions/{userId}", "project_storage_permissions", "delete", id("userId")),

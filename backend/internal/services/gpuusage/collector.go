@@ -23,6 +23,7 @@ type gpuCollectorStats struct {
 	snapshotsWritten      int
 	snapshotsSkipped      int
 	summariesComputed     int
+	usageDriftsDetected   int
 	snapshotsDeleted      int
 }
 
@@ -66,6 +67,7 @@ func collectGPUUsageTelemetry(ctx context.Context, app *platform.App, now time.T
 		}
 	}
 	stats.summariesComputed = computeGPUSummaries(ctx, app.Store, jobs, now)
+	stats.usageDriftsDetected = detectUsageDrift(ctx, app, jobs, now)
 	stats.snapshotsDeleted = cleanupOldGPUSnapshots(ctx, app.Store, retentionCutoff(now, app.Config.GPUUsageRetentionDays))
 	slog.Info("gpu usage collector completed",
 		"cluster_read_model_found", stats.clusterReadModelFound,
@@ -73,6 +75,7 @@ func collectGPUUsageTelemetry(ctx context.Context, app *platform.App, now time.T
 		"snapshots_written", stats.snapshotsWritten,
 		"snapshots_skipped", stats.snapshotsSkipped,
 		"summaries_computed", stats.summariesComputed,
+		"usage_drifts_detected", stats.usageDriftsDetected,
 		"snapshots_deleted", stats.snapshotsDeleted,
 	)
 	return stats
@@ -156,6 +159,14 @@ func gpuSnapshotMetrics(data map[string]any, gpuUUID string) map[string]any {
 	copyTextMetric(out, data, "gpu_sm_util_source", "gpu_sm_util_source", "gpuSMUtilSource", "GPUSMUtilSource")
 	copyTextMetric(out, data, "gpu_mem_util_source", "gpu_mem_util_source", "gpuMemUtilSource", "GPUMemUtilSource")
 	copyTextMetric(out, data, "gpu_memory_used_source", "gpu_memory_used_source", "gpuMemoryUsedSource", "GPUMemoryUsedSource")
+	if units := mpsVirtualUnits(data, metrics); units > 0 {
+		if _, ok := out["gpu_sm_util_source"]; !ok {
+			out["gpu_sm_util_source"] = gpuSMAttributionEstimatedMPS
+		}
+		if _, ok := out["reserved_sm_percentage"]; !ok {
+			out["reserved_sm_percentage"] = units
+		}
+	}
 	return out
 }
 

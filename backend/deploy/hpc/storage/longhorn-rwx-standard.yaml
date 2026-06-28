@@ -1,0 +1,15 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: longhorn-rwx-standard
+  labels:
+    app.kubernetes.io/part-of: nexuspaas
+    nexuspaas.io/storage-profile: longhorn-rwx-standard
+provisioner: driver.longhorn.io
+allowVolumeExpansion: true
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+parameters:
+  numberOfReplicas: "3"
+  fsType: ext4
+  nfsOptions: vers=4.2,noresvport,softerr,timeo=600,retrans=5

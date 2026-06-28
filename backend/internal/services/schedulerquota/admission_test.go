@@ -42,6 +42,420 @@ func TestSubmitAdmissionAllowsPlanQueueAndResources(t *testing.T) {
 	}
 }
 
+func TestSubmitAdmissionResolvesNetworkProfileMetadata(t *testing.T) {
+	app := newSchedulerQuotaTestApp()
+	seedAdmissionProject(t, app, admissionFixture{})
+
+	code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+		"project_id":           "P1",
+		"user_id":              "U1",
+		"queue_name":           "default-batch",
+		"required_cpu":         1,
+		"required_memory":      1024,
+		"network_profile":      "rdma-fast-lane",
+		"rdma_required":        true,
+		"topology_requirement": "same-rack",
+		"resources":            []any{podAdmissionResource(t, "train", "0", "1", "1Gi")},
+	})), platform.RouteSpec{})
+
+	assertSchedulerStatus(t, code, data, http.StatusOK)
+	review := data.(map[string]any)
+	if review["network_profile"] != "rdma-fast-lane" || review["rdma_required"] != true {
+		t.Fatalf("admission network review = %#v, want rdma-fast-lane required", review)
+	}
+	if review["nic_class"] != "rdma" || review["topology_requirement"] != "same-rack" {
+		t.Fatalf("admission network hints = %#v, want rdma same-rack", review)
+	}
+	annotations := review["network_annotations"].(map[string]any)
+	if annotations[multusNetworksAnnotation] != "nexuspaas-system/rdma-net" {
+		t.Fatalf("network annotations = %#v, want rdma-net", annotations)
+	}
+	env := review["network_env"].(map[string]any)
+	if env["NCCL_SOCKET_IFNAME"] != "net1" || env["NCCL_IB_DISABLE"] != "0" {
+		t.Fatalf("network env = %#v, want NCCL defaults", env)
+	}
+}
+
+func TestSubmitAdmissionRejectsMissingOrDisabledNetworkProfile(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile string
+		seed    map[string]any
+		want    string
+	}{
+		{name: "missing", profile: "missing-net", want: "network profile not found"},
+		{name: "disabled", profile: "disabled-net", seed: map[string]any{
+			"id":          "disabled-net",
+			"name":        "Disabled net",
+			"primary_cni": "cilium",
+			"enabled":     false,
+		}, want: "network profile is disabled"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := newSchedulerQuotaTestApp()
+			seedAdmissionProject(t, app, admissionFixture{})
+			if tt.seed != nil {
+				createSchedulerRecord(t, app, networkProfilesResource, tt.seed)
+			}
+
+			code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+				"project_id":      "P1",
+				"user_id":         "U1",
+				"queue_name":      "default-batch",
+				"required_cpu":    1,
+				"required_memory": 1024,
+				"network_profile": tt.profile,
+			})), platform.RouteSpec{})
+
+			assertSchedulerStatus(t, code, data, http.StatusUnprocessableEntity)
+			if !strings.Contains(data.(map[string]any)["reason"].(string), tt.want) {
+				t.Fatalf("network denial = %#v, want %q", data, tt.want)
+			}
+		})
+	}
+}
+
+func TestSubmitAdmissionResolvesPlacementProfileMetadata(t *testing.T) {
+	app := newSchedulerQuotaTestApp()
+	seedAdmissionProject(t, app, admissionFixture{})
+
+	code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+		"project_id":        "P1",
+		"user_id":           "U1",
+		"queue_name":        "default-batch",
+		"required_cpu":      1,
+		"required_memory":   1024,
+		"placement_profile": "kueue-batch",
+	})), platform.RouteSpec{})
+
+	assertSchedulerStatus(t, code, data, http.StatusOK)
+	review := data.(map[string]any)
+	if review["placement_profile"] != "kueue-batch" || review["scheduler_backend"] != "kueue" || review["scheduler_name"] != placementDefaultSchedulerName {
+		t.Fatalf("placement review = %#v, want kueue placement metadata", review)
+	}
+	labels := review["placement_labels"].(map[string]any)
+	if labels[kueueQueueNameLabel] != "default-batch" {
+		t.Fatalf("placement labels = %#v, want Kueue queue label", labels)
+	}
+}
+
+func TestSubmitAdmissionResolvesVolcanoPlacementProfile(t *testing.T) {
+	app := newSchedulerQuotaTestApp()
+	seedAdmissionProject(t, app, admissionFixture{})
+
+	code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+		"project_id":        "P1",
+		"user_id":           "U1",
+		"queue_name":        "default-batch",
+		"required_cpu":      1,
+		"required_memory":   1024,
+		"placement_profile": "volcano-gang",
+	})), platform.RouteSpec{})
+
+	assertSchedulerStatus(t, code, data, http.StatusOK)
+	review := data.(map[string]any)
+	if review["scheduler_backend"] != "volcano" || review["scheduler_name"] != placementVolcanoSchedulerName || review["gang_enabled"] != true {
+		t.Fatalf("volcano placement review = %#v, want volcano gang metadata", review)
+	}
+	if review["gang_min_available"] != 1 {
+		t.Fatalf("volcano gang_min_available = %#v, want 1", review["gang_min_available"])
+	}
+}
+
+func TestSubmitAdmissionRejectsMissingOrDisabledPlacementProfile(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile string
+		seed    map[string]any
+		want    string
+	}{
+		{name: "missing", profile: "missing-placement", want: "placement profile not found"},
+		{name: "disabled", profile: "disabled-placement", seed: map[string]any{
+			"id":                "disabled-placement",
+			"name":              "Disabled placement",
+			"scheduler_backend": "kueue",
+			"enabled":           false,
+		}, want: "placement profile is disabled"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := newSchedulerQuotaTestApp()
+			seedAdmissionProject(t, app, admissionFixture{})
+			if tt.seed != nil {
+				createSchedulerRecord(t, app, placementProfilesResource, tt.seed)
+			}
+
+			code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+				"project_id":        "P1",
+				"user_id":           "U1",
+				"queue_name":        "default-batch",
+				"required_cpu":      1,
+				"required_memory":   1024,
+				"placement_profile": tt.profile,
+			})), platform.RouteSpec{})
+
+			assertSchedulerStatus(t, code, data, http.StatusUnprocessableEntity)
+			if !strings.Contains(data.(map[string]any)["reason"].(string), tt.want) {
+				t.Fatalf("placement denial = %#v, want %q", data, tt.want)
+			}
+		})
+	}
+}
+
+func TestSubmitAdmissionResolvesAcceleratorProfileMetadata(t *testing.T) {
+	app := newSchedulerQuotaTestApp()
+	seedAdmissionProject(t, app, admissionFixture{})
+
+	code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+		"project_id":          "P1",
+		"user_id":             "U1",
+		"queue_name":          "default-batch",
+		"required_cpu":        1,
+		"required_memory":     1024,
+		"accelerator_profile": "nvidia-gpu-default",
+	})), platform.RouteSpec{})
+
+	assertSchedulerStatus(t, code, data, http.StatusOK)
+	review := data.(map[string]any)
+	if review["accelerator_profile"] != "nvidia-gpu-default" {
+		t.Fatalf("accelerator review = %#v, want nvidia-gpu-default", review)
+	}
+	selector := review["accelerator_node_selector"].(map[string]any)
+	if selector["nexuspaas.io/gpu"] != "true" {
+		t.Fatalf("accelerator selector = %#v, want gpu selector", selector)
+	}
+	labels := review["accelerator_labels"].(map[string]any)
+	if labels["nexuspaas.io/accelerator-profile"] != "nvidia-gpu-default" {
+		t.Fatalf("accelerator labels = %#v, want profile label", labels)
+	}
+}
+
+func TestSubmitAdmissionAppliesAcceleratorMPSDefaults(t *testing.T) {
+	app := newSchedulerQuotaTestApp()
+	seedAdmissionProject(t, app, admissionFixture{})
+	createSchedulerRecord(t, app, acceleratorProfilesResource, map[string]any{
+		"id":                          "shared-mps",
+		"name":                        "Shared MPS",
+		"enabled":                     true,
+		"allowed_device_class_name":   defaultDeviceClassName,
+		"default_mps_sm_percentage":   50,
+		"default_pinned_memory_limit": "8Gi",
+		"node_selector":               map[string]any{},
+		"labels":                      map[string]any{},
+	})
+
+	code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+		"project_id":          "P1",
+		"user_id":             "U1",
+		"queue_name":          "default-batch",
+		"required_gpu":        0.5,
+		"required_cpu":        1,
+		"required_memory":     1024,
+		"gpu_count":           1,
+		"accelerator_profile": "shared-mps",
+	})), platform.RouteSpec{})
+
+	assertSchedulerStatus(t, code, data, http.StatusOK)
+	review := data.(map[string]any)
+	if review["sm_percentage"] != 50 || review["pinned_memory_limit"] != "8Gi" {
+		t.Fatalf("accelerator MPS review = %#v, want sm/pinned defaults", review)
+	}
+	usage := review["usage"].(map[string]any)
+	if usage["resource_floor_gpu"] != 0.5 {
+		t.Fatalf("resource floor = %#v, want 0.5", usage["resource_floor_gpu"])
+	}
+}
+
+func TestSubmitAdmissionRejectsMissingOrDisabledAcceleratorProfile(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile string
+		seed    map[string]any
+		want    string
+	}{
+		{name: "missing", profile: "missing-accelerator", want: "accelerator profile not found"},
+		{name: "disabled", profile: "disabled-accelerator", seed: map[string]any{
+			"id":       "disabled-accelerator",
+			"name":     "Disabled accelerator",
+			"enabled":  false,
+			"labels":   map[string]any{},
+			"selector": map[string]any{},
+		}, want: "accelerator profile is disabled"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := newSchedulerQuotaTestApp()
+			seedAdmissionProject(t, app, admissionFixture{})
+			if tt.seed != nil {
+				createSchedulerRecord(t, app, acceleratorProfilesResource, tt.seed)
+			}
+
+			code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+				"project_id":          "P1",
+				"user_id":             "U1",
+				"queue_name":          "default-batch",
+				"required_cpu":        1,
+				"required_memory":     1024,
+				"accelerator_profile": tt.profile,
+			})), platform.RouteSpec{})
+
+			assertSchedulerStatus(t, code, data, http.StatusUnprocessableEntity)
+			if !strings.Contains(data.(map[string]any)["reason"].(string), tt.want) {
+				t.Fatalf("accelerator denial = %#v, want %q", data, tt.want)
+			}
+		})
+	}
+}
+
+func TestSubmitAdmissionRejectsMPSAbovePlanOrQueueMax(t *testing.T) {
+	tests := []struct {
+		name        string
+		planUpdate  map[string]any
+		queueUpdate map[string]any
+		want        string
+	}{
+		{name: "plan cap", planUpdate: map[string]any{"max_sm_percentage_per_gpu": 50}, want: "requested 75, limit 50"},
+		{name: "queue tightens cap", planUpdate: map[string]any{"max_sm_percentage_per_gpu": 80}, queueUpdate: map[string]any{"max_sm_percentage_per_gpu": 50}, want: "requested 75, limit 50"},
+		{name: "queue cannot loosen plan mps deny", planUpdate: map[string]any{"mps_allowed": false}, queueUpdate: map[string]any{"mps_allowed": true}, want: "MPS is not allowed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := newSchedulerQuotaTestApp()
+			seedAdmissionProject(t, app, admissionFixture{})
+			if len(tt.planUpdate) > 0 {
+				updateAdmissionRecord(t, app, plansResource, "plan-1", tt.planUpdate)
+			}
+			if len(tt.queueUpdate) > 0 {
+				updateAdmissionRecord(t, app, queuesResource, "q1", tt.queueUpdate)
+			}
+
+			code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+				"project_id":        "P1",
+				"user_id":           "U1",
+				"queue_name":        "default-batch",
+				"device_class_name": "gpu.nvidia.com",
+				"required_gpu":      0.75,
+				"required_cpu":      1,
+				"required_memory":   1024,
+				"gpu_count":         1,
+				"sm_percentage":     75,
+			})), platform.RouteSpec{})
+
+			assertSchedulerStatus(t, code, data, http.StatusForbidden)
+			if !strings.Contains(data.(map[string]any)["reason"].(string), tt.want) {
+				t.Fatalf("MPS cap denial = %#v, want %q", data, tt.want)
+			}
+		})
+	}
+}
+
+func TestSubmitAdmissionRejectsMPSWhenProjectHighSecurityOrForbidden(t *testing.T) {
+	for _, key := range []string{"high_security", "mps_forbidden"} {
+		t.Run(key, func(t *testing.T) {
+			app := newSchedulerQuotaTestApp()
+			seedAdmissionProject(t, app, admissionFixture{projectOverrides: map[string]any{key: true}})
+
+			code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+				"project_id":      "P1",
+				"user_id":         "U1",
+				"queue_name":      "default-batch",
+				"required_gpu":    0.5,
+				"required_cpu":    1,
+				"required_memory": 1024,
+				"gpu_count":       1,
+				"sm_percentage":   50,
+			})), platform.RouteSpec{})
+
+			assertSchedulerStatus(t, code, data, http.StatusForbidden)
+			if !strings.Contains(data.(map[string]any)["reason"].(string), "MPS is forbidden by project policy") {
+				t.Fatalf("project MPS denial = %#v, want project policy reason", data)
+			}
+		})
+	}
+}
+
+func TestSubmitAdmissionRejectsCrossProjectMPSWithoutAllowCrossPolicy(t *testing.T) {
+	app := newSchedulerQuotaTestApp()
+	seedAdmissionProject(t, app, admissionFixture{})
+	seedCrossProjectMPSJob(t, app, "running")
+
+	code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, mpsAdmissionRequest())), platform.RouteSpec{})
+
+	assertSchedulerStatus(t, code, data, http.StatusForbidden)
+	if !strings.Contains(data.(map[string]any)["reason"].(string), "cross-project MPS sharing requires explicit") {
+		t.Fatalf("cross-project MPS denial = %#v, want policy reason", data)
+	}
+}
+
+func TestSubmitAdmissionAllowsCrossProjectMPSWhenExplicitlyAllowed(t *testing.T) {
+	app := newSchedulerQuotaTestApp()
+	seedAdmissionProject(t, app, admissionFixture{})
+	updateAdmissionRecord(t, app, plansResource, "plan-1", map[string]any{"allow_cross_project_mps": true})
+	seedCrossProjectMPSJob(t, app, "running")
+
+	code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, mpsAdmissionRequest())), platform.RouteSpec{})
+
+	assertSchedulerStatus(t, code, data, http.StatusOK)
+}
+
+func TestSubmitAdmissionUsesActiveStatusesForCrossProjectMPSScan(t *testing.T) {
+	tests := []struct {
+		status string
+		want   int
+	}{
+		{status: "submitted", want: http.StatusForbidden},
+		{status: "waiting_infra", want: http.StatusForbidden},
+		{status: "queued", want: http.StatusForbidden},
+		{status: "running", want: http.StatusForbidden},
+		{status: "succeeded", want: http.StatusOK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.status, func(t *testing.T) {
+			app := newSchedulerQuotaTestApp()
+			seedAdmissionProject(t, app, admissionFixture{})
+			seedCrossProjectMPSJob(t, app, tt.status)
+
+			code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, mpsAdmissionRequest())), platform.RouteSpec{})
+
+			assertSchedulerStatus(t, code, data, tt.want)
+		})
+	}
+}
+
+func TestSubmitAdmissionRejectsMalformedMPSPolicyFields(t *testing.T) {
+	tests := []struct {
+		name        string
+		planUpdate  map[string]any
+		queueUpdate map[string]any
+		project     map[string]any
+		want        string
+	}{
+		{name: "plan bool", planUpdate: map[string]any{"mps_allowed": "true"}, want: "invalid plan MPS policy"},
+		{name: "queue cap", queueUpdate: map[string]any{"max_sm_percentage_per_gpu": "50"}, want: "invalid queue MPS policy"},
+		{name: "project bool", project: map[string]any{"high_security": "true"}, want: "invalid project MPS policy"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := newSchedulerQuotaTestApp()
+			seedAdmissionProject(t, app, admissionFixture{projectOverrides: tt.project})
+			if len(tt.planUpdate) > 0 {
+				updateAdmissionRecord(t, app, plansResource, "plan-1", tt.planUpdate)
+			}
+			if len(tt.queueUpdate) > 0 {
+				updateAdmissionRecord(t, app, queuesResource, "q1", tt.queueUpdate)
+			}
+
+			code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, mpsAdmissionRequest())), platform.RouteSpec{})
+
+			assertSchedulerStatus(t, code, data, http.StatusUnprocessableEntity)
+			if !strings.Contains(data.(map[string]any)["reason"].(string), tt.want) {
+				t.Fatalf("malformed MPS policy denial = %#v, want %q", data, tt.want)
+			}
+		})
+	}
+}
+
 func TestSubmitAdmissionRejectsQueueOutsideProjectPlan(t *testing.T) {
 	app := newSchedulerQuotaTestApp()
 	seedAdmissionProject(t, app, admissionFixture{})
@@ -102,6 +516,34 @@ func TestSubmitAdmissionRejectsProjectQuotaExceededByActiveUsage(t *testing.T) {
 	}
 	if denial["queue_name"] != "default-batch" || denial["priority_value"] != 1000 || denial["runtime_limit_seconds"] != 3600 {
 		t.Fatalf("quota denial = %#v, want queue admission metadata preserved", denial)
+	}
+}
+
+func TestSubmitAdmissionRejectsProjectGPUQuotaWithActiveFractionalUsage(t *testing.T) {
+	app := newSchedulerQuotaTestApp()
+	seedAdmissionProject(t, app, admissionFixture{gpuLimit: 2})
+	createSchedulerRecord(t, app, workloadJobsResource, map[string]any{
+		"id":           "fractional-usage",
+		"project_id":   "P1",
+		"user_id":      "U2",
+		"status":       "queued",
+		"required_gpu": 1.75,
+	})
+
+	code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+		"project_id":      "P1",
+		"user_id":         "U1",
+		"queue_name":      "default-batch",
+		"required_gpu":    0.5,
+		"required_cpu":    1,
+		"required_memory": 1024,
+		"gpu_count":       1,
+		"sm_percentage":   50,
+	})), platform.RouteSpec{})
+
+	assertSchedulerStatus(t, code, data, http.StatusConflict)
+	if !strings.Contains(data.(map[string]any)["reason"].(string), "GPU quota exceeded") {
+		t.Fatalf("fractional quota denial = %#v, want GPU quota reason", data)
 	}
 }
 
@@ -635,6 +1077,7 @@ func TestAdmissionWindowAndListHelpers(t *testing.T) {
 }
 
 func TestAdmissionAccountingValidationAndRawResources(t *testing.T) {
+	badPinned := "not-a-quantity"
 	tests := []struct {
 		name string
 		req  submitAdmissionRequest
@@ -644,6 +1087,7 @@ func TestAdmissionAccountingValidationAndRawResources(t *testing.T) {
 		{name: "negative memory", req: submitAdmissionRequest{RequiredMemory: -1}},
 		{name: "negative dra", req: submitAdmissionRequest{GPUCount: -1}},
 		{name: "bad sm", req: submitAdmissionRequest{SMPercentage: intPtr(0)}},
+		{name: "bad pinned", req: submitAdmissionRequest{PinnedMemoryLimit: &badPinned}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -777,6 +1221,41 @@ func seedAdmissionProject(t *testing.T, app *platform.App, fixture admissionFixt
 		"project_id": "P1",
 		"user_id":    "U1",
 		"role":       "user",
+	})
+}
+
+func updateAdmissionRecord(t *testing.T, app *platform.App, resource, id string, data map[string]any) {
+	t.Helper()
+	if _, ok := app.Store.Update(context.Background(), resource, id, data); !ok {
+		t.Fatalf("update %s/%s failed", resource, id)
+	}
+}
+
+func mpsAdmissionRequest() map[string]any {
+	return map[string]any{
+		"project_id":        "P1",
+		"user_id":           "U1",
+		"queue_name":        "default-batch",
+		"device_class_name": "gpu.nvidia.com",
+		"required_gpu":      0.5,
+		"required_cpu":      1,
+		"required_memory":   1024,
+		"gpu_count":         1,
+		"sm_percentage":     50,
+	}
+}
+
+func seedCrossProjectMPSJob(t *testing.T, app *platform.App, status string) {
+	t.Helper()
+	createSchedulerRecord(t, app, workloadJobsResource, map[string]any{
+		"id":                  "other-project-mps-" + status,
+		"project_id":          "P2",
+		"user_id":             "U2",
+		"status":              status,
+		"device_class_name":   "gpu.nvidia.com",
+		"required_gpu":        0.5,
+		"sm_percentage":       50,
+		"pinned_memory_limit": "8Gi",
 	})
 }
 

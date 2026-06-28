@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
 )
 
@@ -35,6 +36,7 @@ func TestCollectGPUUsageTelemetryProducesSnapshotsAndSummary(t *testing.T) {
 	if metrics["gpu_uuid"] != "GPU-a" || int64Value(metrics, "gpu_memory_bytes") != 4096 || floatValue(metrics, "gpu_sm_utilization") != 75 {
 		t.Fatalf("snapshot metrics = %#v, want normalized GPU metrics", metrics)
 	}
+	assertEstimatedSMAttribution(t, metrics)
 
 	summary, ok := summaryRecordForJob(context.Background(), app.Store, "JGPU")
 	if !ok {
@@ -59,6 +61,13 @@ func TestCollectGPUUsageTelemetryProducesSnapshotsAndSummary(t *testing.T) {
 	rows := data.([]UserResourceUsage)
 	if len(rows) != 1 || rows[0].JobID != "JGPU" || rows[0].UserID != "U1" || rows[0].ProjectName != "vision" {
 		t.Fatalf("admin usage rows = %#v, want collector-produced JGPU summary", rows)
+	}
+}
+
+func assertEstimatedSMAttribution(t *testing.T, metrics map[string]any) {
+	t.Helper()
+	if textValue(metrics, "gpu_sm_util_source") != gpuSMAttributionEstimatedMPS || intValue(metrics, "reserved_sm_percentage") != 50 {
+		t.Fatalf("snapshot SM attribution = %#v, want estimated MPS allocation label", metrics)
 	}
 }
 
@@ -243,6 +252,243 @@ func TestGPUUsageCollectorRegisteredMaintenanceTask(t *testing.T) {
 	}
 }
 
+func TestUsageDriftDetectorEmitsAndDedupesMaterialDrift(t *testing.T) {
+	app := newGPUCollectorTestApp()
+	now := time.Date(2026, time.June, 27, 9, 30, 0, 0, time.UTC)
+	seedGPUCollectorReadModels(t, app, "running")
+	if _, ok := app.Store.Update(context.Background(), gpuJobsResource, "JGPU", map[string]any{"required_gpu": 1.0}); !ok {
+		t.Fatal("failed to update seeded GPU job reservation")
+	}
+	seedGPUCollectorClusterReadModel(t, app, now.Add(-time.Minute), now)
+
+	stats := collectGPUUsageTelemetry(context.Background(), app, now)
+	if stats.usageDriftsDetected != 1 {
+		t.Fatalf("usageDriftsDetected = %d, want 1", stats.usageDriftsDetected)
+	}
+	events := gpuUsageEventsByName(app, usageDriftDetectedEventName)
+	if len(events) != 1 {
+		t.Fatalf("usage drift events = %#v, want one event", events)
+	}
+	event := events[0]
+	if event.OccurredAt != now || event.TraceID != usageDriftTraceIDPrefix+now.Format("20060102150405") || event.SchemaVersion != 1 {
+		t.Fatalf("event metadata = %#v, want drift timestamp/trace/schema", event)
+	}
+	if !strings.HasPrefix(event.IdempotencyKey, usageDriftIdempotencyKeyScope+"P1:"+usageDriftReasonMaterialMismatch+":") {
+		t.Fatalf("event idempotency key = %q, want usage drift key", event.IdempotencyKey)
+	}
+	data := event.Data
+	if data["project_id"] != "P1" || data["reason"] != usageDriftReasonMaterialMismatch {
+		t.Fatalf("event routing data = %#v, want project/reason", data)
+	}
+	if got := floatValue(data, "reserved_gpu_fraction"); got != 1 {
+		t.Fatalf("reserved_gpu_fraction = %v, want 1", got)
+	}
+	if got := floatValue(data, "observed_gpu_fraction"); got != 0.5 {
+		t.Fatalf("observed_gpu_fraction = %v, want 0.5", got)
+	}
+	if got := floatValue(data, "drift_gpu_fraction"); got != 0.5 {
+		t.Fatalf("drift_gpu_fraction = %v, want 0.5", got)
+	}
+	alert, ok := app.Store.Get(context.Background(), usageDriftAlertsResource, "P1:"+usageDriftReasonMaterialMismatch)
+	if !ok || alert.Data["status"] != "active" {
+		t.Fatalf("usage drift alert = %#v, want active alert", alert)
+	}
+
+	second := collectGPUUsageTelemetry(context.Background(), app, now.Add(time.Minute))
+	if second.usageDriftsDetected != 0 {
+		t.Fatalf("second usageDriftsDetected = %d, want duplicate suppressed", second.usageDriftsDetected)
+	}
+	if events := gpuUsageEventsByName(app, usageDriftDetectedEventName); len(events) != 1 {
+		t.Fatalf("usage drift events after duplicate pass = %#v, want still one", events)
+	}
+}
+
+func TestUsageDriftDetectorSkipsBelowThreshold(t *testing.T) {
+	app := newGPUCollectorTestApp()
+	now := time.Date(2026, time.June, 27, 9, 31, 0, 0, time.UTC)
+	seedGPUCollectorReadModels(t, app, "running")
+	if _, ok := app.Store.Update(context.Background(), gpuJobsResource, "JGPU", map[string]any{"required_gpu": 1.0}); !ok {
+		t.Fatal("failed to update seeded GPU job reservation")
+	}
+	seedGPUCollectorSingleClusterRow(t, app, "cluster-below-threshold", map[string]any{
+		"job_id":          "JGPU",
+		"podName":         "pod-a",
+		"namespace":       "project-P1",
+		"node":            "gpu-node-1",
+		"gpuIndex":        0,
+		"gpuUuid":         "GPU-a",
+		"mpsVirtualUnits": 80,
+		"timestamp":       now,
+	})
+
+	stats := collectGPUUsageTelemetry(context.Background(), app, now)
+	if stats.usageDriftsDetected != 0 {
+		t.Fatalf("usageDriftsDetected = %d, want below-threshold drift skipped", stats.usageDriftsDetected)
+	}
+	if events := gpuUsageEventsByName(app, usageDriftDetectedEventName); len(events) != 0 {
+		t.Fatalf("usage drift events = %#v, want none", events)
+	}
+}
+
+func TestUsageDriftDetectorSkipsMissingReservedEvidence(t *testing.T) {
+	app := newGPUCollectorTestApp()
+	now := time.Date(2026, time.June, 27, 9, 32, 0, 0, time.UTC)
+	seedGPUCollectorReadModels(t, app, "running")
+	seedGPUCollectorSingleClusterRow(t, app, "cluster-no-reserved", map[string]any{
+		"job_id":    "JGPU",
+		"podName":   "pod-a",
+		"namespace": "project-P1",
+		"node":      "gpu-node-1",
+		"gpuIndex":  0,
+		"gpuUuid":   "GPU-a",
+		"timestamp": now,
+	})
+
+	stats := collectGPUUsageTelemetry(context.Background(), app, now)
+	if stats.usageDriftsDetected != 0 {
+		t.Fatalf("usageDriftsDetected = %d, want missing reserved evidence skipped", stats.usageDriftsDetected)
+	}
+	if events := gpuUsageEventsByName(app, usageDriftDetectedEventName); len(events) != 0 {
+		t.Fatalf("usage drift events = %#v, want none", events)
+	}
+}
+
+func TestUsageDriftDetectorEmitsMissingFreshTelemetryForActiveReservedJob(t *testing.T) {
+	app := newGPUCollectorTestApp()
+	now := time.Date(2026, time.June, 27, 9, 33, 0, 0, time.UTC)
+	seedGPUCollectorReadModels(t, app, "running")
+	if _, ok := app.Store.Update(context.Background(), gpuJobsResource, "JGPU", map[string]any{"required_gpu": 1.0}); !ok {
+		t.Fatal("failed to update seeded GPU job reservation")
+	}
+
+	stats := collectGPUUsageTelemetry(context.Background(), app, now)
+	if stats.usageDriftsDetected != 1 {
+		t.Fatalf("usageDriftsDetected = %d, want one missing-fresh telemetry alert", stats.usageDriftsDetected)
+	}
+	events := gpuUsageEventsByName(app, usageDriftDetectedEventName)
+	if len(events) != 1 {
+		t.Fatalf("usage drift events = %#v, want one missing-fresh event", events)
+	}
+	data := events[0].Data
+	if data["reason"] != usageDriftReasonMissingFresh || intValue(data, "missing_active_reserved_jobs") != 1 {
+		t.Fatalf("missing telemetry event = %#v, want missing-fresh reason/count", data)
+	}
+	if got := stringSliceValue(data["missing_job_ids"]); len(got) != 1 || got[0] != "JGPU" {
+		t.Fatalf("missing_job_ids = %#v, want [JGPU]", data["missing_job_ids"])
+	}
+
+	second := collectGPUUsageTelemetry(context.Background(), app, now.Add(time.Minute))
+	if second.usageDriftsDetected != 0 {
+		t.Fatalf("second usageDriftsDetected = %d, want duplicate missing-fresh alert suppressed", second.usageDriftsDetected)
+	}
+	if events := gpuUsageEventsByName(app, usageDriftDetectedEventName); len(events) != 1 {
+		t.Fatalf("usage drift events after duplicate pass = %#v, want still one", events)
+	}
+}
+
+func TestUsageDriftDetectorReportsOnlyMissingSubsetForMixedFreshAndMissingJobs(t *testing.T) {
+	app := newGPUCollectorTestApp()
+	now := time.Date(2026, time.June, 27, 9, 34, 0, 0, time.UTC)
+	seedGPUCollectorReadModels(t, app, "running")
+	if _, ok := app.Store.Update(context.Background(), gpuJobsResource, "JGPU", map[string]any{"required_gpu": 1.0}); !ok {
+		t.Fatal("failed to update seeded GPU job reservation")
+	}
+	createGPUCollectorRecord(t, app, gpuJobsResource, map[string]any{
+		"id":           "JGPU2",
+		"job_id":       "JGPU2",
+		"user_id":      "U1",
+		"project_id":   "P1",
+		"queue_name":   "gpuq",
+		"status":       "running",
+		"required_gpu": 1.0,
+	})
+	seedGPUCollectorSingleClusterRow(t, app, "cluster-one-fresh", map[string]any{
+		"job_id":          "JGPU",
+		"podName":         "pod-a",
+		"namespace":       "project-P1",
+		"node":            "gpu-node-1",
+		"gpuIndex":        0,
+		"gpuUuid":         "GPU-a",
+		"mpsVirtualUnits": 100,
+		"timestamp":       now,
+	})
+
+	stats := collectGPUUsageTelemetry(context.Background(), app, now)
+	if stats.usageDriftsDetected != 1 {
+		t.Fatalf("usageDriftsDetected = %d, want one missing subset alert", stats.usageDriftsDetected)
+	}
+	events := gpuUsageEventsByName(app, usageDriftDetectedEventName)
+	if len(events) != 1 {
+		t.Fatalf("usage drift events = %#v, want one missing subset event", events)
+	}
+	data := events[0].Data
+	if data["reason"] != usageDriftReasonMissingFresh || intValue(data, "active_reserved_job_count") != 2 || intValue(data, "fresh_snapshot_rows_seen") != 1 {
+		t.Fatalf("mixed missing event = %#v, want reason active=2 fresh_rows=1", data)
+	}
+	if got := stringSliceValue(data["missing_job_ids"]); len(got) != 1 || got[0] != "JGPU2" {
+		t.Fatalf("missing_job_ids = %#v, want only JGPU2", data["missing_job_ids"])
+	}
+}
+
+func TestUsageDriftDetectorResolvesMissingFreshTelemetry(t *testing.T) {
+	app := newGPUCollectorTestApp()
+	now := time.Date(2026, time.June, 27, 9, 35, 0, 0, time.UTC)
+	seedGPUCollectorReadModels(t, app, "running")
+	if _, ok := app.Store.Update(context.Background(), gpuJobsResource, "JGPU", map[string]any{"required_gpu": 1.0}); !ok {
+		t.Fatal("failed to update seeded GPU job reservation")
+	}
+
+	first := collectGPUUsageTelemetry(context.Background(), app, now)
+	if first.usageDriftsDetected != 1 {
+		t.Fatalf("first usageDriftsDetected = %d, want missing-fresh alert", first.usageDriftsDetected)
+	}
+	seedGPUCollectorSingleClusterRow(t, app, "cluster-recovered", map[string]any{
+		"job_id":          "JGPU",
+		"podName":         "pod-a",
+		"namespace":       "project-P1",
+		"node":            "gpu-node-1",
+		"gpuIndex":        0,
+		"gpuUuid":         "GPU-a",
+		"mpsVirtualUnits": 100,
+		"timestamp":       now.Add(time.Minute),
+	})
+	second := collectGPUUsageTelemetry(context.Background(), app, now.Add(time.Minute))
+	if second.usageDriftsDetected != 0 {
+		t.Fatalf("second usageDriftsDetected = %d, want resolved without new event", second.usageDriftsDetected)
+	}
+	alert, ok := app.Store.Get(context.Background(), usageDriftAlertsResource, "P1:"+usageDriftReasonMissingFresh)
+	if !ok || alert.Data["status"] != "resolved" {
+		t.Fatalf("missing-fresh alert = %#v, want resolved", alert)
+	}
+}
+
+func TestUsageDriftDetectorTreatsStaleSnapshotsAsMissingFreshTelemetry(t *testing.T) {
+	app := newGPUCollectorTestApp()
+	now := time.Date(2026, time.June, 27, 9, 36, 0, 0, time.UTC)
+	seedGPUCollectorReadModels(t, app, "running")
+	if _, ok := app.Store.Update(context.Background(), gpuJobsResource, "JGPU", map[string]any{"required_gpu": 1.0}); !ok {
+		t.Fatal("failed to update seeded GPU job reservation")
+	}
+	seedGPUCollectorSingleClusterRow(t, app, "cluster-stale", map[string]any{
+		"job_id":    "JGPU",
+		"podName":   "pod-a",
+		"namespace": "project-P1",
+		"node":      "gpu-node-1",
+		"gpuIndex":  0,
+		"gpuUuid":   "GPU-a",
+		"timestamp": now.Add(-time.Hour),
+	})
+
+	stats := collectGPUUsageTelemetry(context.Background(), app, now)
+	if stats.usageDriftsDetected != 1 {
+		t.Fatalf("usageDriftsDetected = %d, want stale snapshot treated as missing fresh telemetry", stats.usageDriftsDetected)
+	}
+	events := gpuUsageEventsByName(app, usageDriftDetectedEventName)
+	if len(events) != 1 || events[0].Data["reason"] != usageDriftReasonMissingFresh {
+		t.Fatalf("usage drift events = %#v, want missing-fresh alert", events)
+	}
+}
+
 func newGPUCollectorTestApp() *platform.App {
 	return platform.NewApp(platform.Config{
 		ServiceName:               serviceName,
@@ -320,6 +566,41 @@ func seedGPUCollectorClusterReadModel(t *testing.T, app *platform.App, first, se
 			},
 		},
 	})
+}
+
+func seedGPUCollectorSingleClusterRow(t *testing.T, app *platform.App, id string, row map[string]any) {
+	t.Helper()
+	createGPUCollectorRecord(t, app, clusterReadModelsResource, map[string]any{
+		"id": id,
+		"summary": map[string]any{
+			"podGpuUsages": []any{row},
+		},
+	})
+}
+
+func gpuUsageEventsByName(app *platform.App, name string) []contracts.Event {
+	events := []contracts.Event{}
+	for _, event := range app.Events.Outbox() {
+		if event.Name == name {
+			events = append(events, event)
+		}
+	}
+	return events
+}
+
+func stringSliceValue(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		return append([]string{}, typed...)
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, fmt.Sprint(item))
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func seedHighCardinalityGPUReadModel(t *testing.T, app *platform.App, first time.Time) ([]map[string]any, []string) {

@@ -93,10 +93,10 @@ func TestWorkloadJobAndConfigMutationsUseTransactionalEvents(t *testing.T) {
 	rec := serveSubmitJob(t, app, `{"project_id":"P1","user_id":"U1","queue_name":"default-batch","required_cpu":1,"required_memory":1024}`, "U1", http.StatusCreated)
 	job := responseRecordData(t, rec)
 	jobID := job["id"].(string)
-	if store.createWithEvent != 1 {
-		t.Fatalf("submit createWithEvent=%d, want 1", store.createWithEvent)
+	if store.createWithEvent != 2 || store.updateWithEvent != 1 {
+		t.Fatalf("submit tx counts create=%d update=%d, want reservation create + commit update + job create", store.createWithEvent, store.updateWithEvent)
 	}
-	assertWorkloadTxEvents(t, app, store, "JobSubmitted")
+	assertWorkloadTxEvents(t, app, store, "QuotaReserved", "QuotaCommitted", "JobSubmitted")
 
 	store.resetTx()
 	cancelReq := workloadAuthRequest(http.MethodPost, "/api/v1/jobs/"+jobID+"/cancel", `{}`, "U1", "user")
@@ -138,6 +138,7 @@ func newWorkloadTxTestApp(t *testing.T) (*platform.App, *workloadTxStore) {
 	registerWorkloadPreemptionRoutes(app)
 	registerSchedulerAdmissionRoute(app)
 	registerSchedulerPreemptionRoute(app)
+	registerSchedulerReservationRoutes(app)
 	schedulerquota.Register(app)
 	Register(app)
 	return app, store

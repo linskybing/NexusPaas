@@ -14,10 +14,27 @@ import (
 func TestEventEnvelopeFixturesAreValidV1(t *testing.T) {
 	fixtures := eventFixtureFiles(t)
 	want := []string{
+		"accelerator-profile-changed.json",
 		"audit-event.json",
+		"cache-binding-changed.json",
+		"data-plane-plan-built.json",
+		"fast-transfer-completed.json",
+		"fast-transfer-failed.json",
+		"fast-transfer-progressed.json",
+		"fast-transfer-queued.json",
+		"image-acceleration-profile-changed.json",
+		"image-build-started.json",
 		"job-submitted.json",
+		"network-profile-changed.json",
+		"placement-profile-changed.json",
+		"policy-changed.json",
 		"project-updated.json",
+		"proxy-policy-changed.json",
 		"quota-reserved.json",
+		"reservation-drift-detected.json",
+		"storage-benchmark-recorded.json",
+		"storage-profile-changed.json",
+		"usage-drift-detected.json",
 		"user-updated.json",
 	}
 	if !reflect.DeepEqual(fixtures, want) {
@@ -46,14 +63,66 @@ func TestEventEnvelopeFixturesAreValidV1(t *testing.T) {
 	}
 
 	wantTypes := map[string]string{
-		"AuditEvent":     "scheduler-quota-service",
-		"JobSubmitted":   "workload-service",
-		"ProjectUpdated": "org-project-service",
-		"QuotaReserved":  "scheduler-quota-service",
-		"UserUpdated":    "identity-service",
+		"AcceleratorProfileChanged":       "scheduler-quota-service",
+		"AuditEvent":                      "scheduler-quota-service",
+		"CacheBindingChanged":             "storage-service",
+		"DataPlanePlanBuilt":              "storage-service",
+		"FastTransferCompleted":           "storage-service",
+		"FastTransferFailed":              "storage-service",
+		"FastTransferProgressed":          "storage-service",
+		"FastTransferQueued":              "storage-service",
+		"ImageAccelerationProfileChanged": "image-registry-service",
+		"ImageBuildStarted":               "image-registry-service",
+		"JobSubmitted":                    "workload-service",
+		"NetworkProfileChanged":           "scheduler-quota-service",
+		"PlacementProfileChanged":         "scheduler-quota-service",
+		"PolicyChanged":                   "authorization-policy-service",
+		"ProjectUpdated":                  "org-project-service",
+		"ProxyPolicyChanged":              "authorization-policy-service",
+		"QuotaReserved":                   "scheduler-quota-service",
+		"ReservationDriftDetected":        "scheduler-quota-service",
+		"StorageBenchmarkRecorded":        "storage-service",
+		"StorageProfileChanged":           "storage-service",
+		"UsageDriftDetected":              "usage-observability-service",
+		"UserUpdated":                     "identity-service",
 	}
 	if !reflect.DeepEqual(seenTypes, wantTypes) {
 		t.Fatalf("fixture event type/producers = %v, want %v", seenTypes, wantTypes)
+	}
+}
+
+func TestImageBuildStartedEventAllowsHistoricalSupplyChainOmission(t *testing.T) {
+	raw := readEventEnvelopeFixtureDocument(t, "image-build-started.json")
+	payload, ok := raw["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload has type %T, want object", raw["payload"])
+	}
+	for _, key := range []string{
+		"image_digest",
+		"allow_list_decision",
+		"sbom_status",
+		"signature_status",
+		"scan_status",
+		"supply_chain_checked_at",
+	} {
+		delete(payload, key)
+	}
+
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal historical ImageBuildStarted fixture: %v", err)
+	}
+	event, err := DecodeEventEnvelope(encoded)
+	if err != nil {
+		t.Fatalf("DecodeEventEnvelope historical ImageBuildStarted without supply-chain fields: %v", err)
+	}
+	if event.SchemaVersion != 1 || event.EventType != "ImageBuildStarted" {
+		t.Fatalf("historical event metadata = %#v, want schema v1 ImageBuildStarted", event)
+	}
+	for _, key := range []string{"sbom_status", "signature_status", "scan_status"} {
+		if _, ok := event.Payload[key]; ok {
+			t.Fatalf("historical payload unexpectedly retained %s: %#v", key, event.Payload)
+		}
 	}
 }
 

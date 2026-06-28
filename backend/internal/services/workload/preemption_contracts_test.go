@@ -28,8 +28,11 @@ func TestWorkloadPreemptionContextRequiresServiceAuth(t *testing.T) {
 
 func TestWorkloadPreemptStatusTransitionIsIdempotent(t *testing.T) {
 	app := newWorkloadPreemptionTestApp("svc-key")
+	createWorkloadRecord(t, app, testSchedulerReservationsResource, map[string]any{
+		"id": "res-preempt", "job_id": "j1", "project_id": "P1", "state": "committed",
+	})
 	createWorkloadRecord(t, app, jobsResource, map[string]any{
-		"id": "j1", "job_id": "j1", "status": "running", "priority_value": 1000, "preemptible": true,
+		"id": "j1", "job_id": "j1", "status": "running", "priority_value": 1000, "preemptible": true, "reservation_id": "res-preempt",
 	})
 	body := `{"preemption_id":"pre-1","requester_job_id":"requester","reason":"test","cleanup":{"pods":1}}`
 
@@ -39,6 +42,10 @@ func TestWorkloadPreemptStatusTransitionIsIdempotent(t *testing.T) {
 	record, _ := app.Store.Get(context.Background(), jobsResource, "j1")
 	if record.Data["status"] != "preempted" || record.Data["preemption_record_id"] != "pre-1" {
 		t.Fatalf("preempted record = %#v, want idempotent preempted transition", record.Data)
+	}
+	reservation, _ := app.Store.Get(context.Background(), testSchedulerReservationsResource, "res-preempt")
+	if reservation.Data["state"] != "released" {
+		t.Fatalf("preempted reservation = %#v, want released", reservation.Data)
 	}
 	serveWorkloadPreemption(t, app, http.MethodPost, "/internal/workload/jobs/j1/preempt", strings.ReplaceAll(body, "pre-1", "pre-2"), "svc-key", http.StatusConflict)
 }
@@ -58,6 +65,7 @@ func newWorkloadPreemptionTestApp(serviceKey string) *platform.App {
 		{Method: http.MethodGet, Pattern: "/internal/workload/preemption-context", Resource: "preemption_context", Action: "internal_read", AuthRequired: false},
 		{Method: http.MethodPost, Pattern: "/internal/workload/jobs/{id}/preempt", Resource: "jobs", Action: "preempt", AuthRequired: false},
 	}})
+	registerSchedulerReservationRoutes(app)
 	Register(app)
 	return app
 }

@@ -312,3 +312,62 @@ build_memory_gib_hours
 | USAGE-035 | E2E test starts two MPS workloads on one GPU and verifies separate user/project attribution. |
 | USAGE-036 | E2E test verifies process-exporter metrics can be joined to container ownership. |
 | USAGE-037 | E2E test verifies GPU PID mapping to container ID and user ID. |
+
+## Current Local Evidence
+
+`USAGE-015`, `USAGE-016`, and `USAGE-031` now have partial local
+read-model/UI coverage in the `storage-data-path` branch slice documented by
+[`2026-06-27-gpu-usage-reserved-observed.md`](../plan/2026-06-27-gpu-usage-reserved-observed.md)
+and
+[`2026-06-27-gpu-usage-doc-sync.md`](../plan/2026-06-27-gpu-usage-doc-sync.md):
+
+- Project GPU usage responses expose source fields for observed pod evidence,
+  reserved GPU fraction evidence, and SM attribution;
+- the frontend Usage panel separates observed GPU-backed pods from reserved GPU
+  fraction and displays the SM attribution source;
+- usage-observability snapshot normalization and MPS mapping label
+  allocation-derived SM attribution as `estimated_mps_allocation`;
+- explicit non-measured source labels such as `unavailable`, `unknown`, or
+  `none` are not treated as measured.
+
+`USAGE-029` now has local control-plane evidence in the same branch, documented
+by
+[`2026-06-27-usage-telemetry-drift.md`](../plan/2026-06-27-usage-telemetry-drift.md):
+
+- `usage-observability-service` emits `UsageDriftDetected` when fresh GPU usage
+  snapshots show material divergence between reserved GPU fraction and observed
+  telemetry;
+- repeated equivalent drift is suppressed through persisted
+  `usage_drift_alerts` state rather than only relying on event idempotency keys;
+- missing or zero reserved evidence is skipped, so telemetry absence does not
+  grant extra quota or create divide-by-zero drift ratios;
+- local tests cover material drift emission, duplicate suppression, below-
+  threshold skips, missing-reserved skips, stale/missing telemetry alerting, and the
+  `UsageDriftDetected` event fixture.
+
+`USAGE-032` / `MON-018` now have local control-plane evidence in commit
+`eb5cd16`, documented by
+[`2026-06-27-usage-telemetry-stale-alert.md`](../plan/2026-06-27-usage-telemetry-stale-alert.md)
+and
+[`2026-06-27-usage-stale-alert-doc-sync.md`](../plan/2026-06-27-usage-stale-alert-doc-sync.md):
+
+- `usage-observability-service` emits `UsageDriftDetected` with
+  `reason`/`drift_reason="active_reserved_jobs_missing_fresh_snapshots"` when
+  active reserved GPU jobs have no fresh `job_gpu_usage_snapshots` in the
+  configured snapshot window;
+- repeated equivalent stale/missing alerts are deduped through persisted
+  `usage_drift_alerts`, and the alert record resolves when all active reserved
+  jobs regain fresh snapshots or are no longer active/reserved;
+- mixed projects report only the stale/missing subset in `missing_job_ids`, so
+  jobs with fresh telemetry are excluded from the alert payload;
+- this alert path is informational and does not change quota admission, quota
+  grants, or quota release behavior.
+
+This is local control-plane/UI evidence only. `USAGE-013`, `USAGE-014`,
+`USAGE-017`, `USAGE-018`, and `USAGE-035` through `USAGE-037` still require
+real node-level GPU/process evidence, including DCGM or NVIDIA tooling where
+available, process-exporter or equivalent process telemetry, PID/cgroup/CRI
+container mapping, MPS server overhead handling, and live multi-user MPS E2E.
+The `USAGE-032` / `MON-018` stale/missing alert evidence above is also local
+only; it does not prove live node-agent failure, live GPU hardware telemetry, or
+full MON completion.

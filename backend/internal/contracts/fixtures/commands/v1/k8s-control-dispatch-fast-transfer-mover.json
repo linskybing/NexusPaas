@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "contract_name": "k8s_control.dispatch_fast_transfer_mover",
+  "owner_service": "k8s-control-service",
+  "consumer_service": "storage-service",
+  "resource": "k8s-control-service:fast_transfer_mover_jobs",
+  "action": "create",
+  "method": "POST",
+  "path": "/internal/k8s-control/fast-transfers/mover-jobs",
+  "auth": "service_key",
+  "service_key_required": true,
+  "path_parameters": [],
+  "required_request_fields": ["project_id", "transfer_id", "target_namespace", "name", "source", "target"],
+  "request_example": {
+    "project_id": "P1",
+    "transfer_id": "P1:project-p1:copy1",
+    "target_namespace": "project-p1",
+    "name": "copy1",
+    "source": {
+      "namespace": "project-p1",
+      "pvc": "dataset-pvc",
+      "path": "/data/source"
+    },
+    "target": {
+      "namespace": "project-p1",
+      "pvc": "scratch-pvc",
+      "path": "/data/target"
+    },
+    "tool": "rsync",
+    "progress_callback": {
+      "path": "/internal/storage/projects/P1/transfers/project-p1/copy1/progress"
+    }
+  },
+  "success_statuses": [200, 201],
+  "error_statuses": [400, 401, 409, 422, 502],
+  "idempotency": {
+    "idempotent": true,
+    "semantic_key": ["target_namespace", "name", "transfer_id"],
+    "behavior": "Repeating the same transfer_id for the same Kubernetes Job identity returns already_exists without mutating the Job."
+  },
+  "emits_events": [],
+  "response_example": {
+    "namespace": "project-p1",
+    "name": "fast-transfer-copy1",
+    "action": "created"
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

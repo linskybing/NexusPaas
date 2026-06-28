@@ -1,0 +1,21 @@
+{
+  "event_id": "66666666-6666-4666-8666-666666666662",
+  "schema_version": 1,
+  "event_type": "FastTransferProgressed",
+  "producer": "storage-service",
+  "occurred_at": "2026-06-27T00:00:00Z",
+  "trace_id": "trace-fast-transfer-progressed-v1",
+  "request_id": "req-fast-transfer-progressed-v1",
+  "aggregate_id": "P1:project-P1:copy1",
+  "payload": {
+    "transfer_id": "P1:project-P1:copy1",
+    "project_id": "P1",
+    "target_namespace": "project-P1",
+    "name": "copy1",
+    "status": "running",
+    "progress_pct": 25,
+    "bytes_done": 1024,
+    "bytes_total": 4096,
+    "action": "running"
+  }
+}

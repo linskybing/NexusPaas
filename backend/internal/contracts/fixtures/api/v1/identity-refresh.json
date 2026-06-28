@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "contract_name": "identity.refresh",
+  "owner_service": "identity-service",
+  "api_surface": "external_rest",
+  "consumer": "public-auth-client",
+  "resource": "identity-service:refresh_tokens",
+  "action": "create",
+  "method": "POST",
+  "path": "/api/v1/refresh",
+  "auth": "public",
+  "auth_required": false,
+  "service_key_required": false,
+  "path_parameters": [],
+  "required_request_fields": [
+    "refresh_token"
+  ],
+  "optional_request_fields": [],
+  "request_example": {
+    "refresh_token": "fake-refresh-token"
+  },
+  "success_statuses": [
+    200
+  ],
+  "error_statuses": [
+    400,
+    401,
+    503
+  ],
+  "emits_events": [],
+  "response_example": {
+    "token": "fake-session-token-rotated",
+    "refresh_token": "fake-refresh-token-rotated"
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

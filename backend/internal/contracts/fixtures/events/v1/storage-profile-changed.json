@@ -1,0 +1,19 @@
+{
+  "event_id": "99999999-9999-4999-8999-999999999999",
+  "schema_version": 1,
+  "event_type": "StorageProfileChanged",
+  "producer": "storage-service",
+  "occurred_at": "2026-06-27T00:00:00Z",
+  "trace_id": "trace-storage-profile-changed-v1",
+  "request_id": "req-storage-profile-changed-v1",
+  "aggregate_id": "longhorn-rwx-standard",
+  "payload": {
+    "profile_id": "longhorn-rwx-standard",
+    "name": "Longhorn RWX standard",
+    "provider": "longhorn",
+    "tier": "standard",
+    "access_mode": "rwx",
+    "storage_class_name": "longhorn-rwx-standard",
+    "action": "created"
+  }
+}

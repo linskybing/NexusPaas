@@ -1,0 +1,19 @@
+{
+  "event_id": "55555555-5555-4555-8555-555555555555",
+  "schema_version": 1,
+  "event_type": "CacheBindingChanged",
+  "producer": "storage-service",
+  "occurred_at": "2026-06-27T00:00:00Z",
+  "trace_id": "trace-cache-binding-changed-v1",
+  "request_id": "req-cache-binding-changed-v1",
+  "aggregate_id": "cache-project-1-pvc-data-dataset-v1",
+  "payload": {
+    "cache_binding_id": "cache-project-1-pvc-data-dataset-v1",
+    "project_id": "project-1",
+    "storage_binding_id": "pvc-data",
+    "cache_key": "dataset-v1",
+    "node_class": "gpu-hpc",
+    "scratch_profile": "local-nvme-scratch",
+    "action": "upserted"
+  }
+}

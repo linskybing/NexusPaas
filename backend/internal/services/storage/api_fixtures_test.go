@@ -36,6 +36,47 @@ func TestCreateStoragePermissionExternalAPIFixtureMatchesSpec(t *testing.T) {
 	assertCreateStoragePermissionExternalAPIRouteMetadata(t, route, fixture)
 }
 
+func TestCreateStorageProfileExternalAPIFixtureMatchesSpec(t *testing.T) {
+	fixture := readStorageExternalAPIFixture(t, "storage-create-profile.json")
+	spec := Spec()
+	route, ok := findStorageExternalRoute(spec.Routes, fixture.Method, fixture.Path)
+	if !ok {
+		t.Fatalf("route %s %s not found in Spec()", fixture.Method, fixture.Path)
+	}
+
+	if fixture.ContractName != "storage.create_profile" {
+		t.Fatalf("contract_name = %q, want storage.create_profile", fixture.ContractName)
+	}
+	if got, want := fixture.Resource, spec.Name+":"+route.Resource; got != want {
+		t.Fatalf("resource = %q, want %q", got, want)
+	}
+	if fixture.Action != route.Action || route.Resource != "storage_profiles" || route.Action != "create" {
+		t.Fatalf("route metadata = fixture action %q route %s/%s, want create storage_profiles", fixture.Action, route.Resource, route.Action)
+	}
+	if route.Method != http.MethodPost || route.Pattern != "/api/v1/storage-profiles" || !route.Admin || !route.AuthRequired || route.ServiceAuthRequired {
+		t.Fatalf("route = %#v, want admin POST /api/v1/storage-profiles", route)
+	}
+	if !reflect.DeepEqual(fixture.RequiredRequestFields, []string{"name", "provider", "tier", "access_mode"}) {
+		t.Fatalf("required_request_fields = %v, want [name provider tier access_mode]", fixture.RequiredRequestFields)
+	}
+	if !reflect.DeepEqual(fixture.OptionalRequestFields, []string{"id", "performance_class", "storage_class_name", "mount_mode", "mount_options", "node_selector", "topology_policy", "allow_cross_namespace", "allowed_project_scopes"}) {
+		t.Fatalf("optional_request_fields = %v, want storage profile optional fields", fixture.OptionalRequestFields)
+	}
+	if !reflect.DeepEqual(fixture.SuccessStatuses, []int{http.StatusCreated}) {
+		t.Fatalf("success_statuses = %v, want [201]", fixture.SuccessStatuses)
+	}
+	if !reflect.DeepEqual(fixture.EmitsEvents, []string{"StorageProfileChanged"}) || !storageServiceEmitsEvent(spec, "StorageProfileChanged") {
+		t.Fatalf("emits_events = %v and spec events = %v, want StorageProfileChanged", fixture.EmitsEvents, spec.Events)
+	}
+	data, ok := fixture.ResponseExample["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("response_example.data = %T, want object", fixture.ResponseExample["data"])
+	}
+	if got, want := data["storage_class_name"], "local-nvme-scratch"; got != want {
+		t.Fatalf("response_example.data.storage_class_name = %v, want %v", got, want)
+	}
+}
+
 func TestUpdateProjectStoragePermissionExternalAPIFixtureMatchesSpec(t *testing.T) {
 	fixture := readStorageExternalAPIFixture(t, "storage-update-project-permission.json")
 	spec := Spec()
@@ -82,6 +123,150 @@ func TestBatchDeleteProjectStoragePermissionsExternalAPIFixtureMatchesSpec(t *te
 
 	assertBatchDeleteProjectStoragePermissionsExternalAPIFixtureMetadata(t, fixture, spec, route)
 	assertBatchDeleteProjectStoragePermissionsExternalAPIRouteMetadata(t, route, fixture)
+}
+
+func TestCacheBindingExternalAPIFixturesMatchSpec(t *testing.T) {
+	tests := []struct {
+		file       string
+		contract   string
+		action     string
+		method     string
+		path       string
+		pathParams []string
+		success    []int
+		errors     []int
+		events     []string
+	}{
+		{
+			file:       "storage-list-cache-bindings.json",
+			contract:   "storage.list_cache_bindings",
+			action:     "list",
+			method:     http.MethodGet,
+			path:       "/api/v1/projects/{id}/storage/cache-bindings",
+			pathParams: []string{"id"},
+			success:    []int{http.StatusOK},
+			errors:     []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError},
+			events:     []string{},
+		},
+		{
+			file:       "storage-get-cache-binding.json",
+			contract:   "storage.get_cache_binding",
+			action:     "get",
+			method:     http.MethodGet,
+			path:       pathProjectStorageCacheBinding,
+			pathParams: []string{"id", "cacheBindingId"},
+			success:    []int{http.StatusOK},
+			errors:     []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError},
+			events:     []string{},
+		},
+		{
+			file:       "storage-update-cache-binding.json",
+			contract:   "storage.update_cache_binding",
+			action:     "update",
+			method:     http.MethodPut,
+			path:       pathProjectStorageCacheBinding,
+			pathParams: []string{"id", "cacheBindingId"},
+			success:    []int{http.StatusOK},
+			errors:     []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusInternalServerError},
+			events:     []string{cacheBindingChangedEvent},
+		},
+		{
+			file:       "storage-delete-cache-binding.json",
+			contract:   "storage.delete_cache_binding",
+			action:     "delete",
+			method:     http.MethodDelete,
+			path:       pathProjectStorageCacheBinding,
+			pathParams: []string{"id", "cacheBindingId"},
+			success:    []int{http.StatusOK},
+			errors:     []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError},
+			events:     []string{cacheBindingChangedEvent},
+		},
+	}
+	spec := Spec()
+	for _, tt := range tests {
+		t.Run(tt.action, func(t *testing.T) {
+			fixture := readStorageExternalAPIFixture(t, tt.file)
+			route, ok := findStorageExternalRoute(spec.Routes, fixture.Method, fixture.Path)
+			if !ok {
+				t.Fatalf("route %s %s not found in Spec()", fixture.Method, fixture.Path)
+			}
+			assertStorageExternalAPIFixtureMetadata(t, fixture, spec, route, tt.contract, tt.action)
+			assertCacheBindingExternalAPIRouteMetadata(t, route, fixture, tt.method, tt.path, tt.action)
+			assertCacheBindingExternalAPIRequestShape(t, fixture, tt.pathParams, tt.action)
+			assertStorageExternalAPIStatusesAndEvents(t, fixture, spec, tt.success, tt.errors, tt.events)
+			assertCacheBindingExternalAPIResponseShape(t, fixture, tt.action)
+		})
+	}
+}
+
+func TestFastTransferExternalAPIFixturesMatchSpec(t *testing.T) {
+	tests := []struct {
+		file       string
+		contract   string
+		action     string
+		method     string
+		path       string
+		pathParams []string
+		success    []int
+		errors     []int
+		events     []string
+		status     string
+		adapter    string
+	}{
+		{
+			file:       "storage-start-fast-transfer.json",
+			contract:   "storage.start_fast_transfer",
+			action:     "command",
+			method:     http.MethodPost,
+			path:       "/api/v1/projects/{id}/storage/transfers/fast-stage",
+			pathParams: []string{"id"},
+			success:    []int{http.StatusAccepted},
+			errors:     []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict},
+			events:     []string{fastTransferChangedEvent, fastTransferQueuedEvent},
+			status:     fastTransferStatusQueued,
+			adapter:    "minio",
+		},
+		{
+			file:       "storage-get-fast-transfer.json",
+			contract:   "storage.get_fast_transfer",
+			action:     "get",
+			method:     http.MethodGet,
+			path:       "/api/v1/projects/{id}/storage/transfers/{targetNamespace}/{name}",
+			pathParams: []string{"id", "targetNamespace", "name"},
+			success:    []int{http.StatusOK},
+			errors:     []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound},
+			events:     []string{},
+			status:     fastTransferStatusRunning,
+		},
+		{
+			file:       "storage-cancel-fast-transfer.json",
+			contract:   "storage.cancel_fast_transfer",
+			action:     "command",
+			method:     http.MethodDelete,
+			path:       "/api/v1/projects/{id}/storage/transfers/{targetNamespace}/{name}",
+			pathParams: []string{"id", "targetNamespace", "name"},
+			success:    []int{http.StatusOK},
+			errors:     []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusInternalServerError},
+			events:     []string{fastTransferChangedEvent},
+			status:     fastTransferStatusCancelled,
+			adapter:    "minio",
+		},
+	}
+	spec := Spec()
+	for _, tt := range tests {
+		t.Run(tt.contract, func(t *testing.T) {
+			fixture := readStorageExternalAPIFixture(t, tt.file)
+			route, ok := findStorageExternalRoute(spec.Routes, fixture.Method, fixture.Path)
+			if !ok {
+				t.Fatalf("route %s %s not found in Spec()", fixture.Method, fixture.Path)
+			}
+			assertStorageExternalAPIFixtureMetadata(t, fixture, spec, route, tt.contract, tt.action)
+			assertFastTransferExternalAPIRouteMetadata(t, route, fixture, tt.method, tt.path, tt.action, tt.adapter)
+			assertFastTransferExternalAPIRequestShape(t, fixture, tt.pathParams, tt.action, tt.method)
+			assertStorageExternalAPIStatusesAndEvents(t, fixture, spec, tt.success, tt.errors, tt.events)
+			assertFastTransferExternalAPIResponseShape(t, fixture, tt.status)
+		})
+	}
 }
 
 func assertCreateProjectStorageBindingExternalAPIFixtureMetadata(t *testing.T, fixture storageExternalAPIFixture, spec platform.ServiceSpec, route platform.RouteSpec) {
@@ -237,6 +422,31 @@ func assertProjectStoragePermissionsBatchExternalAPIBaseMetadata(t *testing.T, f
 	}
 }
 
+func assertStorageExternalAPIFixtureMetadata(t *testing.T, fixture storageExternalAPIFixture, spec platform.ServiceSpec, route platform.RouteSpec, contractName, action string) {
+	t.Helper()
+	if fixture.ContractName != contractName {
+		t.Fatalf("contract_name = %q, want %s", fixture.ContractName, contractName)
+	}
+	if fixture.OwnerService != spec.Name {
+		t.Fatalf("owner_service = %q, want %q", fixture.OwnerService, spec.Name)
+	}
+	if fixture.APISurface != "external_rest" {
+		t.Fatalf("api_surface = %q, want external_rest", fixture.APISurface)
+	}
+	if fixture.Consumer != "authenticated-user-client" {
+		t.Fatalf("consumer = %q, want authenticated-user-client", fixture.Consumer)
+	}
+	if got, want := fixture.Resource, spec.Name+":"+route.Resource; got != want {
+		t.Fatalf("resource = %q, want %q", got, want)
+	}
+	if fixture.Action != action || route.Action != action {
+		t.Fatalf("action fixture/route = %q/%q, want %q", fixture.Action, route.Action, action)
+	}
+	if fixture.Auth != "user" || !fixture.AuthRequired || fixture.AuthRequired != route.AuthRequired || fixture.ServiceKeyRequired != route.ServiceAuthRequired {
+		t.Fatalf("auth metadata = %q/%v/%v, want user/%v/%v", fixture.Auth, fixture.AuthRequired, fixture.ServiceKeyRequired, route.AuthRequired, route.ServiceAuthRequired)
+	}
+}
+
 func assertCreateProjectStorageBindingExternalAPIRequestShape(t *testing.T, fixture storageExternalAPIFixture) {
 	t.Helper()
 	if !reflect.DeepEqual(fixture.PathParameters, []string{"id"}) {
@@ -384,6 +594,71 @@ func assertProjectStoragePermissionsBatchItemField(t *testing.T, fields map[stri
 	}
 }
 
+func assertCacheBindingExternalAPIRequestShape(t *testing.T, fixture storageExternalAPIFixture, pathParams []string, action string) {
+	t.Helper()
+	if !reflect.DeepEqual(fixture.PathParameters, pathParams) {
+		t.Fatalf("path_parameters = %v, want %v", fixture.PathParameters, pathParams)
+	}
+	switch action {
+	case "update":
+		if !reflect.DeepEqual(fixture.RequiredRequestFields, []string{"storage_binding_id", "cache_key", "scratch_profile"}) {
+			t.Fatalf("required_request_fields = %v, want cache binding required fields", fixture.RequiredRequestFields)
+		}
+		if !reflect.DeepEqual(fixture.OptionalRequestFields, []string{"id", "node_class", "node_selector", "last_staged_at"}) {
+			t.Fatalf("optional_request_fields = %v, want cache binding optional fields", fixture.OptionalRequestFields)
+		}
+		for _, field := range []string{"storage_binding_id", "cache_key", "scratch_profile"} {
+			if strings.TrimSpace(textFromFixture(fixture.RequestExample[field])) == "" {
+				t.Fatalf("request_example.%s = %v, want non-empty string", field, fixture.RequestExample[field])
+			}
+		}
+	default:
+		if len(fixture.RequiredRequestFields) != 0 || len(fixture.OptionalRequestFields) != 0 || len(fixture.RequestExample) != 0 {
+			t.Fatalf("request fields = required %v optional %v example %v, want no body", fixture.RequiredRequestFields, fixture.OptionalRequestFields, fixture.RequestExample)
+		}
+	}
+}
+
+func assertFastTransferExternalAPIRequestShape(t *testing.T, fixture storageExternalAPIFixture, pathParams []string, action, method string) {
+	t.Helper()
+	if !reflect.DeepEqual(fixture.PathParameters, pathParams) {
+		t.Fatalf("path_parameters = %v, want %v", fixture.PathParameters, pathParams)
+	}
+	if action == "command" && method == http.MethodPost {
+		if len(fixture.RequiredRequestFields) != 0 {
+			t.Fatalf("required_request_fields = %v, want none", fixture.RequiredRequestFields)
+		}
+		wantOptional := []string{"name", "target_namespace", "source", "target", "tool", "bytes_total", "checksum", "resume_token", "idempotency_key"}
+		if !reflect.DeepEqual(fixture.OptionalRequestFields, wantOptional) {
+			t.Fatalf("optional_request_fields = %v, want %v", fixture.OptionalRequestFields, wantOptional)
+		}
+		for _, field := range []string{"name", "target_namespace", "tool", "idempotency_key"} {
+			if strings.TrimSpace(textFromFixture(fixture.RequestExample[field])) == "" {
+				t.Fatalf("request_example.%s = %v, want non-empty string", field, fixture.RequestExample[field])
+			}
+		}
+		assertFastTransferEndpointExample(t, fixture.RequestExample, "source")
+		assertFastTransferEndpointExample(t, fixture.RequestExample, "target")
+		return
+	}
+	if len(fixture.RequiredRequestFields) != 0 || len(fixture.OptionalRequestFields) != 0 || len(fixture.RequestExample) != 0 {
+		t.Fatalf("request fields = required %v optional %v example %v, want no body", fixture.RequiredRequestFields, fixture.OptionalRequestFields, fixture.RequestExample)
+	}
+}
+
+func assertFastTransferEndpointExample(t *testing.T, request map[string]any, field string) {
+	t.Helper()
+	endpoint, ok := request[field].(map[string]any)
+	if !ok {
+		t.Fatalf("request_example.%s = %T, want object", field, request[field])
+	}
+	for _, key := range []string{"namespace", "pvc", "path"} {
+		if strings.TrimSpace(textFromFixture(endpoint[key])) == "" {
+			t.Fatalf("request_example.%s.%s = %v, want non-empty string", field, key, endpoint[key])
+		}
+	}
+}
+
 func assertCreateProjectStorageBindingExternalAPIStatusesAndEvents(t *testing.T, fixture storageExternalAPIFixture, spec platform.ServiceSpec) {
 	t.Helper()
 	if !reflect.DeepEqual(fixture.SuccessStatuses, []int{http.StatusCreated}) {
@@ -461,6 +736,24 @@ func assertProjectStoragePermissionsBatchExternalAPIStatusesAndEvents(t *testing
 	}
 	if !storageServiceEmitsEvent(spec, "ProjectStoragePermissionChanged") {
 		t.Fatal("Spec().Events does not include ProjectStoragePermissionChanged")
+	}
+}
+
+func assertStorageExternalAPIStatusesAndEvents(t *testing.T, fixture storageExternalAPIFixture, spec platform.ServiceSpec, success, errors []int, events []string) {
+	t.Helper()
+	if !reflect.DeepEqual(fixture.SuccessStatuses, success) {
+		t.Fatalf("success_statuses = %v, want %v", fixture.SuccessStatuses, success)
+	}
+	if !reflect.DeepEqual(fixture.ErrorStatuses, errors) {
+		t.Fatalf("error_statuses = %v, want %v", fixture.ErrorStatuses, errors)
+	}
+	if !reflect.DeepEqual(fixture.EmitsEvents, events) {
+		t.Fatalf("emits_events = %v, want %v", fixture.EmitsEvents, events)
+	}
+	for _, event := range events {
+		if !storageServiceEmitsEvent(spec, event) {
+			t.Fatalf("Spec().Events does not include %s", event)
+		}
 	}
 }
 
@@ -563,6 +856,82 @@ func assertProjectStoragePermissionsBatchExternalAPIResponseShape(t *testing.T, 
 	}
 }
 
+func assertCacheBindingExternalAPIResponseShape(t *testing.T, fixture storageExternalAPIFixture, action string) {
+	t.Helper()
+	switch action {
+	case "list":
+		items, ok := fixture.ResponseExample["data"].([]any)
+		if !ok || len(items) == 0 {
+			t.Fatalf("response_example.data = %T/%v, want non-empty array", fixture.ResponseExample["data"], fixture.ResponseExample["data"])
+		}
+		item, ok := items[0].(map[string]any)
+		if !ok {
+			t.Fatalf("response_example.data[0] = %T, want object", items[0])
+		}
+		assertCacheBindingResponseFields(t, item)
+	case "delete":
+		if got, want := fixture.ResponseExample["id"], "project-1-pvc-data-dataset-tokenized-v1-gpu-hpc"; got != want {
+			t.Fatalf("response_example.id = %v, want %v", got, want)
+		}
+		if got, want := fixture.ResponseExample["deleted"], true; got != want {
+			t.Fatalf("response_example.deleted = %v, want %v", got, want)
+		}
+	default:
+		assertCacheBindingResponseFields(t, fixture.ResponseExample)
+	}
+}
+
+func assertCacheBindingResponseFields(t *testing.T, data map[string]any) {
+	t.Helper()
+	want := map[string]any{
+		"id":                 "project-1-pvc-data-dataset-tokenized-v1-gpu-hpc",
+		"project_id":         "project-1",
+		"storage_binding_id": "pvc-data",
+		"cache_key":          "dataset-tokenized-v1",
+		"node_class":         "gpu-hpc",
+		"scratch_profile":    "local-nvme-scratch",
+	}
+	for key, wantValue := range want {
+		if got := data[key]; got != wantValue {
+			t.Fatalf("response_example.%s = %v, want %v", key, got, wantValue)
+		}
+	}
+}
+
+func assertFastTransferExternalAPIResponseShape(t *testing.T, fixture storageExternalAPIFixture, status string) {
+	t.Helper()
+	if _, ok := fixture.ResponseExample["data"]; ok {
+		t.Fatal("response_example contains record envelope data field, want direct fast transfer data")
+	}
+	want := map[string]any{
+		"id":               "project-1:project-project-1:copy1",
+		"project_id":       "project-1",
+		"target_namespace": "project-project-1",
+		"name":             "copy1",
+		"status":           status,
+		"idempotency_key":  "idem-copy1",
+	}
+	for key, wantValue := range want {
+		if got := fixture.ResponseExample[key]; got != wantValue {
+			t.Fatalf("response_example.%s = %v, want %v", key, got, wantValue)
+		}
+	}
+	if got, want := fixture.ResponseExample["bytes_total"], float64(4096); got != want {
+		t.Fatalf("response_example.bytes_total = %v, want %v", got, want)
+	}
+	if _, ok := fixture.ResponseExample["progress_pct"].(float64); !ok {
+		t.Fatalf("response_example.progress_pct = %T, want number", fixture.ResponseExample["progress_pct"])
+	}
+	if _, ok := fixture.ResponseExample["bytes_done"].(float64); !ok {
+		t.Fatalf("response_example.bytes_done = %T, want number", fixture.ResponseExample["bytes_done"])
+	}
+	for _, field := range []string{"checksum", "resume_token"} {
+		if _, ok := fixture.ResponseExample[field].(string); !ok {
+			t.Fatalf("response_example.%s = %T, want string", field, fixture.ResponseExample[field])
+		}
+	}
+}
+
 func assertCreateProjectStorageBindingExternalAPIRouteMetadata(t *testing.T, route platform.RouteSpec, fixture storageExternalAPIFixture) {
 	t.Helper()
 	if got, want := route.Resource, "storage_bindings"; got != want {
@@ -594,6 +963,107 @@ func assertCreateProjectStorageBindingExternalAPIRouteMetadata(t *testing.T, rou
 	}
 	if route.ExternalAdapter != "" {
 		t.Fatalf("route ExternalAdapter = %q, want none", route.ExternalAdapter)
+	}
+	if fixture.Method != route.Method || fixture.Path != route.Pattern {
+		t.Fatalf("fixture route = %s %s, want %s %s", fixture.Method, fixture.Path, route.Method, route.Pattern)
+	}
+}
+
+func assertCacheBindingExternalAPIRouteMetadata(t *testing.T, route platform.RouteSpec, fixture storageExternalAPIFixture, method, path, action string) {
+	t.Helper()
+	assertCacheBindingExternalAPIRouteCore(t, route, method, path, action)
+	assertCacheBindingExternalAPIRouteIDParam(t, route, action)
+	assertCacheBindingExternalAPIRouteFlags(t, route, action)
+	assertStorageExternalAPIFixtureRouteParity(t, fixture, route)
+}
+
+func assertCacheBindingExternalAPIRouteCore(t *testing.T, route platform.RouteSpec, method, path, action string) {
+	t.Helper()
+	if got, want := route.Resource, "cache_bindings"; got != want {
+		t.Fatalf("route resource = %q, want %q", got, want)
+	}
+	if got, want := route.Action, action; got != want {
+		t.Fatalf("route action = %q, want %q", got, want)
+	}
+	if route.Method != method || route.Pattern != path {
+		t.Fatalf("route = %s %s, want %s %s", route.Method, route.Pattern, method, path)
+	}
+	if !route.AuthRequired {
+		t.Fatal("route AuthRequired = false, want true")
+	}
+}
+
+func assertCacheBindingExternalAPIRouteIDParam(t *testing.T, route platform.RouteSpec, action string) {
+	t.Helper()
+	if route.IDParam != "id" && action == "list" {
+		t.Fatalf("route IDParam = %q, want id", route.IDParam)
+	}
+	if route.IDParam != "cacheBindingId" && action != "list" {
+		t.Fatalf("route IDParam = %q, want cacheBindingId", route.IDParam)
+	}
+}
+
+func assertCacheBindingExternalAPIRouteFlags(t *testing.T, route platform.RouteSpec, action string) {
+	t.Helper()
+	if route.Admin {
+		t.Fatal("route Admin = true, want false")
+	}
+	if route.StateChanging != (action == "update" || action == "delete") {
+		t.Fatalf("route StateChanging = %v, want %v", route.StateChanging, action == "update" || action == "delete")
+	}
+	if route.ServiceAuthRequired {
+		t.Fatal("route ServiceAuthRequired = true, want false")
+	}
+	if route.PolicyBypass {
+		t.Fatal("route PolicyBypass = true, want false")
+	}
+	if route.ExternalAdapter != "" {
+		t.Fatalf("route ExternalAdapter = %q, want none", route.ExternalAdapter)
+	}
+}
+
+func assertStorageExternalAPIFixtureRouteParity(t *testing.T, fixture storageExternalAPIFixture, route platform.RouteSpec) {
+	t.Helper()
+	if fixture.Method != route.Method || fixture.Path != route.Pattern {
+		t.Fatalf("fixture route = %s %s, want %s %s", fixture.Method, fixture.Path, route.Method, route.Pattern)
+	}
+}
+
+func assertFastTransferExternalAPIRouteMetadata(t *testing.T, route platform.RouteSpec, fixture storageExternalAPIFixture, method, path, action, adapter string) {
+	t.Helper()
+	if got, want := route.Resource, "fast_transfers"; got != want {
+		t.Fatalf("route resource = %q, want %q", got, want)
+	}
+	if got, want := route.Action, action; got != want {
+		t.Fatalf("route action = %q, want %q", got, want)
+	}
+	if route.Method != method || route.Pattern != path {
+		t.Fatalf("route = %s %s, want %s %s", route.Method, route.Pattern, method, path)
+	}
+	if !route.AuthRequired {
+		t.Fatal("route AuthRequired = false, want true")
+	}
+	wantIDParam := "name"
+	if method == http.MethodPost {
+		wantIDParam = "id"
+	}
+	if route.IDParam != wantIDParam {
+		t.Fatalf("route IDParam = %q, want %s", route.IDParam, wantIDParam)
+	}
+	if route.Admin {
+		t.Fatal("route Admin = true, want false")
+	}
+	if route.StateChanging != (method != http.MethodGet) {
+		t.Fatalf("route StateChanging = %v, want %v", route.StateChanging, method != http.MethodGet)
+	}
+	if route.ServiceAuthRequired {
+		t.Fatal("route ServiceAuthRequired = true, want false")
+	}
+	if route.PolicyBypass {
+		t.Fatal("route PolicyBypass = true, want false")
+	}
+	if route.ExternalAdapter != adapter {
+		t.Fatalf("route ExternalAdapter = %q, want %q", route.ExternalAdapter, adapter)
 	}
 	if fixture.Method != route.Method || fixture.Path != route.Pattern {
 		t.Fatalf("fixture route = %s %s, want %s %s", fixture.Method, fixture.Path, route.Method, route.Pattern)
@@ -756,6 +1226,13 @@ func assertProjectStoragePermissionsBatchExternalAPIRouteMetadata(t *testing.T, 
 	if fixture.Method != route.Method || fixture.Path != route.Pattern {
 		t.Fatalf("fixture route = %s %s, want %s %s", fixture.Method, fixture.Path, route.Method, route.Pattern)
 	}
+}
+
+func textFromFixture(value any) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return ""
 }
 
 type storageExternalAPIFixture struct {

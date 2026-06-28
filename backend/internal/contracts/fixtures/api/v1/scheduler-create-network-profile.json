@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "contract_name": "scheduler.create_network_profile",
+  "owner_service": "scheduler-quota-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "scheduler-quota-service:network_profiles",
+  "action": "create",
+  "method": "POST",
+  "path": "/api/v1/network-profiles",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [],
+  "required_request_fields": [
+    "name",
+    "primary_cni"
+  ],
+  "optional_request_fields": [
+    "id",
+    "secondary_network",
+    "rdma_enabled",
+    "roce_enabled",
+    "bandwidth_class",
+    "mtu",
+    "required_nic_class",
+    "topology_policy",
+    "node_selector",
+    "enabled",
+    "annotations",
+    "network_env"
+  ],
+  "request_example": {
+    "id": "rdma-fast-lane",
+    "name": "RDMA fast lane",
+    "primary_cni": "cilium",
+    "secondary_network": "nexuspaas-system/rdma-net",
+    "rdma_enabled": true,
+    "bandwidth_class": "rdma",
+    "annotations": {
+      "k8s.v1.cni.cncf.io/networks": "nexuspaas-system/rdma-net"
+    },
+    "network_env": {
+      "NCCL_SOCKET_IFNAME": "net1",
+      "NCCL_IB_DISABLE": "0"
+    }
+  },
+  "success_statuses": [
+    201
+  ],
+  "error_statuses": [
+    400,
+    401,
+    403,
+    409,
+    500
+  ],
+  "emits_events": [
+    "NetworkProfileChanged"
+  ],
+  "response_example": {
+    "id": "rdma-fast-lane",
+    "data": {
+      "id": "rdma-fast-lane",
+      "name": "RDMA fast lane",
+      "primary_cni": "cilium",
+      "secondary_network": "nexuspaas-system/rdma-net",
+      "rdma_enabled": true,
+      "bandwidth_class": "rdma"
+    },
+    "version": 1,
+    "created_at": "2026-06-27T00:00:00Z",
+    "updated_at": "2026-06-27T00:00:00Z"
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

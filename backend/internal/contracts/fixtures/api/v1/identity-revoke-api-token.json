@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "contract_name": "identity.revoke_api_token",
+  "owner_service": "identity-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "identity-service:api_tokens",
+  "action": "delete",
+  "method": "DELETE",
+  "path": "/api/v1/me/api-tokens/{id}",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [
+    "id"
+  ],
+  "required_request_fields": [],
+  "optional_request_fields": [],
+  "request_example": {},
+  "success_statuses": [
+    200
+  ],
+  "error_statuses": [
+    401,
+    404,
+    500
+  ],
+  "emits_events": [
+    "AuditEvent"
+  ],
+  "response_example": {},
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

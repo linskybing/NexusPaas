@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "contract_name": "storage.list_benchmark_records",
+  "owner_service": "storage-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "storage-service:storage_benchmark_records",
+  "action": "list",
+  "method": "GET",
+  "path": "/api/v1/storage/benchmark-records",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [],
+  "required_request_fields": [],
+  "optional_request_fields": [],
+  "request_example": {},
+  "success_statuses": [200],
+  "error_statuses": [401, 403, 500],
+  "emits_events": [],
+  "response_example": {
+    "data": [
+      {
+        "id": "benchmark-00001",
+        "cluster_id": "prod-gpu-a",
+        "node_pool": "gpu-hpc-h100",
+        "storage_profile": "local-nvme-scratch",
+        "metrics": {
+          "fio_read_gbps": 11.8,
+          "fio_write_gbps": 9.4,
+          "stage_in_gbps": 7.2
+        }
+      }
+    ]
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

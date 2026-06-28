@@ -100,6 +100,48 @@ func TestImageRegistryCatalogRequestsAndBuildWorkflow(t *testing.T) {
 	}
 }
 
+func TestImageBuildSupplyChainDefaultsRecordedAndEmitted(t *testing.T) {
+	app := newImageRegistryTestApp(t)
+
+	code, data, _ := startDockerfileImageBuild(app, imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", imageBuildBody("supply-chain-build", "P1", "registry.local/team/app:supply-chain"), "U1"), platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusAccepted)
+	assertImageBuildSupplyChainDefaults(t, data)
+
+	record, found := app.Store.Get(context.Background(), imageBuildsResource, "supply-chain-build")
+	if !found {
+		t.Fatal("supply-chain build record missing")
+	}
+	assertImageBuildSupplyChainDefaults(t, record.Data)
+
+	events := imageEventsByName(app, "ImageBuildStarted")
+	if len(events) != 1 {
+		t.Fatalf("ImageBuildStarted events = %#v, want one", events)
+	}
+	assertImageBuildSupplyChainDefaults(t, events[0].Data)
+}
+
+func TestImageBuildListingToleratesHistoricalSupplyChainFieldsMissing(t *testing.T) {
+	app := newImageRegistryTestApp(t)
+	createImageRecords(t, app, imageBuildsResource, []map[string]any{
+		{
+			"id":                     "historical-build",
+			"build_id":               "historical-build",
+			"job_name":               "historical-build",
+			"project_id":             "P1",
+			"image_reference":        "registry.local/team/app:historical",
+			"build_type":             "dockerfile",
+			"cpu_cores":              1.0,
+			"memory_gib":             2.0,
+			"max_build_time_seconds": 300,
+			"status":                 "queued",
+		},
+	})
+
+	code, data, _ := listProjectBuilds(app, imageProjectRequest(http.MethodGet, "/api/v1/projects/P1/builds", "", "U2", "P1"), platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusOK)
+	assertProjectBuildPayload(t, data, "historical-build")
+}
+
 func TestImageBuildLogsRedactCommonSecrets(t *testing.T) {
 	app := newImageRegistryTestApp(t)
 	secrets := []struct {
@@ -1178,6 +1220,24 @@ func assertProjectBuildPayload(t *testing.T, data any, buildID string) {
 	builds := data.([]map[string]any)
 	if len(builds) != 1 || builds[0]["id"] != buildID || builds[0]["project_id"] != "P1" || builds[0]["status"] != "queued" {
 		t.Fatalf("project builds = %#v, want one unchanged queued build %s", builds, buildID)
+	}
+}
+
+func assertImageBuildSupplyChainDefaults(t *testing.T, data any) {
+	t.Helper()
+	row := data.(map[string]any)
+	want := map[string]any{
+		"image_digest":            "",
+		"allow_list_decision":     "pending",
+		"sbom_status":             "pending",
+		"signature_status":        "pending",
+		"scan_status":             "pending",
+		"supply_chain_checked_at": nil,
+	}
+	for key, value := range want {
+		if row[key] != value {
+			t.Fatalf("%s = %#v, want %#v in %#v", key, row[key], value, row)
+		}
 	}
 }
 

@@ -1,0 +1,29 @@
+{
+  "event_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  "schema_version": 1,
+  "event_type": "PolicyChanged",
+  "producer": "authorization-policy-service",
+  "occurred_at": "2026-06-28T00:00:00Z",
+  "trace_id": "trace-policy-changed-v1",
+  "request_id": "req-policy-changed-v1",
+  "aggregate_id": "project-ga-alpha",
+  "payload": {
+    "action": "batch_permissions_processed",
+    "operation": {
+      "type": "project_member",
+      "action": "add",
+      "project_id": "project-ga-alpha",
+      "user_id": "user-ga-ada",
+      "role": "viewer"
+    },
+    "operations": [
+      {
+        "type": "project_member",
+        "action": "add",
+        "project_id": "project-ga-alpha",
+        "user_id": "user-ga-ada",
+        "role": "viewer"
+      }
+    ]
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "contract_name": "authorization-policy.unassign_proxy_policy",
+  "owner_service": "authorization-policy-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "authorization-policy-service:proxy_policy_assignments",
+  "action": "delete",
+  "method": "DELETE",
+  "path": "/api/v1/admin/proxy-rbac/policies/{id}/assignments",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [
+    "id"
+  ],
+  "required_request_fields": [
+    "target_type",
+    "target_id"
+  ],
+  "optional_request_fields": [],
+  "request_example": {
+    "target_type": "user",
+    "target_id": "user-ga-ada"
+  },
+  "success_statuses": [
+    200
+  ],
+  "error_statuses": [
+    400,
+    401,
+    403,
+    500
+  ],
+  "emits_events": [
+    "ProxyPolicyChanged"
+  ],
+  "response_example": {},
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

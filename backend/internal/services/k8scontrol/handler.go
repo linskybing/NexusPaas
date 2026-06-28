@@ -25,6 +25,7 @@ func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodDelete, "/api/v1/projects/{id}/resources/{userId}", deleteProjectUserResources)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/resources/{namespace}/pods/{name}/events", listPodEvents)
 	app.RegisterCustomHandler(http.MethodDelete, "/api/v1/resources/{namespace}/{kind}/{name}", deleteResource)
+	app.RegisterCustomHandler(http.MethodPost, "/internal/k8s-control/fast-transfers/mover-jobs", createFastTransferMoverJob)
 	registerDockerCleanup(app)
 }
 

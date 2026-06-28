@@ -38,6 +38,7 @@ func Spec() platform.ServiceSpec {
 			route(http.MethodPost, "/api/v1/projects/{id}/resources/cleanup", "project_resources", "command", id("id"), adapter("k8s")),
 			route(http.MethodGet, "/api/v1/resources/{namespace}/pods/{name}/events", "pod_events", "list", id("name"), adapter("k8s")),
 			route(http.MethodDelete, "/api/v1/resources/{namespace}/{kind}/{name}", "resources", "command", id("name"), adapter("k8s")),
+			route(http.MethodPost, "/internal/k8s-control/fast-transfers/mover-jobs", "fast_transfer_mover_jobs", "create", shared.ServiceInternal()),
 			route(http.MethodGet, "/api/v1/ws/exec", "ws_exec", "proxy", adapter("k8s")),
 			route(http.MethodGet, "/api/v1/ws/watch/{namespace}", "ws_namespace_watch", "proxy", id("namespace"), adapter("k8s")),
 			route(http.MethodGet, "/api/v1/ws/watch-project/{projectId}", "ws_project_watch", "proxy", id("projectId"), adapter("k8s")),

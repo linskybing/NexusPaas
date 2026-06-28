@@ -81,3 +81,37 @@ Tags may be displayed, but deployment admission must resolve and enforce digest.
 | IMG-023 | Deleted/unavailable image cannot be used for new deployments. |
 | IMG-024 | Image build status can be listed by CLI and Web UI. |
 | IMG-025 | Build event includes user, Project, source type, resources, image digest, scan status, and allow-list decision. |
+
+## Current Local Evidence
+
+`ImageAccelerationProfile` now has local metadata and contract evidence in
+`image-registry-service`:
+
+- admin CRUD routes under `/api/v1/image-acceleration-profiles`;
+- seeded defaults for `standard-overlayfs`, `estargz-gpu-prewarm`, and
+  `soci-inference-prewarm`;
+- `ImageAccelerationProfileChanged` event fixture and create API fixture;
+- focused tests for idempotent seeding, required fields, admin guard, and event
+  emission.
+
+This is policy/metadata evidence only. It does not prove image conversion,
+lazy-pull runtime support, node prewarm execution, live Harbor build execution,
+SBOM/signing, or full image workflow GA.
+
+Queued image builds now also carry local supply-chain status metadata in the
+response, stored record, and `ImageBuildStarted` event:
+
+- `image_digest=""`;
+- `allow_list_decision="pending"`;
+- `sbom_status="pending"`;
+- `signature_status="pending"`;
+- `scan_status="pending"`;
+- `supply_chain_checked_at=null`.
+
+Given a valid image build request, when it is queued, then those fields are
+present with the pending/empty defaults above. Given a historical
+`ImageBuildStarted` payload or image-build record without those fields, contract
+and listing tests keep schema version `1` valid and treat the missing fields as
+unknown. This is IMG-025 event-shape evidence only; it does not prove completed
+SBOM generation, scan execution, signing, allow-list admission, live
+Tekton/BuildKit/Harbor execution, or image promotion.

@@ -63,3 +63,39 @@ inbox_events
 | DATA-016 | Drift checks compare owner data and read-model data. |
 | DATA-017 | Outbox publish lag and consumer lag are observable. |
 | DATA-018 | Event replay procedure is documented and tested. |
+
+## Current Local Evidence
+
+`DATA-017` and `DATA-018` have local platform observability evidence:
+
+- `snapshotOutboxInboxMetrics` emits outbox count, consumer lag, projection
+  applied, dead-letter, retry, and replay metrics through
+  `nexuspaas_event_outbox_events`, `nexuspaas_event_consumer_lag`,
+  `nexuspaas_projection_applied_total`,
+  `nexuspaas_projection_dead_letters_total`,
+  `nexuspaas_projection_retry_total`, and
+  `nexuspaas_projection_replay_total`;
+- `TestOperationalEndpointsExposeOutboxInboxRuntimeEvidence` publishes three
+  events, runs a successful read-model projection, runs a failing
+  dead-letter projection, calls `ReplayProjection`, and asserts lag, applied,
+  dead-letter, retry, replay, and second-scrape metric stability.
+
+This is local/in-memory operational endpoint evidence only. It does not prove
+live replay cutover, all-service read-model rebuild, typed ownership
+completion, or Full DATA.
+
+`DATA-014` has partial local evidence for command and deploy/apply idempotency:
+
+- image build create/cancel, workload submit/cancel, and scheduler preemption
+  have deterministic local `Idempotency-Key` replay/conflict tests;
+- workload deploy/apply retry now has local dispatcher evidence: a
+  `waiting_infra` job whose `next_retry_at` is due is retried after the target
+  Kubernetes Job already exists, `cluster.Client.CreateByJSON` treats
+  `AlreadyExists` as success, and the workload record transitions to `running`
+  with a single `created_resources` entry;
+- the deploy/apply evidence is internal retry idempotency, not a new external
+  API header or request contract.
+
+This remains local control-plane/fake-client evidence only. It does not prove
+live Kubernetes deploy replay, live rollback behavior, full `DATA-014`, typed
+data ownership completion, or Full GA.

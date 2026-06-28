@@ -28,7 +28,7 @@ func Spec() platform.ServiceSpec {
 			route(http.MethodPost, permissionPolicy, "policies", "create"),
 			route(http.MethodPut, permissionPolicy, "policies", "update"),
 			route(http.MethodDelete, permissionPolicy, "policies", "delete"),
-			route(http.MethodPost, "/api/v1/permissions/batch", "policies", "batch"),
+			route(http.MethodPost, "/api/v1/permissions/batch", "policies", "batch", admin()),
 			route(http.MethodPost, "/api/v1/permissions/enforce", "permissions", "enforce", serviceInternal()),
 			route(http.MethodPost, "/api/v1/permissions/simulate", "decisions", "simulate", admin()),
 			route(http.MethodGet, "/api/v1/permissions/policies", "policies", "list", admin()),

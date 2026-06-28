@@ -67,8 +67,14 @@ func TestClusterProjectGPUHandlersEnforceVisibility(t *testing.T) {
 	projectReq.SetPathValue("id", "P1")
 	code, data, _ = getProjectGPUUsage(app, projectReq, platform.RouteSpec{})
 	projectUsage := data.(map[string]any)
-	if code != http.StatusOK || projectUsage["used"] != int64(2) {
-		t.Fatalf("project P1 usage status=%d data=%#v, want used=2", code, data)
+	if code != http.StatusOK || projectUsage["used"] != int64(2) || projectUsage["observed_gpu_pods"] != int64(2) {
+		t.Fatalf("project P1 usage status=%d data=%#v, want observed=2", code, data)
+	}
+	if projectUsage["reserved_gpu_fraction"] != 0.75 || projectUsage["reserved_gpu_source"] != gpuSourceClusterAllocation {
+		t.Fatalf("project P1 reserved usage = %#v, want 0.75 from cluster allocation", projectUsage)
+	}
+	if projectUsage["sm_attribution_source"] != smAttributionEstimatedMPS {
+		t.Fatalf("project P1 SM attribution = %#v, want estimated MPS allocation", projectUsage)
 	}
 	if projectUsage["telemetry_stale"] != false {
 		t.Fatalf("project P1 telemetry = %#v, want fresh", projectUsage)
@@ -86,6 +92,57 @@ func TestClusterProjectGPUHandlersEnforceVisibility(t *testing.T) {
 	code, data, _ = getProjectGPUUsage(app, adminReq, platform.RouteSpec{})
 	if code != http.StatusOK || data.(map[string]any)["used"] != int64(1) {
 		t.Fatalf("project P2 admin status=%d data=%#v, want used=1", code, data)
+	}
+}
+
+func TestProjectGPUUsageReservedFallbacks(t *testing.T) {
+	now := time.Now().UTC()
+	summary := clusterSummaryFixture(now)
+	summary["podGpuUsages"] = []any{}
+	app := newClusterHandlerAppWithSummary(t, summary)
+	createClusterRows(t, app, gpuUsageSnapshotsResource, []map[string]any{
+		{"id": "SN1", "project_id": "P1", "pod_name": "pod-a", "pod_namespace": "project-P1", "gpu_index": 0, "gpu_uuid": "GPU-a", "mps_virtual_units": 25, "timestamp": now},
+	})
+
+	req := clusterRequest("/api/v1/projects/P1/gpu-usage", "U1")
+	req.SetPathValue("id", "P1")
+	code, data, _ := getProjectGPUUsage(app, req, platform.RouteSpec{})
+	usage := data.(map[string]any)
+	if code != http.StatusOK || usage["observed_gpu_pods"] != int64(0) || usage["reserved_gpu_fraction"] != 0.25 {
+		t.Fatalf("snapshot fallback usage status=%d data=%#v, want observed=0 reserved=0.25", code, data)
+	}
+	if usage["reserved_gpu_source"] != gpuSourceSnapshotAllocation || usage["sm_attribution_source"] != smAttributionEstimatedMPS {
+		t.Fatalf("snapshot fallback sources = %#v, want snapshot + estimated MPS", usage)
+	}
+
+	workloadSummary := clusterSummaryFixture(now)
+	workloadSummary["podGpuUsages"] = []any{}
+	workloadApp := newClusterHandlerAppWithSummary(t, workloadSummary)
+	workloadApp.Config.ServiceName = "all"
+	createClusterRows(t, workloadApp, workloadJobsResource, []map[string]any{
+		{"id": "J1", "project_id": "P1", "status": "running", "reservation_payload": map[string]any{"reserved": map[string]any{"gpu": 1.5}}},
+	})
+	code, data, _ = getProjectGPUUsage(workloadApp, req, platform.RouteSpec{})
+	usage = data.(map[string]any)
+	if code != http.StatusOK || usage["reserved_gpu_fraction"] != 1.5 || usage["reserved_gpu_source"] != gpuSourceWorkloadAllocation {
+		t.Fatalf("workload fallback usage status=%d data=%#v, want reserved=1.5 from workload jobs", code, data)
+	}
+}
+
+func TestProjectGPUUsageUnavailableSMSourceIsNotMeasured(t *testing.T) {
+	now := time.Now().UTC()
+	summary := clusterSummaryFixture(now)
+	summary["podGpuUsages"] = []any{
+		map[string]any{"project_id": "P1", "namespace": "project-P1", "reserved_gpu_fraction": 1, "gpu_sm_util_source": "unavailable"},
+	}
+	app := newClusterHandlerAppWithSummary(t, summary)
+
+	req := clusterRequest("/api/v1/projects/P1/gpu-usage", "U1")
+	req.SetPathValue("id", "P1")
+	code, data, _ := getProjectGPUUsage(app, req, platform.RouteSpec{})
+	usage := data.(map[string]any)
+	if code != http.StatusOK || usage["sm_attribution_source"] != gpuSourceUnavailable {
+		t.Fatalf("project SM attribution status=%d data=%#v, want unavailable not measured", code, data)
 	}
 }
 
@@ -234,9 +291,9 @@ func clusterSummaryFixture(collectedAt time.Time) map[string]any {
 		"collectedAt":  collectedAt,
 		"nodes":        []any{map[string]any{"name": "gpu-b"}, map[string]any{"name": "gpu-a"}},
 		"podGpuUsages": []any{
-			map[string]any{"project_id": "P1", "namespace": "proj-p1-alice"},
-			map[string]any{"namespace": "project-P1"},
-			map[string]any{"project_id": "P2", "namespace": "proj-p2-admin"},
+			map[string]any{"project_id": "P1", "namespace": "proj-p1-alice", "reserved_gpu_fraction": 0.25, "gpu_sm_util_source": "dcgm"},
+			map[string]any{"namespace": "project-P1", "mps_virtual_units": 50},
+			map[string]any{"project_id": "P2", "namespace": "proj-p2-admin", "requested_gpu": 1},
 		},
 	}
 }

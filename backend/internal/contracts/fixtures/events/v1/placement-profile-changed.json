@@ -1,0 +1,19 @@
+{
+  "event_id": "77777777-7777-4777-8777-777777777777",
+  "schema_version": 1,
+  "event_type": "PlacementProfileChanged",
+  "producer": "scheduler-quota-service",
+  "occurred_at": "2026-06-27T00:00:00Z",
+  "trace_id": "trace-placement-profile-changed-v1",
+  "request_id": "req-placement-profile-changed-v1",
+  "aggregate_id": "kueue-batch",
+  "payload": {
+    "placement_profile_id": "kueue-batch",
+    "profile_id": "kueue-batch",
+    "name": "Kueue batch",
+    "scheduler_backend": "kueue",
+    "scheduler_name": "default-scheduler",
+    "queue_label_key": "kueue.x-k8s.io/queue-name",
+    "action": "created"
+  }
+}

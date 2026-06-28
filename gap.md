@@ -1,6 +1,6 @@
 # AC Completion — GA Gap Tracker
 
-_Updated: 2026-06-22 (re-verified). Bar: **Full GA**
+_Updated: 2026-06-28 (re-verified; plan-ledger hygiene pass). Bar: **Full GA**
 (`docs/acceptance/ga-checklist.md`), not just the v1 launch bar._
 
 ## First Version (V1) Status — single source of truth
@@ -124,6 +124,18 @@ P0.2-P0.5 launch evidence remains open.
 | `STORAGE-002` mount-plan isolation | `storage/mount_plan_contracts_test.go` direct in-memory resolver tests for unrelated Project binding rejection and other-user permission denial | Done for local/in-memory cross-Project and cross-user mount-plan isolation proof only |
 | `STORAGE-003` permission-management RBAC | `storage/handler_test.go` direct handler tests prove a plain group member / Project reader cannot create, batch-set, or batch-delete group/project storage permission rows, and denied deletes leave seeded rows intact | Done for local handler-level storage permission-management RBAC proof only |
 | `STORAGE-004` audit | `storage/mount_plan_contracts.go` `StorageMountPlanResolved` + project-scoped AuditEvent | Done |
+| Storage DataPlane dispatch API admission | evidence id `2026-06-28-storage-data-plane-kind-admission-e2e`: `backend/internal/e2e/storage_data_plane_kind_admission_e2e_test.go` | Done for env-gated live Kubernetes API admission evidence for storage DataPlane dispatch only; no CSI mount, scheduler success, local PV binding, byte mover behavior, StorageClass runtime validation, storage GA, or Full GA claim |
+| Storage DataPlane cache-hit runtime in kind | evidence ids `2026-06-28-storage-data-plane-cache-hit-kind-runtime-e2e` and `2026-06-28-storage-data-plane-scratch-pvc-provisioning`: `backend/internal/e2e/storage_data_plane_cache_hit_kind_runtime_e2e_test.go`, `backend/internal/services/workload/dispatcher_dataplane.go`, `backend/internal/platform/cluster/volume_share.go` | Done for env-gated kind cache-hit runtime and scratch PVC provisioning evidence only: storage-service built a cache-hit DataPlanePlan, workload-service created the scratch PVC from that plan, dispatched a Pod using the dispatcher-created scratch PVC, the Pod reached `Succeeded`, injected checkpoint env matched the plan, a marker was written to and read back from the scratch PVC, and no stage target PVC was materialized. No stage-in byte copy, CSI/local NVMe/CephFS/Longhorn runtime, quota-aware scratch sizing, checkpoint flush, performance, multi-node behavior, storage GA, Full GA, or V1 external production launch readiness claim |
+| Storage DataPlane stage-in byte copy in kind | evidence id `2026-06-28-storage-data-plane-stagein-kind-runtime-e2e`: `backend/internal/services/workload/dispatcher_dataplane_stagein_kind_e2e_test.go` | Done for env-gated workload-service kind stage-in byte-copy evidence only: a pre-populated stage PVC and stub DataPlanePlan drove workload dispatch, workload-service created the scratch PVC, the generated initContainer copied a small payload from the stage PVC into scratch, the main container read that payload and wrote a checkpoint marker, and a verify Pod read both files back from scratch. No storage-service resolver runtime, storage permission trust-boundary proof, `EnsurePVCMounted`/CSI source projection, local NVMe/CephFS/Longhorn/JuiceFS runtime, checkpoint flush to authority storage, quota-aware scratch sizing, performance, multi-node behavior, storage GA, Full GA, or V1 external production launch readiness claim |
+| FastTransfer mover Job API admission | evidence id `2026-06-28-fast-transfer-mover-kind-admission-e2e`: `backend/internal/e2e/fast_transfer_mover_kind_admission_e2e_test.go` | Done for env-gated live Kubernetes API admission evidence for FastTransfer mover Job creation, repeat `already_exists`, and restricted manifest shape only; no PVC binding, Pod scheduling, rsync execution, bytes moved, progress callback, CSI, storage GA, or Full GA claim |
+| FastTransfer start-to-mover API admission | evidence id `2026-06-28-fast-transfer-start-mover-kind-admission-e2e`: `backend/internal/e2e/fast_transfer_start_mover_kind_admission_e2e_test.go` | Done for env-gated live storage fast-stage-to-k8s-control mover Job admission evidence only; no PVC binding, Pod scheduling, rsync execution, bytes moved, progress callback, CSI, storage GA, or Full GA claim |
+| FastTransfer mover execution in kind | evidence id `2026-06-28-fast-transfer-mover-execution-kind-e2e`: `backend/internal/e2e/fast_transfer_mover_execution_kind_e2e_test.go` | Done for env-gated kind default PVC binding, Pod scheduling, rsync command execution, and one tiny file copied through storage fast-stage -> k8s-control -> mover Job only; no CSI/storage GA, external storage backend, multi-node, multi-file, progress callback, performance, durability, or Full GA claim |
+| FastTransfer progress callback emission in kind | evidence id `2026-06-28-fast-transfer-progress-callback-kind-e2e`: `backend/internal/e2e/fast_transfer_progress_callback_kind_e2e_test.go` | Done for env-gated kind FastTransfer progress callback emission evidence only: the mover Job running inside Kubernetes emitted `running` and `succeeded` HTTP POSTs to an in-cluster callback sink Service. This does not prove live k8s-control-to-storage-service callback delivery, live storage record updates, accurate byte accounting, checksum, resume, progress streaming, external storage backend, multi-node behavior, performance, durability, production-grade secret handling, workload identity, storage GA, or Full GA claim |
+| FastTransfer progress storage state | evidence id `2026-06-28-fast-transfer-progress-state-ledger-sync`: `backend/internal/services/storage/fast_transfer_state_test.go`, `backend/internal/services/storage/handler.go`, `backend/internal/services/storage/spec.go`, and FastTransfer event fixtures | Done for local/in-memory storage-service handler evidence only: queued -> running -> succeeded record updates, monotonic progress/bytes checks, terminal transition rejection, scoped service identity authorization, and `FastTransferProgressed`/`FastTransferCompleted` event emission are covered. No live k8s-control-to-storage-service callback delivery, live record updates from a Kubernetes mover Job, Redis delivery, accurate byte accounting, checksum correctness, resume, production secret handling, external storage backend, multi-node behavior, performance, durability, storage GA, Full GA, or V1 launch readiness claim |
+| FastTransfer progress callback-to-storage in kind | evidence id `2026-06-28-fast-transfer-progress-storage-kind-e2e`: `backend/internal/e2e/fast_transfer_progress_storage_kind_e2e_test.go` | Done for env-gated kind callback-to-storage evidence only: storage fast-stage created a mover Job, the mover copied one tiny file, the mover POSTed progress callbacks back to storage-service, the storage FastTransfer record reached `succeeded` / `progress_pct=100`, and `FastTransferProgressed` plus `FastTransferCompleted` were emitted in the in-memory event bus. No Redis delivery, durable Postgres persistence, production service identity/secret handling, accurate byte accounting, checksum correctness, resume, external storage backend, multi-node behavior, performance, durability, storage GA, Full GA, or V1 external production launch readiness claim |
+| FastTransfer custom API fixtures | evidence id `2026-06-28-fast-transfer-api-fixtures`: `backend/internal/contracts/fixtures/api/v1/storage-start-fast-transfer.json`, `storage-get-fast-transfer.json`, `storage-cancel-fast-transfer.json`, `backend/internal/contracts/api_fixtures_test.go`, and `backend/internal/services/storage/api_fixtures_test.go` | Done for local/static typed external API fixture parity for custom FastTransfer fast-stage start, get, and DELETE cancel routes only. No generic/legacy transfer route coverage, live transfer execution, live authorization, live k8s-control callback delivery, bytes moved, checksum correctness, resume, external storage backend, storage GA, Full GA, or V1 external production launch readiness claim |
+| Storage CacheBinding and BenchmarkRecord metadata | evidence id `2026-06-28-storage-cache-benchmark-ledger-sync`: `backend/internal/services/storage/cache_binding_test.go`, `backend/internal/services/storage/benchmark_record_test.go`, and storage API/event fixtures | Done for local/static storage metadata evidence only: CacheBinding project-manager scoped CRUD and DataPlanePlan cache-hit marking from an existing CacheBinding are covered by focused storage tests; `CacheBindingChanged` is implemented by the handler and declared in service Spec/API/event fixtures; StorageBenchmarkRecord create/list behavior, required `storage_profile`, and `StorageBenchmarkRecorded` event emission are covered by focused storage tests, with typed create/list fixture coverage in the contracts suite. No live cache residency, node-local NVMe reuse, cache eviction, live benchmark execution, fio/IOR/NCCL measurement collection, performance baselines, Kubernetes storage backend behavior, storage GA, Full GA, or V1 external production launch readiness claim |
+| Storage CacheBinding typed API fixtures | evidence id `2026-06-28-storage-cache-binding-api-fixtures`: `backend/internal/contracts/fixtures/api/v1/storage-list-cache-bindings.json`, `storage-get-cache-binding.json`, `storage-update-cache-binding.json`, `storage-delete-cache-binding.json`, `backend/internal/contracts/api_fixtures_test.go`, and `backend/internal/services/storage/api_fixtures_test.go` | Done for local/static typed external API fixture parity for CacheBinding list/get/update/delete alongside the existing create fixture only. No live CRUD behavior, live authorization, node-local cache residency, DataPlanePlan runtime behavior, storage GA, Full GA, or V1 external production launch readiness claim |
 | `SECRET-001..003` (v1 policy) | `schedulerquota/admission_resources.go` + `admission.go` reject raw `Secret`, safe `SecretAccessRejected`/`AuditEvent`; dispatcher defense-in-depth | Done |
 | `AUDIT-001..004` | `auditcompliance/handler.go` read-time hash chain, CSV integrity columns, brand naming, project/group-scoped audit-log query RBAC with event-fed read models; `auditcompliance/cleanup.go` service-internal retention cleanup trigger | Done |
 | `PLANADMIN-001..003` | `schedulerquota/handler.go` actor + old/new on Plan/Queue events | Done |
@@ -132,6 +144,36 @@ P0.2-P0.5 launch evidence remains open.
 | SEC/CLI token lifecycle strengthen | `identity/auth_repository.go`, `auth.go`, internal identity auth contracts, and cleanup worker enforce session expiry, one-time refresh rotation/replay rejection, API-token expiry/revocation, and expired/revoked credential cleanup; focused handler/internal-contract tests pass | Done |
 
 Reference: evidence id `2026-06-20-v1-launch-gap-gate`.
+
+2026-06-28 Identity auth/session typed API local/static fixture update:
+`backend/internal/contracts/fixtures/api/v1/identity-register.json`,
+`identity-login.json`, `identity-refresh.json`, and `identity-cli-login.json`
+now record typed external REST fixture coverage for `POST /api/v1/register`,
+`POST /api/v1/login`, `POST /api/v1/refresh`, and `POST /api/v1/cli/login`.
+The fixtures declare public auth posture, exact required credential fields,
+success statuses, and `UserCreated` only for registration. The shared fixture
+validator keeps password/refresh-token example allowances scoped to those four
+identity fixtures, and the identity service parity test checks the metadata
+against `identity.Spec()`. This is local/static typed external API fixture
+coverage only; it does not prove live auth availability, browser cookie
+behavior, OIDC/LDAP behavior, token rotation/revocation, all-critical API typed
+contract coverage, DATA GA, Full GA, or V1 external production launch readiness.
+
+2026-06-28 Identity API-token lifecycle typed API local/static fixture update:
+`backend/internal/contracts/fixtures/api/v1/identity-list-api-tokens.json`,
+`identity-create-api-token.json`, `identity-revoke-api-token.json`, and
+`identity-revoke-current-api-token.json` now record typed external REST fixture
+coverage for `GET /api/v1/me/api-tokens`, `POST /api/v1/me/api-tokens`,
+`DELETE /api/v1/me/api-tokens/{id}`, and
+`DELETE /api/v1/me/api-tokens/current`. The fixtures declare authenticated-user
+auth posture, `id` path-parameter metadata where applicable, required create
+field `name`, success statuses, list/create response fields, and `AuditEvent`
+fixture metadata only for create/revoke. The shared fixture registry and
+identity service parity test check this local/static contract against
+`identity.Spec()` without requiring `AuditEvent` in `identity.Spec().Events`.
+This does not prove live API-token lifecycle behavior, browser cookie behavior,
+OIDC/LDAP behavior, all-critical API typed coverage, DATA GA, Full GA, or V1
+external production launch readiness.
 
 2026-06-23 workload local/static fixture update:
 `backend/internal/contracts/fixtures/api/v1/workload-delete-configfile.json`
@@ -438,6 +480,21 @@ state-changing, and `harbor` adapter metadata. This is local/static typed
 external API fixture coverage only; it does not claim live Harbor build
 execution, SBOM/signing, allow-list enforcement, image scan lifecycle, full image
 workflow, Full GA, or first-version completion.
+
+2026-06-28 Image-registry acceleration and queued supply-chain metadata update:
+`ImageAccelerationProfile` now has local metadata/contract coverage through
+admin CRUD routes, seeded defaults, a create API fixture, and
+`ImageAccelerationProfileChanged` event fixture. Queued image builds now also
+record and emit pending supply-chain status metadata in create responses, stored
+records, and `ImageBuildStarted` events:
+`image_digest=""`, `allow_list_decision="pending"`,
+`sbom_status="pending"`, `signature_status="pending"`,
+`scan_status="pending"`, and `supply_chain_checked_at=null`. Contract coverage
+also validates historical `ImageBuildStarted` schema-v1 payloads without those
+additive keys. This is local metadata/event-shape evidence only; it does not
+claim image conversion/prewarm execution, completed SBOM generation, signing,
+scan enforcement, allow-list admission, live Harbor/Tekton/BuildKit execution,
+full IMG, V1 external launch, or Full GA.
 
 2026-06-23 DATA-014 image build create idempotency local update:
 image-registry build create APIs now have local deterministic optional

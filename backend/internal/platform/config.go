@@ -73,6 +73,7 @@ type Config struct {
 	DockerCleanupEnabled        bool
 	DockerCleanupNamespace      string
 	DockerCleanupImage          string
+	FastTransferMoverImage      string
 	WorkloadIdleTimeout         time.Duration
 	AutomatedPodDeletion        bool
 	PlanWindowPodDeletion       bool
@@ -190,6 +191,7 @@ const (
 	envImageCheckEnabled           = "K8S_IMAGE_CHECK_ENABLED"
 	envDockerCleanupEnabled        = "DOCKER_CLEANUP_ENABLED"
 	envDockerCleanupNamespace      = "DOCKER_CLEANUP_NAMESPACE"
+	envFastTransferMoverImage      = "FAST_TRANSFER_MOVER_IMAGE"
 	envDockerDindImage             = "IMAGE_DOCKER_DIND"
 	envGPUUsageRetentionDays       = "GPU_USAGE_RETENTION_DAYS"
 	envGPUSnapshotWindowMinutes    = "GPU_SNAPSHOT_WINDOW_MINUTES"
@@ -337,6 +339,7 @@ func ConfigFromEnv() Config {
 		DockerCleanupEnabled:        parser.envBool(envDockerCleanupEnabled, false),
 		DockerCleanupNamespace:      strings.TrimSpace(env(envDockerCleanupNamespace, "default")),
 		DockerCleanupImage:          strings.TrimSpace(env(envDockerDindImage, "docker:24-dind")),
+		FastTransferMoverImage:      strings.TrimSpace(env(envFastTransferMoverImage, "instrumentisto/rsync-ssh:alpine")),
 		WorkloadIdleTimeout:         parser.envDuration("IDE_IDLE_REAPER_TIMEOUT", 2*time.Hour),
 		AutomatedPodDeletion:        parser.envBool("AUTOMATED_POD_DELETION_ENABLED", true),
 		PlanWindowPodDeletion:       parser.envBool("PLAN_WINDOW_POD_DELETION_ENABLED", true),

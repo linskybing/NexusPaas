@@ -411,6 +411,12 @@ func (a *App) ServiceRequestAuthorized(r *http.Request) bool {
 	return a.serviceRequestAuthorizedForAudience(r, "")
 }
 
+// ServiceRequestAuthorizedForAudience reports whether r carries a trusted
+// service identity allowed to call audience.
+func (a *App) ServiceRequestAuthorizedForAudience(r *http.Request, audience string) bool {
+	return a.serviceRequestAuthorizedForAudience(r, audience)
+}
+
 func (a *App) serviceRequestAuthorizedForAudience(r *http.Request, audience string) bool {
 	if len(a.Config.ServiceTrustedIdentities) > 0 {
 		return a.scopedServiceRequestAuthorized(r, audience)

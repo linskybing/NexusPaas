@@ -81,6 +81,42 @@ func TestImageBuildCreateExternalAPIFixturesMatchSpec(t *testing.T) {
 	}
 }
 
+func TestImageAccelerationProfileExternalAPIFixtureMatchesSpec(t *testing.T) {
+	spec := Spec()
+	fixture := readImageBuildCreateExternalAPIFixture(t, "image-registry-create-acceleration-profile.json")
+	route, ok := findRoute(spec.Routes, fixture.Method, fixture.Path)
+	if !ok {
+		t.Fatalf("route %s %s not found in Spec()", fixture.Method, fixture.Path)
+	}
+	if fixture.ContractName != "image-registry.create_acceleration_profile" {
+		t.Fatalf("contract_name = %q, want image-registry.create_acceleration_profile", fixture.ContractName)
+	}
+	if fixture.OwnerService != spec.Name {
+		t.Fatalf("owner_service = %q, want %q", fixture.OwnerService, spec.Name)
+	}
+	if got, want := fixture.Resource, spec.Name+":"+route.Resource; got != want {
+		t.Fatalf("resource = %q, want %q", got, want)
+	}
+	if route.Method != http.MethodPost || route.Pattern != "/api/v1/image-acceleration-profiles" ||
+		route.Resource != "image_acceleration_profiles" || route.Action != "create" || !route.Admin {
+		t.Fatalf("route metadata = %#v, want admin create image_acceleration_profiles", route)
+	}
+	if fixture.Auth != "user" || !fixture.AuthRequired || fixture.ServiceKeyRequired {
+		t.Fatalf("auth metadata = %q/%v/%v, want user/true/false", fixture.Auth, fixture.AuthRequired, fixture.ServiceKeyRequired)
+	}
+	if !reflect.DeepEqual(fixture.RequiredRequestFields, []string{"name", "snapshotter", "prewarm_policy"}) {
+		t.Fatalf("required_request_fields = %v, want name/snapshotter/prewarm_policy", fixture.RequiredRequestFields)
+	}
+	assertFixtureStringsContainAll(t, "optional_request_fields", fixture.OptionalRequestFields, []string{"id", "conversion_required", "allowed_for_projects"})
+	assertFixtureIntsContainAll(t, "success_statuses", fixture.SuccessStatuses, []int{http.StatusCreated})
+	assertFixtureStringsContainAll(t, "emits_events", fixture.EmitsEvents, []string{"ImageAccelerationProfileChanged"})
+	if !imageRegistrySpecEmitsEvent(spec, "ImageAccelerationProfileChanged") {
+		t.Fatalf("spec events = %v, want ImageAccelerationProfileChanged", spec.Events)
+	}
+	assertFixtureStringField(t, "request_example", fixture.RequestExample, "snapshotter", "stargz")
+	assertFixtureStringField(t, "request_example", fixture.RequestExample, "prewarm_policy", "nodepool-based")
+}
+
 func assertImageBuildCreateFixtureMetadata(t *testing.T, fixture imageBuildCreateExternalAPIFixture, want imageBuildCreateFixtureCase, serviceName string, route platform.RouteSpec) {
 	t.Helper()
 	if fixture.ContractName != want.contractName {
@@ -110,6 +146,7 @@ func assertImageBuildCreateFixtureMetadata(t *testing.T, fixture imageBuildCreat
 	assertFixtureIntsContainAll(t, "error_statuses", fixture.ErrorStatuses, []int{http.StatusConflict})
 	assertImageBuildResourceExample(t, "request_example", fixture.RequestExample)
 	assertImageBuildResourceExample(t, "response_example", fixture.ResponseExample)
+	assertImageBuildSupplyChainResponseExample(t, fixture.ResponseExample)
 	assertFixtureStringField(t, "response_example", fixture.ResponseExample, "build_type", want.buildType)
 	if !reflect.DeepEqual(fixture.SuccessStatuses, []int{http.StatusAccepted}) {
 		t.Fatalf("success_statuses = %v, want [202]", fixture.SuccessStatuses)
@@ -213,6 +250,18 @@ func assertImageBuildResourceExample(t *testing.T, field string, example map[str
 	assertFixtureNumberField(t, field, example, "max_build_time_seconds", 600)
 }
 
+func assertImageBuildSupplyChainResponseExample(t *testing.T, example map[string]any) {
+	t.Helper()
+	assertFixtureStringField(t, "response_example", example, "image_digest", "")
+	assertFixtureStringField(t, "response_example", example, "allow_list_decision", "pending")
+	assertFixtureStringField(t, "response_example", example, "sbom_status", "pending")
+	assertFixtureStringField(t, "response_example", example, "signature_status", "pending")
+	assertFixtureStringField(t, "response_example", example, "scan_status", "pending")
+	if value, ok := example["supply_chain_checked_at"]; !ok || value != nil {
+		t.Fatalf("response_example.supply_chain_checked_at = %v, want null", value)
+	}
+}
+
 func assertFixtureNumberField(t *testing.T, field string, data map[string]any, key string, want float64) {
 	t.Helper()
 	got, ok := data[key].(float64)
@@ -236,6 +285,15 @@ func findRoute(routes []platform.RouteSpec, method, pattern string) (platform.Ro
 		}
 	}
 	return platform.RouteSpec{}, false
+}
+
+func imageRegistrySpecEmitsEvent(spec platform.ServiceSpec, name string) bool {
+	for _, event := range spec.Events {
+		if event == name {
+			return true
+		}
+	}
+	return false
 }
 
 func readImageBuildCreateExternalAPIFixture(t *testing.T, name string) imageBuildCreateExternalAPIFixture {
