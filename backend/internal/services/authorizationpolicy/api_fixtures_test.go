@@ -288,6 +288,26 @@ func TestProxyPolicyAssignmentExternalAPIFixturesMatchSpec(t *testing.T) {
 	assertProxyRoleUserExternalAPIFixturesMatchSpec(t, cases)
 }
 
+func TestPermissionBatchExternalAPIFixtureMatchesSpec(t *testing.T) {
+	spec := Spec()
+	if !authorizationPolicySpecEmitsEvent(spec, "PolicyChanged") {
+		t.Fatalf("spec events = %v, want PolicyChanged", spec.Events)
+	}
+
+	fixture := readAuthorizationPolicyExternalAPIFixture(t, "authorization-policy-batch-permissions.json")
+	route, ok := findAuthorizationPolicyRoute(spec.Routes, fixture.Method, fixture.Path)
+	if !ok {
+		t.Fatalf("route %s %s not found in Spec()", fixture.Method, fixture.Path)
+	}
+
+	assertPermissionBatchFixtureMetadata(t, fixture, spec, route)
+	assertPermissionBatchRouteMetadata(t, route, fixture)
+	assertPermissionBatchRequestExample(t, fixture)
+	if len(fixture.ResponseExample) != 0 {
+		t.Fatalf("response_example = %v, want empty object", fixture.ResponseExample)
+	}
+}
+
 func assertProxyRBACExternalAPIFixturesMatchSpec(t *testing.T, cases []proxyRBACFixtureCase) {
 	t.Helper()
 	spec := Spec()
@@ -417,6 +437,80 @@ type authorizationPolicyExternalAPIFixture struct {
 	ErrorStatuses         []int          `json:"error_statuses"`
 	EmitsEvents           []string       `json:"emits_events"`
 	ResponseExample       map[string]any `json:"response_example"`
+}
+
+func assertPermissionBatchFixtureMetadata(t *testing.T, fixture authorizationPolicyExternalAPIFixture, spec platform.ServiceSpec, route platform.RouteSpec) {
+	t.Helper()
+	if fixture.ContractName != "authorization-policy.batch_permissions" {
+		t.Fatalf("contract_name = %q, want authorization-policy.batch_permissions", fixture.ContractName)
+	}
+	if fixture.OwnerService != spec.Name {
+		t.Fatalf("owner_service = %q, want %q", fixture.OwnerService, spec.Name)
+	}
+	if got, want := fixture.Resource, spec.Name+":"+route.Resource; got != want {
+		t.Fatalf("resource = %q, want %q", got, want)
+	}
+	if fixture.Action != route.Action || fixture.Action != "batch" {
+		t.Fatalf("action = %q, want batch", fixture.Action)
+	}
+	if fixture.Auth != "user" || !fixture.AuthRequired || fixture.ServiceKeyRequired {
+		t.Fatalf("auth metadata = %q/%v/%v, want user/true/false", fixture.Auth, fixture.AuthRequired, fixture.ServiceKeyRequired)
+	}
+	if len(fixture.PathParameters) != 0 || len(fixture.OptionalRequestFields) != 0 {
+		t.Fatalf("path/optional fields = %v/%v, want empty", fixture.PathParameters, fixture.OptionalRequestFields)
+	}
+	if !reflect.DeepEqual(fixture.RequiredRequestFields, []string{"operations"}) {
+		t.Fatalf("required_request_fields = %v, want [operations]", fixture.RequiredRequestFields)
+	}
+	if !reflect.DeepEqual(fixture.SuccessStatuses, []int{http.StatusOK}) {
+		t.Fatalf("success_statuses = %v, want [200]", fixture.SuccessStatuses)
+	}
+	if !reflect.DeepEqual(fixture.ErrorStatuses, []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError}) {
+		t.Fatalf("error_statuses = %v, want [400 401 403 500]", fixture.ErrorStatuses)
+	}
+	if !reflect.DeepEqual(fixture.EmitsEvents, []string{"PolicyChanged"}) {
+		t.Fatalf("emits_events = %v, want [PolicyChanged]", fixture.EmitsEvents)
+	}
+}
+
+func assertPermissionBatchRouteMetadata(t *testing.T, route platform.RouteSpec, fixture authorizationPolicyExternalAPIFixture) {
+	t.Helper()
+	if route.Method != http.MethodPost || route.Pattern != "/api/v1/permissions/batch" {
+		t.Fatalf("route = %s %s, want POST /api/v1/permissions/batch", route.Method, route.Pattern)
+	}
+	if route.Resource != "policies" || route.Action != "batch" {
+		t.Fatalf("route metadata = %#v, want policies/batch", route)
+	}
+	if !route.Admin || !route.AuthRequired || route.ServiceAuthRequired || !route.StateChanging {
+		t.Fatalf("route auth/change metadata = admin:%v auth:%v service:%v state:%v, want true/true/false/true", route.Admin, route.AuthRequired, route.ServiceAuthRequired, route.StateChanging)
+	}
+	if fixture.Method != route.Method || fixture.Path != route.Pattern {
+		t.Fatalf("fixture route = %s %s, want %s %s", fixture.Method, fixture.Path, route.Method, route.Pattern)
+	}
+}
+
+func assertPermissionBatchRequestExample(t *testing.T, fixture authorizationPolicyExternalAPIFixture) {
+	t.Helper()
+	operations, ok := fixture.RequestExample["operations"].([]any)
+	if !ok || len(operations) == 0 {
+		t.Fatalf("request_example.operations = %v, want non-empty array", fixture.RequestExample["operations"])
+	}
+	operation, ok := operations[0].(map[string]any)
+	if !ok {
+		t.Fatalf("request_example.operations[0] = %v, want object", operations[0])
+	}
+	expected := map[string]string{
+		"type":       "project_member",
+		"action":     "add",
+		"project_id": "project-ga-alpha",
+		"user_id":    "user-ga-ada",
+		"role":       "viewer",
+	}
+	for field, want := range expected {
+		if got, _ := operation[field].(string); got != want {
+			t.Fatalf("request_example.operations[0].%s = %v, want %q", field, operation[field], want)
+		}
+	}
 }
 
 func assertProxyServiceReadFixtureMetadata(t *testing.T, fixture authorizationPolicyExternalAPIFixture, spec platform.ServiceSpec, route platform.RouteSpec, want proxyServiceReadFixtureCase) {

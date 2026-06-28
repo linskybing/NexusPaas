@@ -17,6 +17,7 @@ func TestExternalAPIFixturesAreValidV1(t *testing.T) {
 	want := []string{
 		"authorization-policy-assign-proxy-policy.json",
 		"authorization-policy-assign-proxy-role-user.json",
+		"authorization-policy-batch-permissions.json",
 		"authorization-policy-create-proxy-policy.json",
 		"authorization-policy-create-proxy-role.json",
 		"authorization-policy-delete-proxy-policy.json",
@@ -92,6 +93,13 @@ func TestExternalAPIFixturesAreValidV1(t *testing.T) {
 			action:       "create",
 			method:       http.MethodPost,
 			path:         "/api/v1/admin/proxy-rbac/roles/{id}/users",
+		},
+		"authorization-policy-batch-permissions.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:policies",
+			action:       "batch",
+			method:       http.MethodPost,
+			path:         "/api/v1/permissions/batch",
 		},
 		"authorization-policy-create-proxy-policy.json": {
 			ownerService: "authorization-policy-service",

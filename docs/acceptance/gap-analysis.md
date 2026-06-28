@@ -134,6 +134,14 @@ no-event behavior, `401`/`403`/`500` error statuses, and stable public role
 `id`/`name` response fields. Typed API coverage remains Open; this does not
 prove live admin authorization, live route behavior, DATA GA, Full GA, or
 kind/e2e coverage.
+Authorization-policy permissions batch now also has local/static external REST
+fixture parity against `authorizationpolicy.Spec()` for
+`POST /api/v1/permissions/batch`, including the `admin` Spec metadata repair,
+authenticated-user/no-service-key posture, required `operations`, `200` success,
+`project_member`/`add` happy-path operation vocabulary, `400`/`401`/`403`/`500`
+error statuses, empty object response, and `PolicyChanged` linkage. Typed API
+coverage remains Open; this does not prove live admin authorization, live
+permissions batch mutation behavior, DATA GA, Full GA, or kind/e2e coverage.
 Identity auth/session entrypoints now also have local/static typed external REST
 fixture coverage for `POST /api/v1/register`, `POST /api/v1/login`,
 `POST /api/v1/refresh`, and `POST /api/v1/cli/login`: the fixtures declare

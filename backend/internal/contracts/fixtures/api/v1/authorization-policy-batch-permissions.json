@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "contract_name": "authorization-policy.batch_permissions",
+  "owner_service": "authorization-policy-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "authorization-policy-service:policies",
+  "action": "batch",
+  "method": "POST",
+  "path": "/api/v1/permissions/batch",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [],
+  "required_request_fields": [
+    "operations"
+  ],
+  "optional_request_fields": [],
+  "request_example": {
+    "operations": [
+      {
+        "type": "project_member",
+        "action": "add",
+        "project_id": "project-ga-alpha",
+        "user_id": "user-ga-ada",
+        "role": "viewer"
+      }
+    ]
+  },
+  "success_statuses": [
+    200
+  ],
+  "error_statuses": [
+    400,
+    401,
+    403,
+    500
+  ],
+  "emits_events": [
+    "PolicyChanged"
+  ],
+  "response_example": {},
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}
