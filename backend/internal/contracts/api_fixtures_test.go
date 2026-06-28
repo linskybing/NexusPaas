@@ -14,7 +14,7 @@ import (
 
 func TestExternalAPIFixturesAreValidV1(t *testing.T) {
 	fixtures := externalAPIFixtureFiles(t)
-	want := []string{"identity-cli-login.json", "identity-login.json", "identity-refresh.json", "identity-register.json", "image-registry-context-build.json", "image-registry-create-acceleration-profile.json", "image-registry-dockerfile-build.json", "image-registry-storage-build.json", "org-project-batch-delete-groups.json", "org-project-batch-delete-projects.json", "org-project-create-group.json", "org-project-create-project.json", "org-project-delete-group.json", "org-project-delete-project.json", "org-project-update-group.json", "org-project-update-project.json", "request-notification-create-form.json", "scheduler-create-accelerator-profile.json", "scheduler-create-network-profile.json", "scheduler-create-placement-profile.json", "storage-batch-delete-project-permissions.json", "storage-batch-update-project-permissions.json", "storage-create-benchmark-record.json", "storage-create-cache-binding.json", "storage-create-permission.json", "storage-create-profile.json", "storage-create-project-binding.json", "storage-delete-project-permission.json", "storage-list-benchmark-records.json", "storage-update-project-permission.json", "workload-cancel-job.json", "workload-commit-configfile-version.json", "workload-create-configfile.json", "workload-delete-configfile.json", "workload-get-configfile.json", "workload-patch-configfile.json", "workload-submit-job.json", "workload-update-configfile.json"}
+	want := []string{"identity-cli-login.json", "identity-create-api-token.json", "identity-list-api-tokens.json", "identity-login.json", "identity-refresh.json", "identity-register.json", "identity-revoke-api-token.json", "identity-revoke-current-api-token.json", "image-registry-context-build.json", "image-registry-create-acceleration-profile.json", "image-registry-dockerfile-build.json", "image-registry-storage-build.json", "org-project-batch-delete-groups.json", "org-project-batch-delete-projects.json", "org-project-create-group.json", "org-project-create-project.json", "org-project-delete-group.json", "org-project-delete-project.json", "org-project-update-group.json", "org-project-update-project.json", "request-notification-create-form.json", "scheduler-create-accelerator-profile.json", "scheduler-create-network-profile.json", "scheduler-create-placement-profile.json", "storage-batch-delete-project-permissions.json", "storage-batch-update-project-permissions.json", "storage-create-benchmark-record.json", "storage-create-cache-binding.json", "storage-create-permission.json", "storage-create-profile.json", "storage-create-project-binding.json", "storage-delete-project-permission.json", "storage-list-benchmark-records.json", "storage-update-project-permission.json", "workload-cancel-job.json", "workload-commit-configfile-version.json", "workload-create-configfile.json", "workload-delete-configfile.json", "workload-get-configfile.json", "workload-patch-configfile.json", "workload-submit-job.json", "workload-update-configfile.json"}
 	if !reflect.DeepEqual(fixtures, want) {
 		t.Fatalf("fixture files = %v, want %v", fixtures, want)
 	}
@@ -26,6 +26,20 @@ func TestExternalAPIFixturesAreValidV1(t *testing.T) {
 			action:       "create",
 			method:       http.MethodPost,
 			path:         "/api/v1/cli/login",
+		},
+		"identity-create-api-token.json": {
+			ownerService: "identity-service",
+			resource:     "identity-service:api_tokens",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/me/api-tokens",
+		},
+		"identity-list-api-tokens.json": {
+			ownerService: "identity-service",
+			resource:     "identity-service:api_tokens",
+			action:       "list",
+			method:       http.MethodGet,
+			path:         "/api/v1/me/api-tokens",
 		},
 		"identity-login.json": {
 			ownerService: "identity-service",
@@ -47,6 +61,20 @@ func TestExternalAPIFixturesAreValidV1(t *testing.T) {
 			action:       "create",
 			method:       http.MethodPost,
 			path:         "/api/v1/register",
+		},
+		"identity-revoke-api-token.json": {
+			ownerService: "identity-service",
+			resource:     "identity-service:api_tokens",
+			action:       "delete",
+			method:       http.MethodDelete,
+			path:         "/api/v1/me/api-tokens/{id}",
+		},
+		"identity-revoke-current-api-token.json": {
+			ownerService: "identity-service",
+			resource:     "identity-service:api_tokens",
+			action:       "delete_current",
+			method:       http.MethodDelete,
+			path:         "/api/v1/me/api-tokens/current",
 		},
 		"image-registry-context-build.json": {
 			ownerService: "image-registry-service",
@@ -702,6 +730,9 @@ func isIdentityCredentialIssueFixture(fixture externalAPIContractFixture) bool {
 }
 
 func allowsIdentityCredentialExampleField(fixture externalAPIContractFixture, fieldPath string) bool {
+	if fieldPath == "response_example.token" && fixture.OwnerService == "identity-service" && fixture.Method == http.MethodPost && fixture.Path == "/api/v1/me/api-tokens" {
+		return true
+	}
 	if !isPublicIdentityAuthFixture(fixture) {
 		return false
 	}

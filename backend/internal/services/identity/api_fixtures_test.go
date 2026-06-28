@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
@@ -66,6 +67,71 @@ func TestIdentityAuthExternalAPIFixturesMatchSpec(t *testing.T) {
 	}
 }
 
+func TestIdentityAPITokenExternalAPIFixturesMatchSpec(t *testing.T) {
+	cases := []identityAPITokenExternalAPIFixtureCase{
+		{
+			fixtureName:    "identity-list-api-tokens.json",
+			contractName:   "identity.list_api_tokens",
+			method:         http.MethodGet,
+			path:           "/api/v1/me/api-tokens",
+			action:         "list",
+			pathParameters: []string{},
+			requiredFields: []string{},
+			successStatus:  http.StatusOK,
+			emitsEvents:    []string{},
+			responseFields: []string{"id", "name", "token_prefix", "expires_at", "created_at"},
+		},
+		{
+			fixtureName:    "identity-create-api-token.json",
+			contractName:   "identity.create_api_token",
+			method:         http.MethodPost,
+			path:           "/api/v1/me/api-tokens",
+			action:         "create",
+			pathParameters: []string{},
+			requiredFields: []string{"name"},
+			successStatus:  http.StatusCreated,
+			emitsEvents:    []string{"AuditEvent"},
+			responseFields: []string{"id", "name", "token_prefix", "expires_at", "created_at", "token"},
+		},
+		{
+			fixtureName:    "identity-revoke-api-token.json",
+			contractName:   "identity.revoke_api_token",
+			method:         http.MethodDelete,
+			path:           "/api/v1/me/api-tokens/{id}",
+			action:         "delete",
+			pathParameters: []string{"id"},
+			requiredFields: []string{},
+			successStatus:  http.StatusOK,
+			emitsEvents:    []string{"AuditEvent"},
+		},
+		{
+			fixtureName:    "identity-revoke-current-api-token.json",
+			contractName:   "identity.revoke_current_api_token",
+			method:         http.MethodDelete,
+			path:           "/api/v1/me/api-tokens/current",
+			action:         "delete_current",
+			pathParameters: []string{},
+			requiredFields: []string{},
+			successStatus:  http.StatusOK,
+			emitsEvents:    []string{"AuditEvent"},
+		},
+	}
+
+	spec := Spec()
+	for _, tt := range cases {
+		t.Run(tt.fixtureName, func(t *testing.T) {
+			fixture := readIdentityAuthExternalAPIFixture(t, tt.fixtureName)
+			route, ok := findIdentityAuthRoute(spec.Routes, fixture.Method, fixture.Path)
+			if !ok {
+				t.Fatalf("route %s %s not found in Spec()", fixture.Method, fixture.Path)
+			}
+
+			assertIdentityAPITokenFixtureMetadata(t, fixture, tt, spec, route)
+			assertIdentityAPITokenResponseFields(t, fixture, tt.responseFields)
+		})
+	}
+}
+
 type identityAuthExternalAPIFixtureCase struct {
 	fixtureName    string
 	contractName   string
@@ -74,6 +140,19 @@ type identityAuthExternalAPIFixtureCase struct {
 	requiredFields []string
 	optionalFields []string
 	emitsEvents    []string
+}
+
+type identityAPITokenExternalAPIFixtureCase struct {
+	fixtureName    string
+	contractName   string
+	method         string
+	path           string
+	action         string
+	pathParameters []string
+	requiredFields []string
+	successStatus  int
+	emitsEvents    []string
+	responseFields []string
 }
 
 type identityAuthExternalAPIFixture struct {
@@ -152,6 +231,108 @@ func assertIdentityAuthRouteMetadata(t *testing.T, route platform.RouteSpec, wan
 	if route.IDParam != "" {
 		t.Fatalf("route IDParam = %q, want none", route.IDParam)
 	}
+}
+
+func assertIdentityAPITokenFixtureMetadata(t *testing.T, fixture identityAuthExternalAPIFixture, want identityAPITokenExternalAPIFixtureCase, spec platform.ServiceSpec, route platform.RouteSpec) {
+	t.Helper()
+	assertIdentityAPITokenFixtureContract(t, fixture, want, spec)
+	assertIdentityAPITokenRouteContract(t, route, fixture, want)
+	assertIdentityAPITokenRequestContract(t, fixture, want)
+}
+
+func assertIdentityAPITokenFixtureContract(t *testing.T, fixture identityAuthExternalAPIFixture, want identityAPITokenExternalAPIFixtureCase, spec platform.ServiceSpec) {
+	t.Helper()
+	if fixture.ContractName != want.contractName {
+		t.Fatalf("contract_name = %q, want %q", fixture.ContractName, want.contractName)
+	}
+	if fixture.OwnerService != spec.Name {
+		t.Fatalf("owner_service = %q, want %q", fixture.OwnerService, spec.Name)
+	}
+	if got, want := fixture.Resource, spec.Name+":api_tokens"; got != want {
+		t.Fatalf("resource = %q, want %q", got, want)
+	}
+	if fixture.Method != want.method || fixture.Path != want.path {
+		t.Fatalf("route = %s %s, want %s %s", fixture.Method, fixture.Path, want.method, want.path)
+	}
+	if fixture.Action != want.action {
+		t.Fatalf("action = %q, want %q", fixture.Action, want.action)
+	}
+	if fixture.Auth != "user" || !fixture.AuthRequired || fixture.ServiceKeyRequired {
+		t.Fatalf("auth metadata = %q/%v/%v, want user/true/false", fixture.Auth, fixture.AuthRequired, fixture.ServiceKeyRequired)
+	}
+}
+
+func assertIdentityAPITokenRouteContract(t *testing.T, route platform.RouteSpec, fixture identityAuthExternalAPIFixture, want identityAPITokenExternalAPIFixtureCase) {
+	t.Helper()
+	if route.Method != want.method || route.Pattern != want.path {
+		t.Fatalf("spec route = %s %s, want %s %s", route.Method, route.Pattern, want.method, want.path)
+	}
+	if route.Resource != "api_tokens" || route.Action != want.action {
+		t.Fatalf("route metadata = %s/%s, want api_tokens/%s", route.Resource, route.Action, want.action)
+	}
+	if route.AuthRequired != fixture.AuthRequired || route.ServiceAuthRequired || route.Admin {
+		t.Fatalf("route auth metadata = auth_required:%v service_auth_required:%v admin:%v, want user route", route.AuthRequired, route.ServiceAuthRequired, route.Admin)
+	}
+	if route.StateChanging != (want.method != http.MethodGet) {
+		t.Fatalf("route StateChanging = %v, want %v", route.StateChanging, want.method != http.MethodGet)
+	}
+}
+
+func assertIdentityAPITokenRequestContract(t *testing.T, fixture identityAuthExternalAPIFixture, want identityAPITokenExternalAPIFixtureCase) {
+	t.Helper()
+	if !reflect.DeepEqual(fixture.PathParameters, want.pathParameters) {
+		t.Fatalf("path_parameters = %v, want %v", fixture.PathParameters, want.pathParameters)
+	}
+	for _, param := range want.pathParameters {
+		if !containsPathParam(fixture.Path, param) {
+			t.Fatalf("fixture path %q missing path parameter %q", fixture.Path, param)
+		}
+	}
+	if !reflect.DeepEqual(fixture.RequiredRequestFields, want.requiredFields) {
+		t.Fatalf("required_request_fields = %v, want %v", fixture.RequiredRequestFields, want.requiredFields)
+	}
+	if len(fixture.OptionalRequestFields) != 0 {
+		t.Fatalf("optional_request_fields = %v, want none", fixture.OptionalRequestFields)
+	}
+	if !reflect.DeepEqual(fixture.SuccessStatuses, []int{want.successStatus}) {
+		t.Fatalf("success_statuses = %v, want [%d]", fixture.SuccessStatuses, want.successStatus)
+	}
+	if !reflect.DeepEqual(fixture.EmitsEvents, want.emitsEvents) {
+		t.Fatalf("emits_events = %v, want %v", fixture.EmitsEvents, want.emitsEvents)
+	}
+	if fixture.RequestExample == nil || fixture.ResponseExample == nil {
+		t.Fatal("request_example and response_example must be present")
+	}
+}
+
+func assertIdentityAPITokenResponseFields(t *testing.T, fixture identityAuthExternalAPIFixture, fields []string) {
+	t.Helper()
+	if len(fields) == 0 {
+		if len(fixture.ResponseExample) != 0 {
+			t.Fatalf("response_example = %v, want empty object", fixture.ResponseExample)
+		}
+		return
+	}
+	response := fixture.ResponseExample
+	if items, ok := response["items"].([]any); ok {
+		if len(items) == 0 {
+			t.Fatal("response_example.items is empty")
+		}
+		var itemOK bool
+		response, itemOK = items[0].(map[string]any)
+		if !itemOK {
+			t.Fatalf("response_example.items[0] = %T, want object", items[0])
+		}
+	}
+	for _, field := range fields {
+		if _, ok := response[field]; !ok {
+			t.Fatalf("response_example missing field %q", field)
+		}
+	}
+}
+
+func containsPathParam(pattern, param string) bool {
+	return strings.Contains(pattern, "{"+param+"}")
 }
 
 func findIdentityAuthRoute(routes []platform.RouteSpec, method, pattern string) (platform.RouteSpec, bool) {

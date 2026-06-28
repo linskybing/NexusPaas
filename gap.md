@@ -147,6 +147,22 @@ coverage only; it does not prove live auth availability, browser cookie
 behavior, OIDC/LDAP behavior, token rotation/revocation, all-critical API typed
 contract coverage, DATA GA, Full GA, or V1 external production launch readiness.
 
+2026-06-28 Identity API-token lifecycle typed API local/static fixture update:
+`backend/internal/contracts/fixtures/api/v1/identity-list-api-tokens.json`,
+`identity-create-api-token.json`, `identity-revoke-api-token.json`, and
+`identity-revoke-current-api-token.json` now record typed external REST fixture
+coverage for `GET /api/v1/me/api-tokens`, `POST /api/v1/me/api-tokens`,
+`DELETE /api/v1/me/api-tokens/{id}`, and
+`DELETE /api/v1/me/api-tokens/current`. The fixtures declare authenticated-user
+auth posture, `id` path-parameter metadata where applicable, required create
+field `name`, success statuses, list/create response fields, and `AuditEvent`
+fixture metadata only for create/revoke. The shared fixture registry and
+identity service parity test check this local/static contract against
+`identity.Spec()` without requiring `AuditEvent` in `identity.Spec().Events`.
+This does not prove live API-token lifecycle behavior, browser cookie behavior,
+OIDC/LDAP behavior, all-critical API typed coverage, DATA GA, Full GA, or V1
+external production launch readiness.
+
 2026-06-23 workload local/static fixture update:
 `backend/internal/contracts/fixtures/api/v1/workload-delete-configfile.json`
 now records typed external REST fixture coverage for
