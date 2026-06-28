@@ -428,6 +428,16 @@ no privileged container, no `hostPath`, and repeats the request with
 execution, bytes moved, progress callback behavior, CSI, storage GA, Full GA,
 or first-version readiness.
 
+FastTransfer start-to-mover dispatch now also has env-gated live storage
+fast-stage-to-k8s-control mover Job admission evidence via
+`backend/internal/e2e/fast_transfer_start_mover_kind_admission_e2e_test.go`: the
+test posts through the storage external fast-stage route with storage-local
+project access projections, creates a queued transfer record, dispatches over
+the configured k8s-control service URL, admits one restricted mover `Job`, emits
+`FastTransferQueued`, and proves idempotent replay keeps one Job. This does not
+prove PVC binding, Pod scheduling, rsync execution, bytes moved, progress
+callback behavior, CSI, storage GA, Full GA, or first-version readiness.
+
 StorageProfile-to-HPC-StorageClass manifest drift now has local/static test
 evidence only: `storage-service` startup seeds default profile records, the
 storage package test parses `backend/deploy/hpc/storage/*.yaml`, and every

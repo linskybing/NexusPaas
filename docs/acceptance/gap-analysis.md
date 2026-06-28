@@ -430,6 +430,14 @@ creation and repeat `already_exists` now exists via
 only the k8s-control internal route can create the restricted mover Job manifest
 in Kubernetes and does not prove PVC binding, Pod scheduling, rsync execution,
 bytes moved, progress callbacks, CSI, storage GA, or Full GA.
+Env-gated live storage fast-stage-to-k8s-control mover Job admission evidence now
+exists via
+`backend/internal/e2e/fast_transfer_start_mover_kind_admission_e2e_test.go`; it
+proves the storage external fast-stage route creates a queued record, dispatches
+over the configured service URL to k8s-control, admits one restricted mover Job,
+and keeps idempotent replay to one Job. It does not prove PVC binding, Pod
+scheduling, rsync execution, bytes moved, progress callbacks, CSI, storage GA,
+or Full GA.
 StorageProfile-to-HPC-StorageClass
 drift now also has local/static repository evidence: `storage-service` startup
 seeds the default profiles, the storage package test parses
