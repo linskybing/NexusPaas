@@ -447,6 +447,17 @@ byte count. This proves only kind default PVC binding, Pod scheduling, rsync
 command execution, and bytes moved for one tiny file; it does not prove CSI or
 storage GA, external storage backends, multi-node behavior, multi-file sync,
 progress callbacks, performance, durability, or Full GA.
+Env-gated FastTransfer progress callback emission evidence now exists via
+`backend/internal/e2e/fast_transfer_progress_callback_kind_e2e_test.go`; it
+creates an in-cluster BusyBox callback sink Service, waits for it to become
+Ready, dispatches a mover Job with k8s-control callback env wiring, waits for
+the Job to Complete, verifies the target PVC content, and polls sink logs for
+the `running` and `succeeded` POST bodies plus the service identity header. This
+proves only in-cluster callback emission. It does not prove storage-service
+progress-state transitions, storage record updates, storage events, accurate
+byte accounting, checksum, resume, progress streaming, external storage backend,
+multi-node behavior, performance, durability, production-grade secret handling,
+workload identity, storage GA, or Full GA.
 StorageProfile-to-HPC-StorageClass
 drift now also has local/static repository evidence: `storage-service` startup
 seeds the default profiles, the storage package test parses

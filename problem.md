@@ -449,6 +449,18 @@ not prove CSI or storage GA, external storage backends, multi-node behavior,
 multi-file sync, progress callbacks, performance, durability, Full GA, or
 first-version readiness.
 
+FastTransfer progress callback emission now also has env-gated kind evidence via
+`backend/internal/e2e/fast_transfer_progress_callback_kind_e2e_test.go`: the
+test creates an in-cluster BusyBox callback sink Service, waits for it to become
+Ready, dispatches a mover Job with the k8s-control callback env wiring, waits
+for the Job to `Complete`, verifies the target PVC content, and polls sink logs
+for the `running` and `succeeded` POST bodies plus the service identity header.
+This proves only in-cluster callback emission. It does not prove storage-service
+progress-state transitions, storage record updates, storage events, accurate
+byte accounting, checksum, resume, progress streaming, external storage backend,
+multi-node behavior, performance, durability, production-grade secret handling,
+workload identity, storage GA, Full GA, or first-version readiness.
+
 StorageProfile-to-HPC-StorageClass manifest drift now has local/static test
 evidence only: `storage-service` startup seeds default profile records, the
 storage package test parses `backend/deploy/hpc/storage/*.yaml`, and every
