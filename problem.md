@@ -180,9 +180,12 @@ now also has local/static external REST fixture parity against
 the `admin` Spec metadata repair, authenticated-user/no-service-key posture,
 required `operations`, `200` success, `project_member`/`add` happy-path
 operation vocabulary, `400`/`401`/`403`/`500` error statuses, empty object
-response, and `PolicyChanged` linkage. Typed API coverage remains Open, and
-this does not prove live admin authorization, live permissions batch mutation
-behavior, DATA GA, V1 external launch, Full GA, or kind/e2e coverage.
+response, `PolicyChanged` linkage, and local/static `PolicyChanged`
+event-envelope fixture plus service-local producer contract evidence for that
+payload. Typed API coverage remains Open, and this fixture/producer-test
+evidence does not prove live event bus delivery, live admin authorization, live
+permissions batch mutation behavior, DATA GA, V1 external launch, Full GA, or
+kind/e2e coverage.
 Image build create and cancel routes now also have partial local
 deterministic `DATA-014` evidence for optional `Idempotency-Key` replay/conflict
 behavior: create covers same-request replay and changed-request conflict, while
