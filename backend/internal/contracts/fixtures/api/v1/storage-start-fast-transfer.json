@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "contract_name": "storage.start_fast_transfer",
+  "owner_service": "storage-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "storage-service:fast_transfers",
+  "action": "command",
+  "method": "POST",
+  "path": "/api/v1/projects/{id}/storage/transfers/fast-stage",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": ["id"],
+  "required_request_fields": [],
+  "optional_request_fields": [
+    "name",
+    "target_namespace",
+    "source",
+    "target",
+    "tool",
+    "bytes_total",
+    "checksum",
+    "resume_token",
+    "idempotency_key"
+  ],
+  "request_example": {
+    "name": "copy1",
+    "target_namespace": "project-project-1",
+    "source": {
+      "namespace": "project-project-1",
+      "pvc": "dataset-pvc",
+      "path": "/data/source"
+    },
+    "target": {
+      "namespace": "project-project-1",
+      "pvc": "scratch-pvc",
+      "path": "/data/target"
+    },
+    "tool": "rsync",
+    "bytes_total": 4096,
+    "idempotency_key": "idem-copy1"
+  },
+  "success_statuses": [202],
+  "error_statuses": [400, 401, 403, 404, 409],
+  "emits_events": ["FastTransferChanged", "FastTransferQueued"],
+  "response_example": {
+    "id": "project-1:project-project-1:copy1",
+    "project_id": "project-1",
+    "target_namespace": "project-project-1",
+    "name": "copy1",
+    "status": "queued",
+    "progress_pct": 0,
+    "bytes_total": 4096,
+    "bytes_done": 0,
+    "checksum": "",
+    "resume_token": "",
+    "idempotency_key": "idem-copy1",
+    "dispatch_status": "submitted",
+    "created_by": "user-project-manager",
+    "created_at": "2026-06-28T00:00:00Z",
+    "updated_at": "2026-06-28T00:00:00Z"
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

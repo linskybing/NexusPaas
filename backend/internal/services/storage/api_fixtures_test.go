@@ -199,6 +199,76 @@ func TestCacheBindingExternalAPIFixturesMatchSpec(t *testing.T) {
 	}
 }
 
+func TestFastTransferExternalAPIFixturesMatchSpec(t *testing.T) {
+	tests := []struct {
+		file       string
+		contract   string
+		action     string
+		method     string
+		path       string
+		pathParams []string
+		success    []int
+		errors     []int
+		events     []string
+		status     string
+		adapter    string
+	}{
+		{
+			file:       "storage-start-fast-transfer.json",
+			contract:   "storage.start_fast_transfer",
+			action:     "command",
+			method:     http.MethodPost,
+			path:       "/api/v1/projects/{id}/storage/transfers/fast-stage",
+			pathParams: []string{"id"},
+			success:    []int{http.StatusAccepted},
+			errors:     []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict},
+			events:     []string{fastTransferChangedEvent, fastTransferQueuedEvent},
+			status:     fastTransferStatusQueued,
+			adapter:    "minio",
+		},
+		{
+			file:       "storage-get-fast-transfer.json",
+			contract:   "storage.get_fast_transfer",
+			action:     "get",
+			method:     http.MethodGet,
+			path:       "/api/v1/projects/{id}/storage/transfers/{targetNamespace}/{name}",
+			pathParams: []string{"id", "targetNamespace", "name"},
+			success:    []int{http.StatusOK},
+			errors:     []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound},
+			events:     []string{},
+			status:     fastTransferStatusRunning,
+		},
+		{
+			file:       "storage-cancel-fast-transfer.json",
+			contract:   "storage.cancel_fast_transfer",
+			action:     "command",
+			method:     http.MethodDelete,
+			path:       "/api/v1/projects/{id}/storage/transfers/{targetNamespace}/{name}",
+			pathParams: []string{"id", "targetNamespace", "name"},
+			success:    []int{http.StatusOK},
+			errors:     []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusInternalServerError},
+			events:     []string{fastTransferChangedEvent},
+			status:     fastTransferStatusCancelled,
+			adapter:    "minio",
+		},
+	}
+	spec := Spec()
+	for _, tt := range tests {
+		t.Run(tt.contract, func(t *testing.T) {
+			fixture := readStorageExternalAPIFixture(t, tt.file)
+			route, ok := findStorageExternalRoute(spec.Routes, fixture.Method, fixture.Path)
+			if !ok {
+				t.Fatalf("route %s %s not found in Spec()", fixture.Method, fixture.Path)
+			}
+			assertFastTransferExternalAPIFixtureMetadata(t, fixture, spec, route, tt.contract, tt.action)
+			assertFastTransferExternalAPIRouteMetadata(t, route, fixture, tt.method, tt.path, tt.action, tt.adapter)
+			assertFastTransferExternalAPIRequestShape(t, fixture, tt.pathParams, tt.action, tt.method)
+			assertFastTransferExternalAPIStatusesAndEvents(t, fixture, spec, tt.success, tt.errors, tt.events)
+			assertFastTransferExternalAPIResponseShape(t, fixture, tt.status)
+		})
+	}
+}
+
 func assertCreateProjectStorageBindingExternalAPIFixtureMetadata(t *testing.T, fixture storageExternalAPIFixture, spec platform.ServiceSpec, route platform.RouteSpec) {
 	t.Helper()
 	if fixture.ContractName != "storage.create_project_binding" {
@@ -353,6 +423,31 @@ func assertProjectStoragePermissionsBatchExternalAPIBaseMetadata(t *testing.T, f
 }
 
 func assertCacheBindingExternalAPIFixtureMetadata(t *testing.T, fixture storageExternalAPIFixture, spec platform.ServiceSpec, route platform.RouteSpec, contractName, action string) {
+	t.Helper()
+	if fixture.ContractName != contractName {
+		t.Fatalf("contract_name = %q, want %s", fixture.ContractName, contractName)
+	}
+	if fixture.OwnerService != spec.Name {
+		t.Fatalf("owner_service = %q, want %q", fixture.OwnerService, spec.Name)
+	}
+	if fixture.APISurface != "external_rest" {
+		t.Fatalf("api_surface = %q, want external_rest", fixture.APISurface)
+	}
+	if fixture.Consumer != "authenticated-user-client" {
+		t.Fatalf("consumer = %q, want authenticated-user-client", fixture.Consumer)
+	}
+	if got, want := fixture.Resource, spec.Name+":"+route.Resource; got != want {
+		t.Fatalf("resource = %q, want %q", got, want)
+	}
+	if fixture.Action != action || route.Action != action {
+		t.Fatalf("action fixture/route = %q/%q, want %q", fixture.Action, route.Action, action)
+	}
+	if fixture.Auth != "user" || !fixture.AuthRequired || fixture.AuthRequired != route.AuthRequired || fixture.ServiceKeyRequired != route.ServiceAuthRequired {
+		t.Fatalf("auth metadata = %q/%v/%v, want user/%v/%v", fixture.Auth, fixture.AuthRequired, fixture.ServiceKeyRequired, route.AuthRequired, route.ServiceAuthRequired)
+	}
+}
+
+func assertFastTransferExternalAPIFixtureMetadata(t *testing.T, fixture storageExternalAPIFixture, spec platform.ServiceSpec, route platform.RouteSpec, contractName, action string) {
 	t.Helper()
 	if fixture.ContractName != contractName {
 		t.Fatalf("contract_name = %q, want %s", fixture.ContractName, contractName)
@@ -549,6 +644,46 @@ func assertCacheBindingExternalAPIRequestShape(t *testing.T, fixture storageExte
 	}
 }
 
+func assertFastTransferExternalAPIRequestShape(t *testing.T, fixture storageExternalAPIFixture, pathParams []string, action, method string) {
+	t.Helper()
+	if !reflect.DeepEqual(fixture.PathParameters, pathParams) {
+		t.Fatalf("path_parameters = %v, want %v", fixture.PathParameters, pathParams)
+	}
+	if action == "command" && method == http.MethodPost {
+		if len(fixture.RequiredRequestFields) != 0 {
+			t.Fatalf("required_request_fields = %v, want none", fixture.RequiredRequestFields)
+		}
+		wantOptional := []string{"name", "target_namespace", "source", "target", "tool", "bytes_total", "checksum", "resume_token", "idempotency_key"}
+		if !reflect.DeepEqual(fixture.OptionalRequestFields, wantOptional) {
+			t.Fatalf("optional_request_fields = %v, want %v", fixture.OptionalRequestFields, wantOptional)
+		}
+		for _, field := range []string{"name", "target_namespace", "tool", "idempotency_key"} {
+			if strings.TrimSpace(textFromFixture(fixture.RequestExample[field])) == "" {
+				t.Fatalf("request_example.%s = %v, want non-empty string", field, fixture.RequestExample[field])
+			}
+		}
+		assertFastTransferEndpointExample(t, fixture.RequestExample, "source")
+		assertFastTransferEndpointExample(t, fixture.RequestExample, "target")
+		return
+	}
+	if len(fixture.RequiredRequestFields) != 0 || len(fixture.OptionalRequestFields) != 0 || len(fixture.RequestExample) != 0 {
+		t.Fatalf("request fields = required %v optional %v example %v, want no body", fixture.RequiredRequestFields, fixture.OptionalRequestFields, fixture.RequestExample)
+	}
+}
+
+func assertFastTransferEndpointExample(t *testing.T, request map[string]any, field string) {
+	t.Helper()
+	endpoint, ok := request[field].(map[string]any)
+	if !ok {
+		t.Fatalf("request_example.%s = %T, want object", field, request[field])
+	}
+	for _, key := range []string{"namespace", "pvc", "path"} {
+		if strings.TrimSpace(textFromFixture(endpoint[key])) == "" {
+			t.Fatalf("request_example.%s.%s = %v, want non-empty string", field, key, endpoint[key])
+		}
+	}
+}
+
 func assertCreateProjectStorageBindingExternalAPIStatusesAndEvents(t *testing.T, fixture storageExternalAPIFixture, spec platform.ServiceSpec) {
 	t.Helper()
 	if !reflect.DeepEqual(fixture.SuccessStatuses, []int{http.StatusCreated}) {
@@ -630,6 +765,24 @@ func assertProjectStoragePermissionsBatchExternalAPIStatusesAndEvents(t *testing
 }
 
 func assertCacheBindingExternalAPIStatusesAndEvents(t *testing.T, fixture storageExternalAPIFixture, spec platform.ServiceSpec, success, errors []int, events []string) {
+	t.Helper()
+	if !reflect.DeepEqual(fixture.SuccessStatuses, success) {
+		t.Fatalf("success_statuses = %v, want %v", fixture.SuccessStatuses, success)
+	}
+	if !reflect.DeepEqual(fixture.ErrorStatuses, errors) {
+		t.Fatalf("error_statuses = %v, want %v", fixture.ErrorStatuses, errors)
+	}
+	if !reflect.DeepEqual(fixture.EmitsEvents, events) {
+		t.Fatalf("emits_events = %v, want %v", fixture.EmitsEvents, events)
+	}
+	for _, event := range events {
+		if !storageServiceEmitsEvent(spec, event) {
+			t.Fatalf("Spec().Events does not include %s", event)
+		}
+	}
+}
+
+func assertFastTransferExternalAPIStatusesAndEvents(t *testing.T, fixture storageExternalAPIFixture, spec platform.ServiceSpec, success, errors []int, events []string) {
 	t.Helper()
 	if !reflect.DeepEqual(fixture.SuccessStatuses, success) {
 		t.Fatalf("success_statuses = %v, want %v", fixture.SuccessStatuses, success)
@@ -788,6 +941,40 @@ func assertCacheBindingResponseFields(t *testing.T, data map[string]any) {
 	}
 }
 
+func assertFastTransferExternalAPIResponseShape(t *testing.T, fixture storageExternalAPIFixture, status string) {
+	t.Helper()
+	if _, ok := fixture.ResponseExample["data"]; ok {
+		t.Fatal("response_example contains record envelope data field, want direct fast transfer data")
+	}
+	want := map[string]any{
+		"id":               "project-1:project-project-1:copy1",
+		"project_id":       "project-1",
+		"target_namespace": "project-project-1",
+		"name":             "copy1",
+		"status":           status,
+		"idempotency_key":  "idem-copy1",
+	}
+	for key, wantValue := range want {
+		if got := fixture.ResponseExample[key]; got != wantValue {
+			t.Fatalf("response_example.%s = %v, want %v", key, got, wantValue)
+		}
+	}
+	if got, want := fixture.ResponseExample["bytes_total"], float64(4096); got != want {
+		t.Fatalf("response_example.bytes_total = %v, want %v", got, want)
+	}
+	if _, ok := fixture.ResponseExample["progress_pct"].(float64); !ok {
+		t.Fatalf("response_example.progress_pct = %T, want number", fixture.ResponseExample["progress_pct"])
+	}
+	if _, ok := fixture.ResponseExample["bytes_done"].(float64); !ok {
+		t.Fatalf("response_example.bytes_done = %T, want number", fixture.ResponseExample["bytes_done"])
+	}
+	for _, field := range []string{"checksum", "resume_token"} {
+		if _, ok := fixture.ResponseExample[field].(string); !ok {
+			t.Fatalf("response_example.%s = %T, want string", field, fixture.ResponseExample[field])
+		}
+	}
+}
+
 func assertCreateProjectStorageBindingExternalAPIRouteMetadata(t *testing.T, route platform.RouteSpec, fixture storageExternalAPIFixture) {
 	t.Helper()
 	if got, want := route.Resource, "storage_bindings"; got != want {
@@ -859,6 +1046,47 @@ func assertCacheBindingExternalAPIRouteMetadata(t *testing.T, route platform.Rou
 	}
 	if route.ExternalAdapter != "" {
 		t.Fatalf("route ExternalAdapter = %q, want none", route.ExternalAdapter)
+	}
+	if fixture.Method != route.Method || fixture.Path != route.Pattern {
+		t.Fatalf("fixture route = %s %s, want %s %s", fixture.Method, fixture.Path, route.Method, route.Pattern)
+	}
+}
+
+func assertFastTransferExternalAPIRouteMetadata(t *testing.T, route platform.RouteSpec, fixture storageExternalAPIFixture, method, path, action, adapter string) {
+	t.Helper()
+	if got, want := route.Resource, "fast_transfers"; got != want {
+		t.Fatalf("route resource = %q, want %q", got, want)
+	}
+	if got, want := route.Action, action; got != want {
+		t.Fatalf("route action = %q, want %q", got, want)
+	}
+	if route.Method != method || route.Pattern != path {
+		t.Fatalf("route = %s %s, want %s %s", route.Method, route.Pattern, method, path)
+	}
+	if !route.AuthRequired {
+		t.Fatal("route AuthRequired = false, want true")
+	}
+	wantIDParam := "name"
+	if method == http.MethodPost {
+		wantIDParam = "id"
+	}
+	if route.IDParam != wantIDParam {
+		t.Fatalf("route IDParam = %q, want %s", route.IDParam, wantIDParam)
+	}
+	if route.Admin {
+		t.Fatal("route Admin = true, want false")
+	}
+	if route.StateChanging != (method != http.MethodGet) {
+		t.Fatalf("route StateChanging = %v, want %v", route.StateChanging, method != http.MethodGet)
+	}
+	if route.ServiceAuthRequired {
+		t.Fatal("route ServiceAuthRequired = true, want false")
+	}
+	if route.PolicyBypass {
+		t.Fatal("route PolicyBypass = true, want false")
+	}
+	if route.ExternalAdapter != adapter {
+		t.Fatalf("route ExternalAdapter = %q, want %q", route.ExternalAdapter, adapter)
 	}
 	if fixture.Method != route.Method || fixture.Path != route.Pattern {
 		t.Fatalf("fixture route = %s %s, want %s %s", fixture.Method, fixture.Path, route.Method, route.Pattern)

@@ -473,6 +473,14 @@ correctness, resume, production secret handling, external storage backends,
 multi-node behavior, performance, durability, storage GA, Full GA, or V1 launch
 readiness.
 
+FastTransfer custom external API routes now have local/static typed fixture
+parity for fast-stage start, get, and DELETE cancel. This proves contract/Spec
+parity and response-shape documentation only; it does not prove generic/legacy
+transfer route coverage, live transfer execution, live authorization, live
+k8s-control callback delivery, bytes moved, checksum correctness, resume,
+external storage backends, storage GA, Full GA, or V1 external production launch
+readiness.
+
 StorageProfile-to-HPC-StorageClass manifest drift now has local/static test
 evidence only: `storage-service` startup seeds default profile records, the
 storage package test parses `backend/deploy/hpc/storage/*.yaml`, and every
