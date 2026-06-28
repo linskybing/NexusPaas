@@ -399,6 +399,16 @@ and other-user permission denial. This is mount-plan authorization/isolation
 proof only; it does not prove live Kubernetes mount execution, cluster PVC
 isolation, CSI behavior, full storage GA, Full GA, or first-version readiness.
 
+Storage DataPlanePlan now has local/lightweight `internal/e2e` contract
+evidence: an in-memory storage-service app resolves
+`POST /internal/storage/projects/{project_id}/data-plane-plan`, rejects wrong
+service keys, uses seeded storage-owned binding/source/project-permission
+records instead of forged request PVC details, returns default local scratch and
+CephFS checkpoint profiles, and publishes `DataPlanePlanBuilt`. This is local
+contract evidence only; it does not prove live kind, live Kubernetes/CSI
+data-plane execution, byte-mover behavior, live mount execution, full storage
+GA, Full GA, or first-version readiness.
+
 Storage permission management now has local handler-level `STORAGE-003` RBAC
 proof: direct handler tests cover plain group member / Project reader denial
 for direct create/set, batch set, and batch delete group/project storage
