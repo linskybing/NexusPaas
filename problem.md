@@ -409,10 +409,13 @@ publishes `DataPlanePlanBuilt`. The workload dispatch path now also has a
 fake-cluster cross-service proof: workload-service calls the storage-service
 `httptest` endpoint through its real internal data-plane client and creates a
 Pod with scratch PVC wiring, stage-in PVC wiring/initContainer copy command,
-and checkpoint env from the storage-owned plan. This is local contract evidence
-only; it does not prove live kind, live Kubernetes/CSI data-plane execution,
-byte-mover behavior, live mount execution, full storage GA, Full GA, or
-first-version readiness.
+and checkpoint env from the storage-owned plan. An env-gated live Kubernetes
+API admission E2E now covers storage DataPlane dispatch object creation only;
+it does not prove CSI mount, scheduler success, local PV binding, byte mover
+behavior, StorageClass runtime validation, storage GA, or Full GA. This is local
+contract evidence and API admission evidence only; it does not prove live
+Kubernetes/CSI data-plane execution, byte-mover behavior, live mount execution,
+full storage GA, Full GA, or first-version readiness.
 
 StorageProfile-to-HPC-StorageClass manifest drift now has local/static test
 evidence only: `storage-service` startup seeds default profile records, the

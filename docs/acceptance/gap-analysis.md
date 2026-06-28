@@ -419,19 +419,25 @@ references, and emits `DataPlanePlanBuilt`. The workload dispatch test starts
 storage-service behind `httptest`, runs workload-service maintenance with the
 real internal data-plane client and fake cluster, then verifies the created Pod
 has scratch PVC wiring, stage-in PVC wiring/initContainer copy command, and
-checkpoint env from the storage-owned plan. StorageProfile-to-HPC-StorageClass
+checkpoint env from the storage-owned plan. Env-gated live Kubernetes API
+admission evidence for storage DataPlane dispatch exists via
+`backend/internal/e2e/storage_data_plane_kind_admission_e2e_test.go`; remaining
+gaps stay open for CSI mount, scheduler success, local PV binding, byte mover
+behavior, StorageClass runtime validation, storage GA, and Full GA.
+StorageProfile-to-HPC-StorageClass
 drift now also has local/static repository evidence: `storage-service` startup
 seeds the default profiles, the storage package test parses
 `backend/deploy/hpc/storage/*.yaml`, and every non-object seeded profile with
 `storage_class_name` must match a `storage.k8s.io/v1` `StorageClass` whose
 `metadata.name` and `nexuspaas.io/storage-profile` label match the profile;
 `minio-artifact`/object remains explicitly allowed without a StorageClass.
-These local/static/in-memory checks do not prove live permission enforcement,
-live kind/Kubernetes mount or data-plane execution, cluster PVC isolation,
-namespace enforcement, CSI behavior, local PV binding, byte-mover behavior,
-full storage GA, Full GA, or first-version readiness. The broader storage
-isolation and mount validation criteria below still should not be treated as
-fully proven unless `gap.md` records explicit evidence for those slices.
+These local/static/in-memory and env-gated API-admission checks do not prove
+live permission enforcement, live Kubernetes mount or data-plane execution,
+cluster PVC isolation, namespace enforcement, CSI behavior, local PV binding,
+byte-mover behavior, full storage GA, Full GA, or first-version readiness. The
+broader storage isolation and mount validation criteria below still should not
+be treated as fully proven unless `gap.md` records explicit evidence for those
+slices.
 
 Storage project permission delete now also has local/static external REST
 fixture coverage for
