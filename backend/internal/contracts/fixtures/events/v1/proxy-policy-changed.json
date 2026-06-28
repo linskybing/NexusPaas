@@ -1,0 +1,18 @@
+{
+  "event_id": "99999999-9999-4999-8999-999999999999",
+  "schema_version": 1,
+  "event_type": "ProxyPolicyChanged",
+  "producer": "authorization-policy-service",
+  "occurred_at": "2026-06-28T00:00:00Z",
+  "trace_id": "trace-proxy-policy-changed-v1",
+  "request_id": "req-proxy-policy-changed-v1",
+  "aggregate_id": "proxy-role-ga-auditor",
+  "payload": {
+    "id": "proxy-role-ga-auditor",
+    "name": "ga_auditor",
+    "display_name": "GA Auditor Updated",
+    "description": "Updated read-only GA audit role",
+    "is_system": false,
+    "action": "role_update"
+  }
+}

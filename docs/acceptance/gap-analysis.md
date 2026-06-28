@@ -79,6 +79,14 @@ local/static external REST fixture parity for the three profile create fixtures
 against `schedulerquota.Spec()` route metadata and service event names. This is
 static contract evidence only; it does not prove live scheduler/profile
 behavior, Kubernetes placement, or full typed API coverage.
+Authorization-policy proxy role create, update, and delete now also have
+local/static external REST fixture parity against `authorizationpolicy.Spec()`
+for admin route metadata, authenticated-user/no-service-key posture, path
+params, success/error statuses, and `ProxyPolicyChanged` linkage. The
+`ProxyPolicyChanged` event envelope fixture uses role-map public fields plus
+`action`. This is static contract evidence only; it does not prove live admin
+authorization, live proxy role mutation behavior, full typed API coverage, DATA
+GA, Full GA, or first-version readiness.
 Identity auth/session entrypoints now also have local/static typed external REST
 fixture coverage for `POST /api/v1/register`, `POST /api/v1/login`,
 `POST /api/v1/refresh`, and `POST /api/v1/cli/login`: the fixtures declare

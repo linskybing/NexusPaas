@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "contract_name": "authorization-policy.create_proxy_role",
+  "owner_service": "authorization-policy-service",
+  "api_surface": "external_rest",
+  "consumer": "authenticated-user-client",
+  "resource": "authorization-policy-service:proxy_roles",
+  "action": "create",
+  "method": "POST",
+  "path": "/api/v1/admin/proxy-rbac/roles",
+  "auth": "user",
+  "auth_required": true,
+  "service_key_required": false,
+  "path_parameters": [],
+  "required_request_fields": [
+    "name",
+    "display_name"
+  ],
+  "optional_request_fields": [
+    "id",
+    "description"
+  ],
+  "request_example": {
+    "id": "proxy-role-ga-auditor",
+    "name": "ga_auditor",
+    "display_name": "GA Auditor",
+    "description": "Read-only GA audit role"
+  },
+  "success_statuses": [
+    201
+  ],
+  "error_statuses": [
+    400,
+    401,
+    403,
+    409,
+    500
+  ],
+  "emits_events": [
+    "ProxyPolicyChanged"
+  ],
+  "response_example": {
+    "id": "proxy-role-ga-auditor",
+    "name": "ga_auditor",
+    "display_name": "GA Auditor",
+    "description": "Read-only GA audit role",
+    "is_system": false,
+    "created_at": "2026-06-28T00:00:00Z",
+    "updated_at": "2026-06-28T00:00:00Z"
+  },
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}
