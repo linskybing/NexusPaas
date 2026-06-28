@@ -15,12 +15,15 @@ import (
 func TestExternalAPIFixturesAreValidV1(t *testing.T) {
 	fixtures := externalAPIFixtureFiles(t)
 	want := []string{
+		"authorization-policy-assign-proxy-role-user.json",
 		"authorization-policy-create-proxy-policy.json",
 		"authorization-policy-create-proxy-role.json",
 		"authorization-policy-delete-proxy-policy.json",
 		"authorization-policy-delete-proxy-role.json",
 		"authorization-policy-get-proxy-service.json",
+		"authorization-policy-list-proxy-role-users.json",
 		"authorization-policy-list-proxy-services.json",
+		"authorization-policy-unassign-proxy-role-user.json",
 		"authorization-policy-update-proxy-policy.json",
 		"authorization-policy-update-proxy-role.json",
 		"identity-cli-login.json",
@@ -71,6 +74,13 @@ func TestExternalAPIFixturesAreValidV1(t *testing.T) {
 	}
 
 	wantRoutes := map[string]externalAPIFixtureRoute{
+		"authorization-policy-assign-proxy-role-user.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_role_users",
+			action:       "create",
+			method:       http.MethodPost,
+			path:         "/api/v1/admin/proxy-rbac/roles/{id}/users",
+		},
 		"authorization-policy-create-proxy-policy.json": {
 			ownerService: "authorization-policy-service",
 			resource:     "authorization-policy-service:proxy_policies",
@@ -112,6 +122,20 @@ func TestExternalAPIFixturesAreValidV1(t *testing.T) {
 			action:       "list",
 			method:       http.MethodGet,
 			path:         "/api/v1/admin/proxy-rbac/services",
+		},
+		"authorization-policy-list-proxy-role-users.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_role_users",
+			action:       "list",
+			method:       http.MethodGet,
+			path:         "/api/v1/admin/proxy-rbac/roles/{id}/users",
+		},
+		"authorization-policy-unassign-proxy-role-user.json": {
+			ownerService: "authorization-policy-service",
+			resource:     "authorization-policy-service:proxy_role_users",
+			action:       "delete",
+			method:       http.MethodDelete,
+			path:         "/api/v1/admin/proxy-rbac/roles/{id}/users/{user_id}",
 		},
 		"authorization-policy-update-proxy-policy.json": {
 			ownerService: "authorization-policy-service",

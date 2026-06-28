@@ -102,6 +102,14 @@ read-only/no-event behavior, success/error statuses, and service-row response
 examples. Typed API coverage remains Open; this does not prove live admin
 authorization, live proxy service behavior, DATA GA, Full GA, or first-version
 readiness.
+Authorization-policy proxy role-user list, assign, and unassign now also have
+local/static external REST fixture parity against `authorizationpolicy.Spec()`
+for admin route metadata, authenticated-user/no-service-key posture, path
+params, delete route `IDParam` `user_id`, read-only/no-event list behavior,
+assign/unassign `ProxyPolicyChanged` linkage, success/error statuses, and
+role-user response examples with nested public role data. Typed API coverage
+remains Open; this does not prove live admin authorization, live role-user
+mutation behavior, DATA GA, Full GA, or first-version readiness.
 Identity auth/session entrypoints now also have local/static typed external REST
 fixture coverage for `POST /api/v1/register`, `POST /api/v1/login`,
 `POST /api/v1/refresh`, and `POST /api/v1/cli/login`: the fixtures declare

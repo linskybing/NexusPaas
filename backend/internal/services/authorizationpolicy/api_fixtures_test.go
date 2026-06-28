@@ -143,6 +143,58 @@ func TestProxyServiceReadExternalAPIFixturesMatchSpec(t *testing.T) {
 	assertProxyServiceReadExternalAPIFixturesMatchSpec(t, cases)
 }
 
+func TestProxyRoleUserExternalAPIFixturesMatchSpec(t *testing.T) {
+	cases := []proxyRoleUserFixtureCase{
+		{
+			name:           "list",
+			fixtureName:    "authorization-policy-list-proxy-role-users.json",
+			contractName:   "authorization-policy.list_proxy_role_users",
+			method:         http.MethodGet,
+			path:           "/api/v1/admin/proxy-rbac/roles/{id}/users",
+			action:         "list",
+			idParam:        "id",
+			pathParameters: []string{"id"},
+			requiredFields: []string{},
+			success:        []int{http.StatusOK},
+			errors:         []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError},
+			emitsEvents:    []string{},
+			collection:     true,
+		},
+		{
+			name:           "assign",
+			fixtureName:    "authorization-policy-assign-proxy-role-user.json",
+			contractName:   "authorization-policy.assign_proxy_role_user",
+			method:         http.MethodPost,
+			path:           "/api/v1/admin/proxy-rbac/roles/{id}/users",
+			action:         "create",
+			idParam:        "id",
+			pathParameters: []string{"id"},
+			requiredFields: []string{"user_id"},
+			success:        []int{http.StatusOK, http.StatusCreated},
+			errors:         []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusInternalServerError},
+			emitsEvents:    []string{"ProxyPolicyChanged"},
+			stateChanging:  true,
+		},
+		{
+			name:           "unassign",
+			fixtureName:    "authorization-policy-unassign-proxy-role-user.json",
+			contractName:   "authorization-policy.unassign_proxy_role_user",
+			method:         http.MethodDelete,
+			path:           "/api/v1/admin/proxy-rbac/roles/{id}/users/{user_id}",
+			action:         "delete",
+			idParam:        "user_id",
+			pathParameters: []string{"id", "user_id"},
+			requiredFields: []string{},
+			success:        []int{http.StatusOK},
+			errors:         []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError},
+			emitsEvents:    []string{"ProxyPolicyChanged"},
+			stateChanging:  true,
+		},
+	}
+
+	assertProxyRoleUserExternalAPIFixturesMatchSpec(t, cases)
+}
+
 func assertProxyRBACExternalAPIFixturesMatchSpec(t *testing.T, cases []proxyRBACFixtureCase) {
 	t.Helper()
 	spec := Spec()
@@ -184,6 +236,28 @@ func assertProxyServiceReadExternalAPIFixturesMatchSpec(t *testing.T, cases []pr
 	}
 }
 
+func assertProxyRoleUserExternalAPIFixturesMatchSpec(t *testing.T, cases []proxyRoleUserFixtureCase) {
+	t.Helper()
+	spec := Spec()
+	if !authorizationPolicySpecEmitsEvent(spec, "ProxyPolicyChanged") {
+		t.Fatalf("spec events = %v, want ProxyPolicyChanged", spec.Events)
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := readAuthorizationPolicyExternalAPIFixture(t, tt.fixtureName)
+			route, ok := findAuthorizationPolicyRoute(spec.Routes, fixture.Method, fixture.Path)
+			if !ok {
+				t.Fatalf("route %s %s not found in Spec()", fixture.Method, fixture.Path)
+			}
+
+			assertProxyRoleUserFixtureMetadata(t, fixture, spec, route, tt)
+			assertProxyRoleUserRouteMetadata(t, route, fixture, tt)
+			assertProxyRoleUserExamples(t, fixture, tt)
+		})
+	}
+}
+
 type proxyRBACFixtureCase struct {
 	name           string
 	fixtureName    string
@@ -211,6 +285,23 @@ type proxyServiceReadFixtureCase struct {
 	idParam        string
 	pathParameters []string
 	errors         []int
+	collection     bool
+}
+
+type proxyRoleUserFixtureCase struct {
+	name           string
+	fixtureName    string
+	contractName   string
+	method         string
+	path           string
+	action         string
+	idParam        string
+	pathParameters []string
+	requiredFields []string
+	success        []int
+	errors         []int
+	emitsEvents    []string
+	stateChanging  bool
 	collection     bool
 }
 
@@ -294,9 +385,85 @@ func assertProxyServiceReadExamples(t *testing.T, fixture authorizationPolicyExt
 	}
 	row := fixture.ResponseExample
 	if want.collection {
-		row = firstProxyServiceReadItem(t, fixture.ResponseExample)
+		row = firstResponseItem(t, fixture.ResponseExample)
 	}
 	assertProxyServiceReadResponseRow(t, row)
+}
+
+func assertProxyRoleUserFixtureMetadata(t *testing.T, fixture authorizationPolicyExternalAPIFixture, spec platform.ServiceSpec, route platform.RouteSpec, want proxyRoleUserFixtureCase) {
+	t.Helper()
+	if fixture.ContractName != want.contractName {
+		t.Fatalf("contract_name = %q, want %q", fixture.ContractName, want.contractName)
+	}
+	if fixture.OwnerService != spec.Name {
+		t.Fatalf("owner_service = %q, want %q", fixture.OwnerService, spec.Name)
+	}
+	if got, want := fixture.Resource, spec.Name+":"+route.Resource; got != want {
+		t.Fatalf("resource = %q, want %q", got, want)
+	}
+	if fixture.Action != route.Action || fixture.Action != want.action {
+		t.Fatalf("action = %q, want %q", fixture.Action, want.action)
+	}
+	if fixture.Auth != "user" || !fixture.AuthRequired || fixture.ServiceKeyRequired {
+		t.Fatalf("auth metadata = %q/%v/%v, want user/true/false", fixture.Auth, fixture.AuthRequired, fixture.ServiceKeyRequired)
+	}
+	if !reflect.DeepEqual(fixture.PathParameters, want.pathParameters) {
+		t.Fatalf("path_parameters = %v, want %v", fixture.PathParameters, want.pathParameters)
+	}
+	if !reflect.DeepEqual(fixture.RequiredRequestFields, want.requiredFields) {
+		t.Fatalf("required_request_fields = %v, want %v", fixture.RequiredRequestFields, want.requiredFields)
+	}
+	if len(fixture.OptionalRequestFields) != 0 {
+		t.Fatalf("optional_request_fields = %v, want empty", fixture.OptionalRequestFields)
+	}
+	if !reflect.DeepEqual(fixture.SuccessStatuses, want.success) {
+		t.Fatalf("success_statuses = %v, want %v", fixture.SuccessStatuses, want.success)
+	}
+	if !reflect.DeepEqual(fixture.ErrorStatuses, want.errors) {
+		t.Fatalf("error_statuses = %v, want %v", fixture.ErrorStatuses, want.errors)
+	}
+	if !reflect.DeepEqual(fixture.EmitsEvents, want.emitsEvents) {
+		t.Fatalf("emits_events = %v, want %v", fixture.EmitsEvents, want.emitsEvents)
+	}
+}
+
+func assertProxyRoleUserRouteMetadata(t *testing.T, route platform.RouteSpec, fixture authorizationPolicyExternalAPIFixture, want proxyRoleUserFixtureCase) {
+	t.Helper()
+	if route.Method != want.method || route.Pattern != want.path {
+		t.Fatalf("route = %s %s, want %s %s", route.Method, route.Pattern, want.method, want.path)
+	}
+	if route.Resource != "proxy_role_users" || route.Action != want.action {
+		t.Fatalf("route metadata = %#v, want proxy_role_users/%s", route, want.action)
+	}
+	if route.IDParam != want.idParam {
+		t.Fatalf("route IDParam = %q, want %q", route.IDParam, want.idParam)
+	}
+	if !route.Admin || !route.AuthRequired || route.ServiceAuthRequired || route.StateChanging != want.stateChanging {
+		t.Fatalf("route auth/change metadata = admin:%v auth:%v service:%v state:%v, want true/true/false/%v", route.Admin, route.AuthRequired, route.ServiceAuthRequired, route.StateChanging, want.stateChanging)
+	}
+	if fixture.Method != route.Method || fixture.Path != route.Pattern {
+		t.Fatalf("fixture route = %s %s, want %s %s", fixture.Method, fixture.Path, route.Method, route.Pattern)
+	}
+}
+
+func assertProxyRoleUserExamples(t *testing.T, fixture authorizationPolicyExternalAPIFixture, want proxyRoleUserFixtureCase) {
+	t.Helper()
+	if want.action == "delete" {
+		if len(fixture.RequestExample) != 0 || len(fixture.ResponseExample) != 0 {
+			t.Fatalf("delete request/response examples = %v/%v, want empty objects", fixture.RequestExample, fixture.ResponseExample)
+		}
+		return
+	}
+	if len(want.requiredFields) == 0 && len(fixture.RequestExample) != 0 {
+		t.Fatalf("request_example = %v, want empty object", fixture.RequestExample)
+	}
+	assertRequiredRequestFields(t, fixture, want.requiredFields)
+
+	row := fixture.ResponseExample
+	if want.collection {
+		row = firstResponseItem(t, fixture.ResponseExample)
+	}
+	assertProxyRoleUserResponseRow(t, row)
 }
 
 func assertProxyRBACFixtureMetadata(t *testing.T, fixture authorizationPolicyExternalAPIFixture, spec platform.ServiceSpec, route platform.RouteSpec, want proxyRBACFixtureCase) {
@@ -336,7 +503,7 @@ func assertProxyRBACFixtureMetadata(t *testing.T, fixture authorizationPolicyExt
 	}
 }
 
-func firstProxyServiceReadItem(t *testing.T, response map[string]any) map[string]any {
+func firstResponseItem(t *testing.T, response map[string]any) map[string]any {
 	t.Helper()
 	items, ok := response["items"].([]any)
 	if !ok || len(items) == 0 {
@@ -380,6 +547,19 @@ func assertResponseStringArray(t *testing.T, row map[string]any, field string) {
 		if !ok || text == "" {
 			t.Fatalf("response row %s[%d] = %v, want non-empty string", field, i, value)
 		}
+	}
+}
+
+func assertProxyRoleUserResponseRow(t *testing.T, row map[string]any) {
+	t.Helper()
+	assertResponseStringFields(t, row, []string{"id", "role_id", "user_id", "assigned_by", "created_at"})
+	role, ok := row["role"].(map[string]any)
+	if !ok {
+		t.Fatalf("response row role = %v, want object", row["role"])
+	}
+	assertResponseStringFields(t, role, []string{"id", "name", "display_name", "description", "created_at", "updated_at"})
+	if _, ok := role["is_system"].(bool); !ok {
+		t.Fatalf("response row role.is_system = %v, want bool", role["is_system"])
 	}
 }
 
