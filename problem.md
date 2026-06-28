@@ -400,14 +400,19 @@ proof only; it does not prove live Kubernetes mount execution, cluster PVC
 isolation, CSI behavior, full storage GA, Full GA, or first-version readiness.
 
 Storage DataPlanePlan now has local/lightweight `internal/e2e` contract
-evidence: an in-memory storage-service app resolves
-`POST /internal/storage/projects/{project_id}/data-plane-plan`, rejects wrong
-service keys, uses seeded storage-owned binding/source/project-permission
-records instead of forged request PVC details, returns default local scratch and
-CephFS checkpoint profiles, and publishes `DataPlanePlanBuilt`. This is local
-contract evidence only; it does not prove live kind, live Kubernetes/CSI
-data-plane execution, byte-mover behavior, live mount execution, full storage
-GA, Full GA, or first-version readiness.
+evidence for the storage route and workload dispatch path. The storage-service
+route resolves `POST /internal/storage/projects/{project_id}/data-plane-plan`,
+rejects wrong service keys, uses seeded storage-owned
+binding/source/project-permission records instead of forged request PVC
+details, returns default local scratch and CephFS checkpoint profiles, and
+publishes `DataPlanePlanBuilt`. The workload dispatch path now also has a
+fake-cluster cross-service proof: workload-service calls the storage-service
+`httptest` endpoint through its real internal data-plane client and creates a
+Pod with scratch PVC wiring, stage-in PVC wiring/initContainer copy command,
+and checkpoint env from the storage-owned plan. This is local contract evidence
+only; it does not prove live kind, live Kubernetes/CSI data-plane execution,
+byte-mover behavior, live mount execution, full storage GA, Full GA, or
+first-version readiness.
 
 Storage permission management now has local handler-level `STORAGE-003` RBAC
 proof: direct handler tests cover plain group member / Project reader denial
