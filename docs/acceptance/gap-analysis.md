@@ -433,6 +433,17 @@ from the scratch PVC, and no stage target PVC was materialized. This does not
 prove stage-in byte copy, CSI/local NVMe/CephFS/Longhorn runtime, quota-aware
 scratch sizing, checkpoint flush, performance, multi-node behavior, storage GA,
 Full GA, or V1 external production launch readiness.
+Env-gated workload-service kind stage-in byte-copy evidence now exists via
+`backend/internal/services/workload/dispatcher_dataplane_stagein_kind_e2e_test.go`:
+a pre-populated stage PVC and stub DataPlanePlan drove workload dispatch,
+workload-service created the scratch PVC, the generated initContainer copied a
+small payload from stage PVC to scratch, the main container read that payload and
+wrote a checkpoint marker, and a verify Pod read both files back from scratch.
+This does not prove storage-service resolver runtime, storage permission
+trust-boundary enforcement, `EnsurePVCMounted`/CSI source projection, local
+NVMe/CephFS/Longhorn/JuiceFS runtime, checkpoint flush to authority storage,
+quota-aware scratch sizing, performance, multi-node behavior, storage GA, Full
+GA, or V1 external production launch readiness.
 Env-gated live Kubernetes API admission evidence for FastTransfer mover Job
 creation and repeat `already_exists` now exists via
 `backend/internal/e2e/fast_transfer_mover_kind_admission_e2e_test.go`; it proves
