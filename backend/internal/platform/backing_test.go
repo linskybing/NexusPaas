@@ -47,7 +47,7 @@ func TestDependencyAddressRejectsInvalidURLs(t *testing.T) {
 
 func TestReadyzChecksProductionBackingDependencies(t *testing.T) {
 	checker := &recordingBackingChecker{}
-	app := NewApp(validProductionConfig(), WithBackingChecker(checker))
+	app := NewApp(validProductionConfigForService("collaboration-unit"), WithBackingChecker(checker))
 
 	rec := httptest.NewRecorder()
 	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))

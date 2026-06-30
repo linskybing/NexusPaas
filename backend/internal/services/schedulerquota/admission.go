@@ -150,6 +150,9 @@ func reviewSubmitAdmission(app *platform.App, r *http.Request, _ platform.RouteS
 	if err := validateAdmissionResourceManifestLimits(req, app.Config); err != nil {
 		return platform.InputLimitStatus(err, http.StatusUnprocessableEntity), admissionDenied(req, platform.InputLimitMessage(err, err.Error())), nil
 	}
+	if violation, found := admissionRuntimeSocketPolicyViolationFromRequest(req); found {
+		return http.StatusForbidden, admissionDenied(req, violation.Reason), nil
+	}
 	if violation, found := admissionSecretPolicyViolationFromRequest(req); found {
 		publishSecretAccessRejected(app, r, req, violation)
 		return http.StatusForbidden, admissionDenied(req, violation.Reason), nil

@@ -168,7 +168,7 @@ func newImageRegistryTxTestApp(t *testing.T) (*platform.App, *imageRegistryTxSto
 		{"id": "U1:G1", "user_id": "U1", "group_id": "G1", "role": "admin"},
 	})
 	createImageRecords(t, app, imageCatalogResource, []map[string]any{
-		{"id": "tag-1", "registry": "registry.local", "repository": "library/base", "tag": "1.0"},
+		{"id": "tag-1", "registry": "registry.local", "repository": "library/base", "tag": "1.0", "digest": "sha256:base", "scan_status": "Success"},
 	})
 	return app, store
 }

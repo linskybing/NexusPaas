@@ -507,6 +507,9 @@ func (c Config) Validate() error {
 	} else if err := c.validateNonProduction(); err != nil {
 		return err
 	}
+	if err := c.validateStrictServiceName(); err != nil {
+		return err
+	}
 	return c.validateStrictServiceIdentity()
 }
 
@@ -535,6 +538,18 @@ func (c Config) validateProduction() error {
 		return err
 	}
 	return c.validateProductionBackingServices()
+}
+
+func (c Config) validateStrictServiceName() error {
+	if !c.StrictRuntimeChecks() {
+		return nil
+	}
+	switch strings.TrimSpace(c.ServiceName) {
+	case "", "all":
+		return errors.New("SERVICE_NAME must be an explicit service or deployable unit in staging/production")
+	default:
+		return nil
+	}
 }
 
 func (c Config) validateNonProduction() error {

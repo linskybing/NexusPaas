@@ -85,6 +85,7 @@ func TestDispatchSubmittedWorkloadCreatesNativeJobAndMarksRunning(t *testing.T) 
 	if job.Spec.Template.Spec.SchedulerName != defaultDispatcherSchedulerName {
 		t.Fatalf("schedulerName = %q, want %q", job.Spec.Template.Spec.SchedulerName, defaultDispatcherSchedulerName)
 	}
+	assertCorePodSpecAutomountSATokenFalse(t, job.Spec.Template.Spec)
 	if job.Spec.Template.Spec.PriorityClassName != "platform-batch-high" {
 		t.Fatalf("priorityClassName = %q, want platform-batch-high", job.Spec.Template.Spec.PriorityClassName)
 	}
@@ -243,6 +244,92 @@ func TestDispatchResourcesRejectsRawSecret(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "super-secret") {
 		t.Fatalf("raw Secret rejection leaked plaintext: %v", err)
+	}
+}
+
+func TestDispatchManifestsDisableUserWorkloadServiceAccountToken(t *testing.T) {
+	job := map[string]any{"id": "J-sec016", "job_id": "J-sec016", "project_id": "P1", "user_id": "U1"}
+	cases := []struct {
+		name      string
+		resource  dispatchResource
+		specPaths [][]string
+	}{
+		{
+			name:      "pod",
+			resource:  dispatchResource{Name: "pod-sa", Kind: "Pod", Raw: []byte(`{"apiVersion":"v1","kind":"Pod","metadata":{"name":"pod-sa"},"spec":{"automountServiceAccountToken":true,"containers":[{"name":"main","image":"busybox"}]}}`)},
+			specPaths: [][]string{{"spec"}},
+		},
+		{
+			name:      "job",
+			resource:  dispatchResource{Name: "job-sa", Kind: "Job", Raw: []byte(`{"apiVersion":"batch/v1","kind":"Job","metadata":{"name":"job-sa"},"spec":{"template":{"spec":{"automountServiceAccountToken":true,"restartPolicy":"Never","containers":[{"name":"main","image":"busybox"}]}}}}`)},
+			specPaths: [][]string{{"spec", "template", "spec"}},
+		},
+		{
+			name:      "vcjob",
+			resource:  dispatchResource{Name: "vcjob-sa", Kind: "Job", Raw: []byte(`{"apiVersion":"batch.volcano.sh/v1alpha1","kind":"Job","metadata":{"name":"vcjob-sa"},"spec":{"tasks":[{"name":"main","template":{"spec":{"automountServiceAccountToken":true,"containers":[{"name":"main","image":"busybox"}]}}}]}}`)},
+			specPaths: [][]string{{"spec", "tasks", "0", "template", "spec"}},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := prepareDispatchManifest(job, tc.resource, "proj-p1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var obj map[string]any
+			if err := json.Unmarshal(raw, &obj); err != nil {
+				t.Fatalf("unmarshal prepared manifest: %v", err)
+			}
+			for _, path := range tc.specPaths {
+				assertMapPodSpecAutomountSATokenFalse(t, obj, path...)
+			}
+		})
+	}
+}
+
+func TestDispatchManifestsRejectRuntimeSocketHostPath(t *testing.T) {
+	job := map[string]any{"id": "J-sec017", "job_id": "J-sec017", "project_id": "P1", "user_id": "U1"}
+	cases := []struct {
+		name     string
+		resource dispatchResource
+	}{
+		{
+			name:     "pod",
+			resource: dispatchResource{Name: "pod-socket", Kind: "Pod", Raw: []byte(`{"apiVersion":"v1","kind":"Pod","metadata":{"name":"pod-socket"},"spec":{"containers":[{"name":"main","image":"busybox"}],"volumes":[{"name":"runtime","hostPath":{"path":"/var/run/docker.sock"}}]}}`)},
+		},
+		{
+			name:     "job",
+			resource: dispatchResource{Name: "job-socket", Kind: "Job", Raw: []byte(`{"apiVersion":"batch/v1","kind":"Job","metadata":{"name":"job-socket"},"spec":{"template":{"spec":{"restartPolicy":"Never","containers":[{"name":"main","image":"busybox"}],"volumes":[{"name":"runtime","hostPath":{"path":"/run/containerd/containerd.sock"}}]}}}}`)},
+		},
+		{
+			name:     "deployment",
+			resource: dispatchResource{Name: "deploy-socket", Kind: "Deployment", Raw: []byte(`{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"deploy-socket"},"spec":{"template":{"spec":{"containers":[{"name":"main","image":"busybox"}],"volumes":[{"name":"runtime","hostPath":{"path":"/run/crio/crio.sock"}}]}}}}`)},
+		},
+		{
+			name:     "vcjob",
+			resource: dispatchResource{Name: "vcjob-socket", Kind: "Job", Raw: []byte(`{"apiVersion":"batch.volcano.sh/v1alpha1","kind":"Job","metadata":{"name":"vcjob-socket"},"spec":{"tasks":[{"name":"main","template":{"spec":{"containers":[{"name":"main","image":"busybox"}],"volumes":[{"name":"runtime","hostPath":{"path":"/var/run/crio/crio.sock"}}]}}}]}}`)},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := prepareDispatchManifest(job, tc.resource, "proj-p1")
+			if err == nil || !strings.Contains(err.Error(), "container runtime socket") {
+				t.Fatalf("prepareDispatchManifest err = %v, want runtime socket rejection", err)
+			}
+		})
+	}
+}
+
+func TestDispatchVolcanoSynthesisRejectsRuntimeSocketHostPath(t *testing.T) {
+	job := map[string]any{"id": "J-sec017-vc", "job_id": "J-sec017-vc", "project_id": "P1", "user_id": "U1", "scheduler_name": "volcano"}
+	resource := dispatchResource{Name: "train", Kind: "Job", Raw: []byte(`{"apiVersion":"batch/v1","kind":"Job","metadata":{"name":"train"},"spec":{"template":{"spec":{"restartPolicy":"Never","containers":[{"name":"main","image":"busybox"}],"volumes":[{"name":"runtime","hostPath":{"path":"/var/run/containerd/containerd.sock"}}]}}}}`)}
+
+	_, err := prepareVolcanoDispatchManifests(job, []dispatchResource{resource}, "proj-p1")
+
+	if err == nil || !strings.Contains(err.Error(), "container runtime socket") {
+		t.Fatalf("prepareVolcanoDispatchManifests err = %v, want runtime socket rejection", err)
 	}
 }
 
@@ -447,6 +534,7 @@ func TestDispatchSubmittedWorkloadSynthesizesVolcanoVCJobFromBatchJob(t *testing
 	if taskSpec["schedulerName"] != "volcano" || taskSpec["priorityClassName"] != "platform-batch-high" {
 		t.Fatalf("synthesized task spec = %#v, want volcano scheduler and priority", taskSpec)
 	}
+	assertMapPodSpecAutomountSATokenFalse(t, taskSpec)
 	record, _ := app.Store.Get(ctx, jobsResource, "J2600100")
 	if resources, ok := record.Data["created_resources"].([]map[string]any); !ok || len(resources) != 1 || resources[0]["kind"] != "VCJob" {
 		t.Fatalf("created resources = %#v, want synthesized VCJob", record.Data["created_resources"])
@@ -595,6 +683,7 @@ func assertFallbackPodCreated(t *testing.T, ctx context.Context, cl *cluster.Cli
 	if pod.Spec.SchedulerName != "volcano" || pod.Spec.PriorityClassName != "platform-batch-high" {
 		t.Fatalf("pod %s spec = %#v, want volcano scheduler and priority", name, pod.Spec)
 	}
+	assertCorePodSpecAutomountSATokenFalse(t, pod.Spec)
 }
 
 func assertCreatedResourceKinds(t *testing.T, ctx context.Context, app *platform.App, jobID string, kinds []string) {
@@ -656,6 +745,7 @@ func TestDispatchSubmittedWorkloadSynthesizesPodGroupForVolcanoNativePod(t *test
 	if pod.Labels[volcanoPodGroupLabelKey] != "j2600101" || pod.Spec.SchedulerName != "volcano" {
 		t.Fatalf("pod labels/spec = %#v/%#v, want volcano PodGroup label and scheduler", pod.Labels, pod.Spec)
 	}
+	assertCorePodSpecAutomountSATokenFalse(t, pod.Spec)
 	record, _ := app.Store.Get(ctx, jobsResource, "J2600101")
 	resources, ok := record.Data["created_resources"].([]map[string]any)
 	if !ok || len(resources) != 2 || resources[0]["kind"] != "PodGroup" || resources[1]["kind"] != "Pod" {
@@ -1146,6 +1236,45 @@ func firstVCJobTask(t *testing.T, obj *unstructured.Unstructured) map[string]any
 		t.Fatalf("VCJob first task = %#v, want object", tasks[0])
 	}
 	return task
+}
+
+func assertCorePodSpecAutomountSATokenFalse(t *testing.T, spec corev1.PodSpec) {
+	t.Helper()
+	if spec.AutomountServiceAccountToken == nil || *spec.AutomountServiceAccountToken {
+		t.Fatalf("automountServiceAccountToken = %#v, want false", spec.AutomountServiceAccountToken)
+	}
+}
+
+func assertMapPodSpecAutomountSATokenFalse(t *testing.T, obj map[string]any, path ...string) {
+	t.Helper()
+	spec := nestedTestMap(t, obj, path...)
+	if spec["automountServiceAccountToken"] != false {
+		t.Fatalf("%v automountServiceAccountToken = %#v, want false in %#v", path, spec["automountServiceAccountToken"], spec)
+	}
+}
+
+func nestedTestMap(t *testing.T, obj map[string]any, path ...string) map[string]any {
+	t.Helper()
+	var current any = obj
+	for _, step := range path {
+		switch typed := current.(type) {
+		case map[string]any:
+			current = typed[step]
+		case []any:
+			index, err := strconv.Atoi(step)
+			if err != nil || index < 0 || index >= len(typed) {
+				t.Fatalf("invalid nested slice step %q in path %v", step, path)
+			}
+			current = typed[index]
+		default:
+			t.Fatalf("nested path %v hit %T at %q", path, current, step)
+		}
+	}
+	out, ok := current.(map[string]any)
+	if !ok {
+		t.Fatalf("nested path %v = %T, want map", path, current)
+	}
+	return out
 }
 
 func assertDRAClaimTemplateSpec(

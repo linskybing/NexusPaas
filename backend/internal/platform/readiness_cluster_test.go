@@ -22,7 +22,7 @@ func readyzCode(t *testing.T, app *App) (int, string) {
 }
 
 func TestReadyzFailsClosedWhenClusterRequiredButAbsent(t *testing.T) {
-	app := NewApp(validProductionConfig(), WithBackingChecker(&recordingBackingChecker{}))
+	app := NewApp(validProductionConfigForService("cluster-needing-service"), WithBackingChecker(&recordingBackingChecker{}))
 	app.RegisterService(clusterRequiringSpec("cluster-needing-service", true))
 
 	code, body := readyzCode(t, app)
@@ -35,7 +35,7 @@ func TestReadyzFailsClosedWhenClusterRequiredButAbsent(t *testing.T) {
 }
 
 func TestReadyzPassesWhenClusterRequiredAndConfigured(t *testing.T) {
-	app := NewApp(validProductionConfig(),
+	app := NewApp(validProductionConfigForService("cluster-needing-service"),
 		WithBackingChecker(&recordingBackingChecker{}),
 		WithCluster(cluster.New(fake.NewSimpleClientset(), "proj")),
 	)
@@ -47,7 +47,7 @@ func TestReadyzPassesWhenClusterRequiredAndConfigured(t *testing.T) {
 }
 
 func TestReadyzFailsClosedForProductionStorageServiceWithoutCluster(t *testing.T) {
-	app := NewApp(validProductionConfig(), WithBackingChecker(&recordingBackingChecker{}))
+	app := NewApp(validProductionConfigForService("platform-io-unit"), WithBackingChecker(&recordingBackingChecker{}))
 	app.RegisterService(clusterRequiringSpec("storage-service", true))
 
 	code, body := readyzCode(t, app)
@@ -60,7 +60,7 @@ func TestReadyzFailsClosedForProductionStorageServiceWithoutCluster(t *testing.T
 }
 
 func TestReadyzPassesForProductionStorageServiceWithCluster(t *testing.T) {
-	app := NewApp(validProductionConfig(),
+	app := NewApp(validProductionConfigForService("platform-io-unit"),
 		WithBackingChecker(&recordingBackingChecker{}),
 		WithCluster(cluster.New(fake.NewSimpleClientset(), "proj")),
 	)
@@ -72,7 +72,7 @@ func TestReadyzPassesForProductionStorageServiceWithCluster(t *testing.T) {
 }
 
 func TestReadyzPassesWhenNoHostedServiceRequiresCluster(t *testing.T) {
-	app := NewApp(validProductionConfig(), WithBackingChecker(&recordingBackingChecker{}))
+	app := NewApp(validProductionConfigForService("plain-service"), WithBackingChecker(&recordingBackingChecker{}))
 	app.RegisterService(clusterRequiringSpec("plain-service", false))
 
 	if code, body := readyzCode(t, app); code != http.StatusOK {

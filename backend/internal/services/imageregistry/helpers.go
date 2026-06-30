@@ -307,7 +307,7 @@ func allowRuleFromCatalog(app *platform.App, r *http.Request, tagID, projectID, 
 	repo := shared.FirstNonBlank(shared.TextValue(tag, "repository", "repository_name", "image_name"), "unknown")
 	tagName := shared.FirstNonBlank(shared.TextValue(tag, "tag", "tag_name"), defaultTag)
 	now := time.Now().UTC()
-	return map[string]any{
+	rule := map[string]any{
 		"id":              ruleID(projectID, tagID),
 		"project_id":      projectID,
 		"tag_id":          tagID,
@@ -318,6 +318,36 @@ func allowRuleFromCatalog(app *platform.App, r *http.Request, tagID, projectID, 
 		"created_by":      userID,
 		"created_at":      now,
 		"updated_at":      now,
+	}
+	promoteCatalogImageStatusFields(rule, tag)
+	return rule
+}
+
+func catalogAllowListRejection(tag map[string]any) string {
+	if len(tag) == 0 {
+		return "catalog image not found"
+	}
+	if shared.BoolValue(tag, "deleted", "is_deleted", "isDeleted") {
+		return "catalog image is deleted"
+	}
+	if shared.BoolValue(tag, "unavailable", "is_unavailable", "isUnavailable") {
+		return "catalog image is unavailable"
+	}
+	if shared.TextValue(tag, "digest", "image_digest", "imageDigest") == "" {
+		return "catalog image digest is required before publish"
+	}
+	if !catalogScanPassed(shared.TextValue(tag, "scan_status", "scanStatus")) {
+		return "catalog image scan must pass before publish"
+	}
+	return ""
+}
+
+func catalogScanPassed(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "success", "succeeded", "passed", "pass", "ok", "clean":
+		return true
+	default:
+		return false
 	}
 }
 

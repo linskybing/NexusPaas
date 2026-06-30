@@ -130,6 +130,50 @@ func TestValidateInternalRouteAuthAllowsServiceAuthOrExplicitPublic(t *testing.T
 	}
 }
 
+func TestValidateRouteSecurityRejectsBypassMetadata(t *testing.T) {
+	tests := []struct {
+		name  string
+		route RouteSpec
+	}{
+		{
+			name:  "external public API without allowlist",
+			route: RouteSpec{Method: http.MethodGet, Pattern: "/api/v1/projects", Resource: "projects", Action: "list", AuthRequired: false},
+		},
+		{
+			name:  "external user route with policy bypass",
+			route: RouteSpec{Method: http.MethodGet, Pattern: "/api/v1/projects", Resource: "projects", Action: "list", AuthRequired: true, PolicyBypass: true},
+		},
+		{
+			name:  "unprotected admin route",
+			route: RouteSpec{Method: http.MethodPost, Pattern: "/api/v1/admin/projects", Resource: "projects", Action: "create", Admin: true, StateChanging: true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := NewApp(Config{ServiceName: "all", HTTPAddr: ":0", RequireAuth: true})
+			app.CatalogRoutes = append(app.CatalogRoutes, tt.route)
+			if err := app.ValidateRouteSecurity(); err == nil {
+				t.Fatal("ValidateRouteSecurity succeeded, want route security gap")
+			}
+		})
+	}
+}
+
+func TestValidateRouteSecurityAllowsKnownSafeRoutes(t *testing.T) {
+	app := NewApp(Config{ServiceName: "all", HTTPAddr: ":0", RequireAuth: true})
+	app.CatalogRoutes = append(app.CatalogRoutes,
+		RouteSpec{Method: http.MethodPost, Pattern: "/api/v1/login", Resource: "auth", Action: "login", AuthRequired: false},
+		RouteSpec{Method: http.MethodGet, Pattern: "/api/v1/oidc/start", Resource: "oidc", Action: "start", AuthRequired: false, PolicyBypass: true},
+		RouteSpec{Method: http.MethodPost, Pattern: "/api/v1/permissions/enforce", Resource: "permissions", Action: "enforce", ServiceAuthRequired: true, PolicyBypass: true},
+		RouteSpec{Method: http.MethodGet, Pattern: "/api/v1/internal/status", Resource: "status", Action: "list", ServiceAuthRequired: true, PolicyBypass: true},
+		RouteSpec{Method: http.MethodPost, Pattern: "/api/v1/admin/projects", Resource: "projects", Action: "create", Admin: true, StateChanging: true, AuthRequired: true},
+	)
+	if err := app.ValidateRouteSecurity(); err != nil {
+		t.Fatalf("ValidateRouteSecurity = %v, want nil", err)
+	}
+}
+
 func TestServeServiceRouteUsesBucketIndexAndSpecificity(t *testing.T) {
 	app := NewApp(Config{ServiceName: "all", HTTPAddr: ":0"})
 	app.RegisterService(ServiceSpec{

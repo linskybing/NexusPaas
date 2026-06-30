@@ -1,7 +1,10 @@
 package services
 
 import (
+	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -172,6 +175,16 @@ func TestWorkloadUsesOwnerReadDependenciesNotStoreDependencies(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("workload owner-read dependencies = %v, want %v", got, want)
+	}
+}
+
+func TestOwnerReadDependenciesHaveContractFixtures(t *testing.T) {
+	fixtures := ownerReadFixtureKeys(t)
+	for _, dependency := range serviceOwnerReadDependencies() {
+		key := dependency.service + " -> " + dependency.resource
+		if !fixtures[key] {
+			t.Fatalf("owner-read dependency %s has no contract fixture", key)
+		}
 	}
 }
 
@@ -351,4 +364,31 @@ func ownerReadResourcesForService(service string) []string {
 		}
 	}
 	return resources
+}
+
+func ownerReadFixtureKeys(t *testing.T) map[string]bool {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join("..", "contracts", "fixtures", "owner-read", "v1"))
+	if err != nil {
+		t.Fatalf("read owner-read fixtures: %v", err)
+	}
+	keys := map[string]bool{}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join("..", "contracts", "fixtures", "owner-read", "v1", entry.Name()))
+		if err != nil {
+			t.Fatalf("read owner-read fixture %s: %v", entry.Name(), err)
+		}
+		var fixture struct {
+			ConsumerService string `json:"consumer_service"`
+			Resource        string `json:"resource"`
+		}
+		if err := json.Unmarshal(raw, &fixture); err != nil {
+			t.Fatalf("unmarshal owner-read fixture %s: %v", entry.Name(), err)
+		}
+		keys[fixture.ConsumerService+" -> "+fixture.Resource] = true
+	}
+	return keys
 }

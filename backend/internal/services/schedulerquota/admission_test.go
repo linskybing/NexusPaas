@@ -670,6 +670,89 @@ func TestSubmitAdmissionRejectsRawSecretAndPublishesSafeAudit(t *testing.T) {
 	}
 }
 
+func TestSubmitAdmissionRejectsSpoofedMetadataRawSecretBypass(t *testing.T) {
+	app := newSchedulerQuotaTestApp()
+	rawSecret := `{"apiVersion":"v1","kind":"Secret","metadata":{"name":"db-password"},"stringData":{"password":"super-secret"}}`
+
+	code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+		"job_id":     "J-sec018-secret",
+		"project_id": "P1",
+		"user_id":    "U1",
+		"resources": []any{
+			map[string]any{"name": "declared-config", "kind": "ConfigMap", "manifest": rawSecret},
+		},
+	})), platform.RouteSpec{})
+
+	assertSchedulerStatus(t, code, data, http.StatusForbidden)
+	response := data.(map[string]any)
+	if !strings.Contains(response["reason"].(string), "raw Kubernetes Secret resources are rejected") {
+		t.Fatalf("spoofed secret denial = %#v, want raw Secret policy reason", response)
+	}
+	domainEvent := requireSchedulerEvent(t, app, "SecretAccessRejected", "rejected")
+	assertSchedulerEventValue(t, domainEvent.Data, "resource_name", "db-password")
+	allEvents, _ := json.Marshal(app.Events.Outbox())
+	if strings.Contains(string(allEvents), "super-secret") {
+		t.Fatalf("spoofed secret rejection event leaked plaintext: %s", allEvents)
+	}
+}
+
+func TestSubmitAdmissionRejectsRuntimeSocketHostPath(t *testing.T) {
+	app := newSchedulerQuotaTestApp()
+	rawPod := `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"socket-pod"},"spec":{"containers":[{"name":"main","image":"busybox"}],"volumes":[{"name":"runtime","hostPath":{"path":"/var/run/docker.sock"}}]}}`
+
+	code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+		"job_id":     "J-sec017",
+		"project_id": "P1",
+		"user_id":    "U1",
+		"resources":  []any{map[string]any{"name": "socket-pod", "manifest": rawPod}},
+	})), platform.RouteSpec{})
+
+	assertSchedulerStatus(t, code, data, http.StatusForbidden)
+	if !strings.Contains(data.(map[string]any)["reason"].(string), "container runtime socket /var/run/docker.sock") {
+		t.Fatalf("runtime socket denial = %#v, want socket policy reason", data)
+	}
+}
+
+func TestSubmitAdmissionRejectsSpoofedMetadataRuntimeSocketBypass(t *testing.T) {
+	app := newSchedulerQuotaTestApp()
+	rawPod := `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"socket-pod"},"spec":{"containers":[{"name":"main","image":"busybox"}],"volumes":[{"name":"runtime","hostPath":{"path":"/run/containerd/containerd.sock"}}]}}`
+
+	code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+		"job_id":     "J-sec018-socket",
+		"project_id": "P1",
+		"user_id":    "U1",
+		"resources":  []any{map[string]any{"name": "declared-config", "kind": "ConfigMap", "manifest": rawPod}},
+	})), platform.RouteSpec{})
+
+	assertSchedulerStatus(t, code, data, http.StatusForbidden)
+	if !strings.Contains(data.(map[string]any)["reason"].(string), "container runtime socket /run/containerd/containerd.sock") {
+		t.Fatalf("spoofed runtime socket denial = %#v, want socket policy reason", data)
+	}
+}
+
+func TestAdmissionRuntimeSocketPolicyRejectsVolcanoTaskHostPath(t *testing.T) {
+	req := submitAdmissionRequest{Resources: []admissionResourcePayload{{
+		Name: "vcjob-socket",
+		Raw: mustJSON(t, map[string]any{
+			"kind":     "Job",
+			"metadata": map[string]any{"name": "vcjob-socket"},
+			"spec": map[string]any{"tasks": []any{map[string]any{
+				"name": "main",
+				"template": map[string]any{"spec": map[string]any{
+					"containers": []any{map[string]any{"name": "main", "image": "busybox"}},
+					"volumes":    []any{map[string]any{"name": "runtime", "hostPath": map[string]any{"path": "/run/containerd/containerd.sock"}}},
+				}},
+			}}},
+		}),
+	}}}
+
+	violation, found := admissionRuntimeSocketPolicyViolationFromRequest(req)
+
+	if !found || violation.ResourceName != "vcjob-socket" || violation.SocketPath != "/run/containerd/containerd.sock" {
+		t.Fatalf("runtime socket violation = %#v found=%v, want VCJob task socket", violation, found)
+	}
+}
+
 func TestSubmitAdmissionAllowsOwnerGroupMemberAndDefaultQueue(t *testing.T) {
 	t.Setenv("DEFAULT_QUEUE_NAME", "default-batch")
 	app := newSchedulerQuotaTestApp()
@@ -979,6 +1062,30 @@ func TestSubmitAdmissionRejectsUnsupportedWorkloadKind(t *testing.T) {
 	assertSchedulerStatus(t, code, data, http.StatusUnprocessableEntity)
 	if !strings.Contains(data.(map[string]any)["reason"].(string), "unsupported workload kind StatefulSet") {
 		t.Fatalf("unsupported kind denial = %#v, want StatefulSet reason", data)
+	}
+}
+
+func TestSubmitAdmissionRejectsSpoofedMetadataUnsupportedWorkloadKindBypass(t *testing.T) {
+	app := newSchedulerQuotaTestApp()
+	seedAdmissionProject(t, app, admissionFixture{})
+
+	code, data, _ := reviewSubmitAdmission(app, schedulerRequest(http.MethodPost, "/api/v1/internal/scheduler/admission", admissionBody(t, map[string]any{
+		"project_id":      "P1",
+		"user_id":         "U1",
+		"queue_name":      "default-batch",
+		"required_gpu":    0,
+		"required_cpu":    1,
+		"required_memory": 1024,
+		"resources": []any{map[string]any{
+			"name":      "declared-config",
+			"kind":      "ConfigMap",
+			"json_data": string(mustJSON(t, workloadAdmissionObject("DaemonSet", map[string]any{}))),
+		}},
+	})), platform.RouteSpec{})
+
+	assertSchedulerStatus(t, code, data, http.StatusUnprocessableEntity)
+	if !strings.Contains(data.(map[string]any)["reason"].(string), "unsupported workload kind DaemonSet") {
+		t.Fatalf("spoofed unsupported kind denial = %#v, want DaemonSet reason", data)
 	}
 }
 

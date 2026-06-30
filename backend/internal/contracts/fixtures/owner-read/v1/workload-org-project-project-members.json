@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "contract_name": "workload org-project project-members owner-read v1",
+  "owner_service": "org-project-service",
+  "consumer_service": "workload-service",
+  "resource": "org-project-service:project_members",
+  "auth": "service_key",
+  "service_key_required": true,
+  "list_path": "/internal/org-project/project-members",
+  "get_path": "/internal/org-project/project-members/{id}",
+  "list_only": false,
+  "key_shape": "project_id/user_id",
+  "required_record_fields": ["id", "project_id", "user_id", "role"],
+  "records": [
+    {
+      "id": "11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222",
+      "data": {
+        "id": "11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222",
+        "project_id": "11111111-1111-4111-8111-111111111111",
+        "user_id": "22222222-2222-4222-8222-222222222222",
+        "role": "user"
+      },
+      "version": 1,
+      "created_at": "2026-06-30T00:00:00Z",
+      "updated_at": "2026-06-30T00:00:00Z"
+    }
+  ],
+  "compatibility": {
+    "additive_fields": true,
+    "tolerant_readers": true
+  }
+}

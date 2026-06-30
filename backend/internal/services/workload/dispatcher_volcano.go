@@ -218,6 +218,11 @@ func volcanoTaskFromBatchJob(
 	if priorityClass := priorityClassForJob(job); priorityClass != "" {
 		_ = unstructured.SetNestedField(template, priorityClass, "spec", "priorityClassName")
 	}
+	podSpec, _, _ := unstructured.NestedMap(template, "spec")
+	if socketPath, found := shared.RuntimeSocketHostPath(podSpec); found {
+		return volcanoTaskTemplate{}, fmt.Errorf("%w: user workloads cannot mount container runtime socket %s", cluster.ErrInvalidManifest, socketPath)
+	}
+	setDispatchAutomountServiceAccountToken(template, []string{"spec"})
 	return volcanoTaskTemplate{
 		sourceName: shared.FirstNonEmpty(resource.Name, u.GetName()),
 		replicas:   batchJobReplicas(u),

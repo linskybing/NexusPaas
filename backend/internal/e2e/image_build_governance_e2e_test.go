@@ -80,6 +80,8 @@ func (h *e2eHarness) exerciseImageCatalogPublish(token, suffix, catalogID string
 		"repository":      suffix + "/catalog",
 		"tag":             "1",
 		"image_reference": "registry.local/" + suffix + "/catalog:1",
+		"digest":          "sha256:e2e" + suffix,
+		"scan_status":     "passed",
 	})
 	published := h.doJSON(imageRegistryService, http.MethodPost, "/api/v1/image-catalog/publish", map[string]any{
 		"tag_id":     catalogID,

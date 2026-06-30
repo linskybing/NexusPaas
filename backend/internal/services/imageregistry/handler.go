@@ -185,6 +185,9 @@ func publishCatalog(app *platform.App, r *http.Request, _ platform.RouteSpec) (i
 	if tagID == "" {
 		return http.StatusBadRequest, shared.ErrorData("tag_id is required"), nil
 	}
+	if rejection := catalogAllowListRejection(catalogByID(app, r, tagID)); rejection != "" {
+		return http.StatusConflict, shared.ErrorData(rejection), nil
+	}
 	projectIDs := firstStringSlice(payload, "project_ids", "projectIds")
 	if projectID := shared.TextValue(payload, "project_id", "projectId"); projectID != "" {
 		projectIDs = append(projectIDs, projectID)
