@@ -198,7 +198,7 @@ func discoverServiceMigrationMetadataInRoots(roots []string) ([]discoveredMigrat
 
 func discoverServiceMigrationsInRoot(root string, seen map[string]discoveredMigration, versionsByService map[string]map[int]string) error {
 	for _, serviceDir := range serviceMigrationDirs {
-		migrationDir := filepath.Join(root, serviceDir, "migrations")
+		migrationDir := filepath.Join(root, "migrations", serviceDir)
 		if err := discoverServiceMigrationDir(migrationDir, serviceDir, seen, versionsByService); err != nil {
 			return err
 		}

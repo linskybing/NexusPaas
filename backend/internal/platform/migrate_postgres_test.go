@@ -63,7 +63,7 @@ func TestMigrationLedgerAdoptsPreLedgerDatabaseThenSkips(t *testing.T) {
 		t.Fatalf("seed platform schema: %v", err)
 	}
 	for _, service := range serviceMigrationDirs {
-		sqlBytes, err := os.ReadFile(filepath.Join(root, service, "migrations", "0001_init.sql"))
+		sqlBytes, err := os.ReadFile(filepath.Join(root, "migrations", service, "0001_init.sql"))
 		if err != nil {
 			t.Fatalf("read seed migration: %v", err)
 		}
@@ -281,7 +281,7 @@ func writeAllServiceMigrationsWithSQL(t *testing.T, root string, sqlFor func(ser
 
 func writeServiceMigrationWithSQL(t *testing.T, root, service, name, sql string) {
 	t.Helper()
-	writeTestFile(t, filepath.Join(root, service, "migrations", name), sql)
+	writeTestFile(t, filepath.Join(root, "migrations", service, name), sql)
 }
 
 func migrationTestTableName(service string) string {

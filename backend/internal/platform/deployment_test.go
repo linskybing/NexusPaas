@@ -35,22 +35,6 @@ func TestDeploymentManifestsAreProductionHardened(t *testing.T) {
 	requireContains(t, "../../Dockerfile", sharedDockerfile, "&& adduser -S -D -H -u 10001 -G app app")
 	requireContains(t, "../../Dockerfile", sharedDockerfile, "USER app:app")
 	requireFileExists(t, "../../go.sum")
-
-	dockerfiles, err := filepath.Glob("../../*/Dockerfile")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(dockerfiles) != 15 {
-		t.Fatalf("Dockerfile count = %d, want 15: %#v", len(dockerfiles), dockerfiles)
-	}
-	for _, path := range dockerfiles {
-		body := readTextFile(t, path)
-		requireContains(t, path, body, "ARG BASE_IMAGE=nexuspaas-backend:v0.1.0")
-		requireContains(t, path, body, "FROM ${BASE_IMAGE}")
-		requireNotContains(t, path, body, "go build")
-		requireNotContains(t, path, body, "COPY . .")
-		requireNotContains(t, path, body, "RUN apk add --no-cache ca-certificates")
-	}
 }
 
 func TestProductionBetaKustomizationIncludesEightBackendUnits(t *testing.T) {
@@ -275,7 +259,7 @@ func TestProductionOperationalReadinessDocsCoverAllServices(t *testing.T) {
 		t.Fatalf("%s service operations row count = %d, want %d: %#v", readinessPath, len(rows), len(deployments), rows)
 	}
 	for _, deployment := range deployments {
-		service := filepath.Base(filepath.Dir(filepath.Dir(deployment)))
+		service := filepath.Base(filepath.Dir(deployment))
 		row, ok := rows[service]
 		if !ok {
 			t.Fatalf("%s does not contain an operations row for %s", readinessPath, service)
@@ -590,7 +574,7 @@ func TestProductionBetaLiveRehearsalHarnessIsGuarded(t *testing.T) {
 
 func requireProductionDeploymentManifest(t *testing.T, path string) {
 	t.Helper()
-	service := filepath.Base(filepath.Dir(filepath.Dir(path)))
+	service := filepath.Base(filepath.Dir(path))
 	body := readTextFile(t, path)
 	requireDeploymentConfig(t, path, body, service)
 	requireDeploymentScaling(t, path, body)
@@ -709,7 +693,7 @@ func readTextFile(t *testing.T, path string) string {
 
 func serviceDeploymentManifests(t *testing.T) []string {
 	t.Helper()
-	deployments, err := filepath.Glob("../../*/k8s/deployment.yaml")
+	deployments, err := filepath.Glob("../../deploy/reference/per-service/*/deployment.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,7 +5,42 @@ Date: 2026-06-12
 
 ## 1. Purpose
 
-This directory decomposes the existing modular-monolith Go/Gin backend (1,464 Go files, 229 OpenAPI paths, 36 handler modules) into 15 microservices based on bounded contexts and data ownership. Each microservice has its own folder and requirements document.
+This document maps the NexusPaas backend's **bounded-context decomposition**: 15
+logical services defined by business semantics and data ownership.
+
+The backend is a **Go modular monolith**, not 15 separate services. A single
+`microservice` binary (`cmd/microservice`) hosts all 15 logical services as Go
+packages under `internal/services/`; `SERVICE_NAME` gates which ones a given
+process serves. For Production Beta those 15 logical services are packaged into
+**8 deployable units** (`internal/platform/config.go`,
+`deploy/k3s/production-beta/backend-units.yaml`).
+
+### Vocabulary
+
+- **logical service** — one of the 15 bounded contexts in §3; implemented at
+  `internal/services/<pkg>/`, owns its schema under `migrations/<service>/`.
+- **deployable unit** — one of the 8 physical units that host the logical
+  services at runtime. The deployment **source of truth** is
+  `deploy/k3s/production-beta/backend-units.yaml`.
+- **package** — the Go implementation of a logical service, e.g.
+  `internal/services/imageregistry/`.
+- **reference manifest** — the non-production per-service deployment sketches
+  under `deploy/reference/per-service/`; deployed by nothing.
+
+### Repository layout
+
+```
+backend/
+├── cmd/microservice/           # the single binary
+├── internal/services/<pkg>/    # 15 logical service implementations
+├── internal/platform/          # shared runtime (config, migrate, store, ...)
+├── migrations/<service>/       # service-owned schema migrations
+├── deploy/                     # k3s/local/hpc manifests (production source of truth)
+│   └── reference/per-service/  # non-production per-service manifest sketches
+├── docs/                       # backend runtime/contract/operator docs
+│   └── services/<service>.md   # per-logical-service contract docs
+└── Dockerfile                  # builds the shared binary
+```
 
 ## 2. Current State Assessment
 
@@ -23,21 +58,21 @@ The current backend is a "modular monolith", not a set of microservices: it alre
 
 | Service | Category | Documentation |
 | --- | --- | --- |
-| platform-gateway | Edge | [platform-gateway/README.md](platform-gateway/README.md) |
-| identity-service | Core | [identity-service/README.md](identity-service/README.md) |
-| authorization-policy-service | Core | [authorization-policy-service/README.md](authorization-policy-service/README.md) |
-| org-project-service | Core | [org-project-service/README.md](org-project-service/README.md) |
-| workload-service | Compute | [workload-service/README.md](workload-service/README.md) |
-| scheduler-quota-service | Compute | [scheduler-quota-service/README.md](scheduler-quota-service/README.md) |
-| k8s-control-service | Compute/Infra | [k8s-control-service/README.md](k8s-control-service/README.md) |
-| ide-service | Compute | [ide-service/README.md](ide-service/README.md) |
-| storage-service | Data | [storage-service/README.md](storage-service/README.md) |
-| image-registry-service | Supply Chain | [image-registry-service/README.md](image-registry-service/README.md) |
-| usage-observability-service | Ops/Read Model | [usage-observability-service/README.md](usage-observability-service/README.md) |
-| audit-compliance-service | Ops | [audit-compliance-service/README.md](audit-compliance-service/README.md) |
-| request-notification-service | Collaboration | [request-notification-service/README.md](request-notification-service/README.md) |
-| integration-proxy-service | Edge/Tools | [integration-proxy-service/README.md](integration-proxy-service/README.md) |
-| media-upload-service | Support | [media-upload-service/README.md](media-upload-service/README.md) |
+| platform-gateway | Edge | [docs/services/platform-gateway.md](docs/services/platform-gateway.md) |
+| identity-service | Core | [docs/services/identity-service.md](docs/services/identity-service.md) |
+| authorization-policy-service | Core | [docs/services/authorization-policy-service.md](docs/services/authorization-policy-service.md) |
+| org-project-service | Core | [docs/services/org-project-service.md](docs/services/org-project-service.md) |
+| workload-service | Compute | [docs/services/workload-service.md](docs/services/workload-service.md) |
+| scheduler-quota-service | Compute | [docs/services/scheduler-quota-service.md](docs/services/scheduler-quota-service.md) |
+| k8s-control-service | Compute/Infra | [docs/services/k8s-control-service.md](docs/services/k8s-control-service.md) |
+| ide-service | Compute | [docs/services/ide-service.md](docs/services/ide-service.md) |
+| storage-service | Data | [docs/services/storage-service.md](docs/services/storage-service.md) |
+| image-registry-service | Supply Chain | [docs/services/image-registry-service.md](docs/services/image-registry-service.md) |
+| usage-observability-service | Ops/Read Model | [docs/services/usage-observability-service.md](docs/services/usage-observability-service.md) |
+| audit-compliance-service | Ops | [docs/services/audit-compliance-service.md](docs/services/audit-compliance-service.md) |
+| request-notification-service | Collaboration | [docs/services/request-notification-service.md](docs/services/request-notification-service.md) |
+| integration-proxy-service | Edge/Tools | [docs/services/integration-proxy-service.md](docs/services/integration-proxy-service.md) |
+| media-upload-service | Support | [docs/services/media-upload-service.md](docs/services/media-upload-service.md) |
 
 ## 4. Shared Documents
 

@@ -74,15 +74,12 @@ jobs:
               - 'backend/go.mod'
               - 'backend/go.sum'
             backend_migrations:
-              - 'backend/*/migrations/**'
+              - 'backend/migrations/**'
             backend_docker:
               - 'backend/Dockerfile'
-              - 'backend/.dockerignore'
               - '.dockerignore'
-              - 'backend/*/Dockerfile'
             backend_deploy:
               - 'backend/deploy/**'
-              - 'backend/*/k8s/**'
               - 'backend/kustomization.yaml'
             backend_compose:
               - 'backend/deploy/local/**'

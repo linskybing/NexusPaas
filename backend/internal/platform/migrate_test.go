@@ -13,24 +13,24 @@ func TestDiscoverServiceMigrationsInRootsIsDeterministicScopedAndSorted(t *testi
 	writeServiceMigration(t, root, "identity-service", "0002_extra.sql")
 	writeServiceMigration(t, root, "identity-service", "0001_init.sql")
 	writeServiceMigration(t, root, "workload-service", "0001_init.sql")
-	writeTestFile(t, filepath.Join(root, "other", "migrations", "0001_init.sql"), "-- ignored\n")
-	writeTestFile(t, filepath.Join(root, "identity-service", "not-migrations", "0001_init.sql"), "-- ignored\n")
+	writeTestFile(t, filepath.Join(root, "migrations", "other", "0001_init.sql"), "-- ignored\n")
+	writeTestFile(t, filepath.Join(root, "migrations", "identity-service", "nested", "0001_init.sql"), "-- ignored\n")
 
 	files, foundByService, err := discoverServiceMigrationsInRoots([]string{root})
 	if err != nil {
 		t.Fatalf("discover service migrations: %v", err)
 	}
 	wantSuffixes := []string{
-		"identity-service/migrations/0001_init.sql",
-		"identity-service/migrations/0002_extra.sql",
-		"workload-service/migrations/0001_init.sql",
+		"migrations/identity-service/0001_init.sql",
+		"migrations/identity-service/0002_extra.sql",
+		"migrations/workload-service/0001_init.sql",
 	}
 	assertPathSuffixes(t, files, wantSuffixes)
 	if !foundByService["identity-service"] || !foundByService["workload-service"] {
 		t.Fatalf("found services = %#v, want identity-service and workload-service", foundByService)
 	}
 	for _, file := range files {
-		if strings.Contains(filepath.ToSlash(file), "other/migrations") {
+		if strings.Contains(filepath.ToSlash(file), "migrations/other") {
 			t.Fatalf("unexpected arbitrary migration path discovered: %s", file)
 		}
 	}
@@ -122,7 +122,7 @@ func TestDiscoverServiceMigrationsInRootsDeduplicatesRoots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discover service migrations: %v", err)
 	}
-	assertPathSuffixes(t, files, []string{"identity-service/migrations/0001_init.sql"})
+	assertPathSuffixes(t, files, []string{"migrations/identity-service/0001_init.sql"})
 }
 
 func TestValidateServiceMigrationsInRootsRequiresAllKnownServices(t *testing.T) {
@@ -182,7 +182,7 @@ func writeAllServiceMigrations(t *testing.T, root string) {
 
 func writeServiceMigration(t *testing.T, root, serviceDir, name string) {
 	t.Helper()
-	writeTestFile(t, filepath.Join(root, serviceDir, "migrations", name), "-- migration\n")
+	writeTestFile(t, filepath.Join(root, "migrations", serviceDir, name), "-- migration\n")
 }
 
 func writeTestFile(t *testing.T, path, body string) {

@@ -172,7 +172,7 @@ func TestIdentityMigrationBackfillsFromPlatformRecords(t *testing.T) {
 	root := t.TempDir()
 	writeAllServiceMigrationsWithSQL(t, root, func(service string) string {
 		if service == "identity-service" {
-			return readTextFile(t, "../../identity-service/migrations/0001_init.sql")
+			return readTextFile(t, "../../migrations/identity-service/0001_init.sql")
 		}
 		return "-- noop\n"
 	})
@@ -190,7 +190,7 @@ func TestIdentityMigrationBackfillsFromPlatformRecords(t *testing.T) {
 	); err != nil {
 		t.Fatalf("seed platform record: %v", err)
 	}
-	writeServiceMigrationWithSQL(t, root, "identity-service", "0002_identity_owned_records.sql", readTextFile(t, "../../identity-service/migrations/0002_identity_owned_records.sql"))
+	writeServiceMigrationWithSQL(t, root, "identity-service", "0002_identity_owned_records.sql", readTextFile(t, "../../migrations/identity-service/0002_identity_owned_records.sql"))
 	if err := applyMigrationsInRoots(ctx, db.url, []string{root}); err != nil {
 		t.Fatalf("apply backfill migration: %v", err)
 	}
