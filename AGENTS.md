@@ -4,9 +4,21 @@ All implementation work must follow the three-agent (subagents) workflow.
 
 1. **Plan Agent** writes a verifiable implementation plan under `docs/plan/`.
 2. **Reviewer Agent** reviews the plan and requests revisions until approved.
-3. **Code Agent** implements only the approved plan, then submits the result back to Reviewer Agent. Note: The gpt5.3-codex-spark model may be utilized for this task, subject to quota availability
+3. **Code Agent** implements only the approved plan, then submits the result back
+   to Reviewer Agent.
+
+When Claude Code and Codex quota/tooling are both available, use this default
+assignment:
+
+* **Claude Code** is the Plan Agent and Reviewer Agent.
+* **Codex** is the Code Agent.
+* If either tool or quota is unavailable, keep the three-agent workflow, record
+  the fallback in the plan/review, and do not skip plan approval or final review.
 
 No code change is complete until Reviewer Agent verifies requirement fit, approved-plan alignment, SOLID, 12-Factor App compliance, tests/build results, SonarScanner Quality Gate status, risks, and diff scope.
+
+For GA AC clearance ordering and evidence rules, follow
+`docs/agents/workflow.md`.
 
 This repository follows a **microservices-first** structure. Each service should own its code, API, data model, config, tests, and deployment files. See `docs/agents/project-structure.md`.
 

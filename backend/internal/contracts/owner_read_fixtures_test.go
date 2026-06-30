@@ -19,6 +19,8 @@ func TestOwnerReadFixturesAreValidV1(t *testing.T) {
 		"org-project-user-groups.json",
 		"org-project-user-quotas.json",
 		"workload-jobs.json",
+		"workload-org-project-project-members.json",
+		"workload-org-project-projects.json",
 	}
 	if !reflect.DeepEqual(fixtures, want) {
 		t.Fatalf("fixture files = %v, want %v", fixtures, want)
@@ -55,9 +57,21 @@ func TestOwnerReadFixturesAreValidV1(t *testing.T) {
 			listPath:     "/internal/workload/jobs",
 			listOnly:     true,
 		},
+		"workload-org-project-project-members.json": {
+			ownerService: "org-project-service",
+			resource:     "org-project-service:project_members",
+			listPath:     "/internal/org-project/project-members",
+			getPath:      "/internal/org-project/project-members/{id}",
+		},
+		"workload-org-project-projects.json": {
+			ownerService: "org-project-service",
+			resource:     "org-project-service:projects",
+			listPath:     "/internal/org-project/projects",
+			getPath:      "/internal/org-project/projects/{id}",
+		},
 	}
 
-	seenResources := make(map[string]string, len(fixtures))
+	seenContracts := make(map[string]string, len(fixtures))
 	for _, name := range fixtures {
 		fixture := readOwnerReadFixture(t, name)
 		assertValidOwnerReadFixture(t, name, fixture)
@@ -65,18 +79,24 @@ func TestOwnerReadFixturesAreValidV1(t *testing.T) {
 		if got := ownerReadFixtureRouteFrom(fixture); got != route {
 			t.Fatalf("%s route = %#v, want %#v", name, got, route)
 		}
-		seenResources[fixture.Resource] = fixture.OwnerService
+		key := fixture.ConsumerService + " -> " + fixture.Resource
+		if first, ok := seenContracts[key]; ok {
+			t.Fatalf("duplicate owner-read fixture contract %s in %s and %s", key, first, name)
+		}
+		seenContracts[key] = fixture.OwnerService
 	}
 
 	wantSeen := map[string]string{
-		"org-project-service:project_members": "org-project-service",
-		"org-project-service:projects":        "org-project-service",
-		"org-project-service:user_groups":     "org-project-service",
-		"org-project-service:user_quotas":     "org-project-service",
-		"workload-service:jobs":               "workload-service",
+		"scheduler-quota-service -> org-project-service:project_members": "org-project-service",
+		"scheduler-quota-service -> org-project-service:projects":        "org-project-service",
+		"scheduler-quota-service -> org-project-service:user_groups":     "org-project-service",
+		"scheduler-quota-service -> org-project-service:user_quotas":     "org-project-service",
+		"scheduler-quota-service -> workload-service:jobs":               "workload-service",
+		"workload-service -> org-project-service:project_members":        "org-project-service",
+		"workload-service -> org-project-service:projects":               "org-project-service",
 	}
-	if !reflect.DeepEqual(seenResources, wantSeen) {
-		t.Fatalf("fixture resource owners = %v, want %v", seenResources, wantSeen)
+	if !reflect.DeepEqual(seenContracts, wantSeen) {
+		t.Fatalf("fixture contracts = %v, want %v", seenContracts, wantSeen)
 	}
 }
 
@@ -237,9 +257,6 @@ func validateOwnerReadRoute(fixture ownerReadContractFixture) error {
 	}
 	if fixture.Auth != "service_key" || !fixture.ServiceKeyRequired {
 		return fmt.Errorf("owner-read fixture auth = %q service_key_required=%v, want service_key/true", fixture.Auth, fixture.ServiceKeyRequired)
-	}
-	if fixture.ConsumerService != "scheduler-quota-service" {
-		return fmt.Errorf("owner-read fixture consumer_service = %q, want scheduler-quota-service", fixture.ConsumerService)
 	}
 	if !strings.HasPrefix(fixture.ListPath, "/internal/") {
 		return fmt.Errorf("owner-read fixture list_path = %q, want internal path", fixture.ListPath)

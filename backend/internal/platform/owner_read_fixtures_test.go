@@ -24,12 +24,14 @@ func TestOwnerReadFixturesMatchDomainReadContracts(t *testing.T) {
 		"org-project-user-groups.json",
 		"org-project-user-quotas.json",
 		"workload-jobs.json",
+		"workload-org-project-project-members.json",
+		"workload-org-project-projects.json",
 	}
 	if got := ownerReadPlatformFixtureNames(fixtures); !reflect.DeepEqual(got, wantFiles) {
 		t.Fatalf("owner-read fixture files = %v, want %v", got, wantFiles)
 	}
 
-	gotResources := make([]string, 0, len(fixtures))
+	gotContracts := make([]string, 0, len(fixtures))
 	for _, fixture := range fixtures {
 		contract, ok := domainReadContracts[fixture.Resource]
 		if !ok {
@@ -47,18 +49,20 @@ func TestOwnerReadFixturesMatchDomainReadContracts(t *testing.T) {
 		if fixture.ListOnly != (contract.getPath == "") {
 			t.Fatalf("%s list_only = %v, domain get_path = %q", fixture.FileName, fixture.ListOnly, contract.getPath)
 		}
-		gotResources = append(gotResources, fixture.Resource)
+		gotContracts = append(gotContracts, fixture.ConsumerService+" -> "+fixture.Resource)
 	}
-	sort.Strings(gotResources)
-	wantResources := []string{
-		"org-project-service:project_members",
-		"org-project-service:projects",
-		"org-project-service:user_groups",
-		"org-project-service:user_quotas",
-		"workload-service:jobs",
+	sort.Strings(gotContracts)
+	wantContracts := []string{
+		"scheduler-quota-service -> org-project-service:project_members",
+		"scheduler-quota-service -> org-project-service:projects",
+		"scheduler-quota-service -> org-project-service:user_groups",
+		"scheduler-quota-service -> org-project-service:user_quotas",
+		"scheduler-quota-service -> workload-service:jobs",
+		"workload-service -> org-project-service:project_members",
+		"workload-service -> org-project-service:projects",
 	}
-	if !reflect.DeepEqual(gotResources, wantResources) {
-		t.Fatalf("owner-read fixture resources = %v, want %v", gotResources, wantResources)
+	if !reflect.DeepEqual(gotContracts, wantContracts) {
+		t.Fatalf("owner-read fixture contracts = %v, want %v", gotContracts, wantContracts)
 	}
 }
 
@@ -212,14 +216,11 @@ func validateOwnerReadPlatformFixture(fixture ownerReadPlatformFixture) error {
 	if fixture.SchemaVersion != 1 {
 		return fmt.Errorf("schema_version = %d, want 1", fixture.SchemaVersion)
 	}
-	if fixture.ConsumerService != "scheduler-quota-service" {
-		return fmt.Errorf("consumer_service = %q, want scheduler-quota-service", fixture.ConsumerService)
-	}
 	if fixture.Auth != "service_key" || !fixture.ServiceKeyRequired {
 		return fmt.Errorf("auth = %q service_key_required=%v, want service_key/true", fixture.Auth, fixture.ServiceKeyRequired)
 	}
-	if fixture.OwnerService == "" || fixture.Resource == "" || fixture.ListPath == "" {
-		return fmt.Errorf("owner_service, resource, and list_path are required")
+	if fixture.OwnerService == "" || fixture.ConsumerService == "" || fixture.Resource == "" || fixture.ListPath == "" {
+		return fmt.Errorf("owner_service, consumer_service, resource, and list_path are required")
 	}
 	if len(fixture.Records) != 1 {
 		return fmt.Errorf("records length = %d, want 1", len(fixture.Records))

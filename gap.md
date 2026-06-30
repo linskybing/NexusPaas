@@ -25,6 +25,38 @@ _Updated: 2026-06-28 (re-verified; plan-ledger hygiene pass). Bar: **Full GA**
 - Throughout this file, **"first-version readiness/completion" in slice
   disclaimers means the V1 *external production launch* state above (OPEN)** — it
   does **not** mean the individual slice is unfinished.
+- 2026-06-30 local guard update: production-beta strict runtime now fails closed
+  on blank/`all` `SERVICE_NAME`, and the live rehearsal render validation
+  rejects `SERVICE_NAME=all` or mismatched 8-unit ConfigMap `SERVICE_NAME`
+  values before live mutation. This is local/static guard evidence only; it does
+  not close V1 external production launch.
+- 2026-06-30 DATA owner-read coverage update: scheduler-quota and workload
+  owner-read dependencies now have local/static `(consumer_service, resource)`
+  contract fixtures, and a services guard requires every registered
+  `RegisterOwnerReadDependencies` entry to have a matching fixture. This does
+  not close live drift jobs, replay cutover, live authorization, DATA GA, or Full
+  GA.
+- 2026-06-30 SEC-016 local dispatcher hardening update: workload dispatcher
+  manifests now force `automountServiceAccountToken=false` for user workload
+  PodSpecs on native Pod, Job, Deployment, Volcano VCJob tasks, synthesized
+  VCJob templates, and Volcano fallback Pods, including overriding
+  user-supplied `true`. This is local/static dispatcher evidence only; it does
+  not close workload identity, mTLS, live staging security, V1 external
+  production launch, SEC GA, or Full GA.
+- 2026-06-30 SEC-017 local runtime-socket guard update: scheduler admission and
+  workload dispatcher now reject user workload PodSpecs that mount known Docker,
+  containerd, or CRI-O runtime sockets through `hostPath`, covering native Pod,
+  Job, Deployment, Volcano VCJob tasks, synthesized VCJob templates, and
+  Volcano fallback Pods. This is local/static admission and dispatcher evidence
+  only; it does not close workload identity, mTLS, live staging security, V1
+  external production launch, SEC GA, or Full GA.
+- 2026-06-30 SEC-018 local admission bypass update: scheduler admission now
+  derives forbidden-resource kind/name from the raw manifest before trusting
+  explicit resource metadata, so spoofed `kind=ConfigMap` metadata cannot hide
+  raw Kubernetes Secrets, runtime socket hostPath mounts, or unsupported
+  workload kinds such as DaemonSet/CronJob. This is local/static admission
+  evidence only; it does not close live staging security, workload identity,
+  mTLS, V1 external production launch, SEC GA, or Full GA.
 
 This is the live status tracker. The verbose narrative analysis lives in
 [`docs/acceptance/gap-analysis.md`](docs/acceptance/gap-analysis.md). Code-level
@@ -367,6 +399,15 @@ evidence only; it does not claim full RBAC GA, live gateway proof, service
 credential rotation, workload identity, mTLS/SPIFFE, Full GA, or first-version
 completion.
 
+2026-06-30 SEC-019 local/static route-catalog update: platform route validation
+now rejects RBAC bypass-prone route metadata: non-allowlisted public external
+`/api/v1/` routes, user-facing `PolicyBypass`, and unprotected admin routes.
+Focused platform tests cover the fail-closed cases plus allowed public
+bootstrap/OIDC and service-internal routes, and the full registered catalog is
+checked in production-auth mode. This is local/static route metadata evidence
+only; it does not claim live authorization proof, workload identity, mTLS,
+SEC GA, Full GA, or first-version completion.
+
 2026-06-22 DATA-016 local authorization-policy drift update:
 `projectionDrift` compares raw owner/source resources with local
 authorization-policy read-model resources and reports missing, orphan, and
@@ -495,6 +536,16 @@ additive keys. This is local metadata/event-shape evidence only; it does not
 claim image conversion/prewarm execution, completed SBOM generation, signing,
 scan enforcement, allow-list admission, live Harbor/Tekton/BuildKit execution,
 full IMG, V1 external launch, or Full GA.
+
+2026-06-30 IMG-019 local allow-list admission guard update:
+`image-registry-service` catalog publish now rejects Project allow-list admission
+unless the catalog image has a non-empty digest, passing scan status, and is not
+deleted/unavailable. Focused local tests cover missing digest, missing/pending/
+failed scan, deleted/unavailable images, no allow-list write or `ImagePublished`
+event on rejection, and successful publish preserving digest/scan metadata.
+This is local/static admission evidence only; it does not claim live
+Tekton/BuildKit/Harbor execution, completed SBOM generation, signing, live scan
+execution, V1 external launch, or Full GA.
 
 2026-06-23 DATA-014 image build create idempotency local update:
 image-registry build create APIs now have local deterministic optional

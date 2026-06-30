@@ -27,6 +27,17 @@ func (v admissionSecretPolicyViolation) Error() string {
 	return v.Reason
 }
 
+type admissionRuntimeSocketPolicyViolation struct {
+	ResourceName string
+	ResourceKind string
+	SocketPath   string
+	Reason       string
+}
+
+func (v admissionRuntimeSocketPolicyViolation) Error() string {
+	return v.Reason
+}
+
 func admissionResourceFloorFromRequest(req submitAdmissionRequest) (admissionResourceFloor, error) {
 	var floor admissionResourceFloor
 	if err := validateAdmissionResourceAccounting(req); err != nil {
@@ -85,6 +96,9 @@ func validateAdmissionResourceAccounting(req submitAdmissionRequest) error {
 }
 
 func rejectUnsupportedAdmissionKind(obj map[string]any) error {
+	if violation, found := admissionRuntimeSocketPolicyViolationFromObject(obj); found {
+		return violation
+	}
 	kind := stringField(obj, "kind")
 	switch strings.ToLower(kind) {
 	case "secret":
@@ -98,6 +112,69 @@ func rejectUnsupportedAdmissionKind(obj map[string]any) error {
 	default:
 		return nil
 	}
+}
+
+func admissionRuntimeSocketPolicyViolationFromRequest(req submitAdmissionRequest) (admissionRuntimeSocketPolicyViolation, bool) {
+	for _, resource := range req.Resources {
+		if len(resource.Raw) == 0 {
+			continue
+		}
+		var obj map[string]any
+		if json.Unmarshal(resource.Raw, &obj) != nil {
+			continue
+		}
+		violation, found := admissionRuntimeSocketPolicyViolationFromObject(obj)
+		if !found {
+			continue
+		}
+		violation.ResourceName = shared.FirstNonEmpty(violation.ResourceName, admissionResourceName(resource))
+		violation.ResourceKind = shared.FirstNonEmpty(violation.ResourceKind, admissionResourceKind(resource))
+		return violation, true
+	}
+	return admissionRuntimeSocketPolicyViolation{}, false
+}
+
+func admissionRuntimeSocketPolicyViolationFromObject(obj map[string]any) (admissionRuntimeSocketPolicyViolation, bool) {
+	kind := stringField(obj, "kind")
+	for _, podSpec := range admissionRuntimeSocketPodSpecs(obj) {
+		if socketPath, found := shared.RuntimeSocketHostPath(podSpec); found {
+			return admissionRuntimeSocketPolicyViolation{
+				ResourceName: admissionObjectName(obj),
+				ResourceKind: kind,
+				SocketPath:   socketPath,
+				Reason:       runtimeSocketPolicyReason(socketPath),
+			}, true
+		}
+	}
+	return admissionRuntimeSocketPolicyViolation{}, false
+}
+
+func admissionRuntimeSocketPodSpecs(obj map[string]any) []map[string]any {
+	if strings.EqualFold(stringField(obj, "kind"), "Job") {
+		if tasks := admissionVolcanoTaskPodSpecs(obj); len(tasks) > 0 {
+			return tasks
+		}
+	}
+	_, podSpec, _, ok := admissionExtractPodSpec(obj)
+	if !ok {
+		return nil
+	}
+	return []map[string]any{podSpec}
+}
+
+func admissionVolcanoTaskPodSpecs(obj map[string]any) []map[string]any {
+	spec, _ := obj["spec"].(map[string]any)
+	tasks, _ := spec["tasks"].([]any)
+	out := make([]map[string]any, 0, len(tasks))
+	for _, raw := range tasks {
+		task, _ := raw.(map[string]any)
+		template, _ := task["template"].(map[string]any)
+		podSpec, _ := template["spec"].(map[string]any)
+		if podSpec != nil {
+			out = append(out, podSpec)
+		}
+	}
+	return out
 }
 
 func admissionSecretPolicyViolationFromRequest(req submitAdmissionRequest) (admissionSecretPolicyViolation, bool) {
@@ -116,31 +193,29 @@ func admissionSecretPolicyViolationFromRequest(req submitAdmissionRequest) (admi
 }
 
 func admissionResourceKind(resource admissionResourcePayload) string {
-	if strings.TrimSpace(resource.Kind) != "" {
-		return strings.TrimSpace(resource.Kind)
+	if obj, ok := admissionResourceRawObject(resource); ok {
+		if kind := stringField(obj, "kind"); kind != "" {
+			return kind
+		}
 	}
-	if len(resource.Raw) == 0 {
-		return ""
-	}
-	var obj map[string]any
-	if json.Unmarshal(resource.Raw, &obj) != nil {
-		return ""
-	}
-	return stringField(obj, "kind")
+	return strings.TrimSpace(resource.Kind)
 }
 
 func admissionResourceName(resource admissionResourcePayload) string {
-	if strings.TrimSpace(resource.Name) != "" {
-		return strings.TrimSpace(resource.Name)
+	if obj, ok := admissionResourceRawObject(resource); ok {
+		if name := admissionObjectName(obj); name != "" {
+			return name
+		}
 	}
-	if len(resource.Raw) == 0 {
-		return ""
-	}
+	return strings.TrimSpace(resource.Name)
+}
+
+func admissionResourceRawObject(resource admissionResourcePayload) (map[string]any, bool) {
 	var obj map[string]any
-	if json.Unmarshal(resource.Raw, &obj) != nil {
-		return ""
+	if len(resource.Raw) == 0 || json.Unmarshal(resource.Raw, &obj) != nil {
+		return nil, false
 	}
-	return admissionObjectName(obj)
+	return obj, true
 }
 
 func admissionObjectName(obj map[string]any) string {
@@ -150,6 +225,10 @@ func admissionObjectName(obj map[string]any) string {
 
 func rawSecretPolicyReason() string {
 	return "raw Kubernetes Secret resources are rejected; use the platform secret API or an approved ExternalSecret profile"
+}
+
+func runtimeSocketPolicyReason(path string) string {
+	return "user workloads cannot mount container runtime socket " + path
 }
 
 func admissionPayloadGPU(obj map[string]any) float64 {

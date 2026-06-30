@@ -164,6 +164,59 @@ func TestConfigEnvironmentProfileRejectsInvalidAndConflictingSettings(t *testing
 	}
 }
 
+func TestConfigStrictRuntimeRejectsHostAllServiceName(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  Config
+	}{
+		{name: "production blank", cfg: Config{Production: true, RequireAuth: true}},
+		{name: "production all", cfg: Config{Production: true, ServiceName: "all", RequireAuth: true}},
+		{name: "staging blank", cfg: Config{EnvironmentProfile: runtimeProfileStaging, RequireAuth: true}},
+		{name: "staging all", cfg: Config{EnvironmentProfile: runtimeProfileStaging, ServiceName: "all", RequireAuth: true}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validProductionConfig()
+			cfg.Production = tc.cfg.Production
+			cfg.EnvironmentProfile = tc.cfg.EnvironmentProfile
+			cfg.ServiceName = tc.cfg.ServiceName
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), "SERVICE_NAME") {
+				t.Fatalf("Validate() error = %v, want SERVICE_NAME", err)
+			}
+		})
+	}
+}
+
+func TestConfigStrictRuntimeRejectsUnsetServiceNameFromEnv(t *testing.T) {
+	setValidProductionEnv(t)
+
+	cfg := ConfigFromEnv()
+	if cfg.ServiceName != "all" {
+		t.Fatalf("ServiceName = %q, want ConfigFromEnv fallback all", cfg.ServiceName)
+	}
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "SERVICE_NAME") {
+		t.Fatalf("Validate() error = %v, want SERVICE_NAME", err)
+	}
+
+	t.Setenv("SERVICE_NAME", "iam-unit")
+	cfg = ConfigFromEnv()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want nil with explicit SERVICE_NAME", err)
+	}
+}
+
+func TestConfigNonProductionKeepsHostAllServiceName(t *testing.T) {
+	cfg := Config{ServiceName: "all", RequireAuth: true}
+	if err := withRuntimeDefaults(cfg).Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want nil for non-production SERVICE_NAME=all", err)
+	}
+	if !cfg.AllowsService("identity-service") {
+		t.Fatal("SERVICE_NAME=all should still co-host services outside strict runtime")
+	}
+}
+
 func TestConfigAllowedOriginsParsing(t *testing.T) {
 	t.Setenv("PRODUCTION", "true")
 	t.Setenv("ALLOWED_ORIGINS", " http://a.test, http://b.test ,")
@@ -1130,12 +1183,12 @@ func TestConfigValidateProductionGuards(t *testing.T) {
 		{name: "production rejects non-redis event bus url", cfg: productionConfigWithURL(envEventBusURL, "nats://events:4222"), wantErr: envEventBusURL},
 		{name: "event relay batch size must be positive", cfg: Config{RequireAuth: true, EventRelayBatchSize: -1}, wantErr: envEventRelayBatchSize},
 		{name: "production accepts api key principal", cfg: validProductionConfig()},
-		{name: "production profile enables production guards", cfg: Config{EnvironmentProfile: runtimeProfileProduction, RequireAuth: true}, wantErr: "API_KEYS or JWT_JWKS_URL"},
+		{name: "production profile enables production guards", cfg: Config{EnvironmentProfile: runtimeProfileProduction, ServiceName: "iam-unit", RequireAuth: true}, wantErr: "API_KEYS or JWT_JWKS_URL"},
 		{name: "production flag conflicts with staging profile", cfg: Config{EnvironmentProfile: runtimeProfileStaging, Production: true, RequireAuth: true}, wantErr: envAppEnv},
 		{name: "production rejects insecure jwks", cfg: Config{Production: true, RequireAuth: true, JWKSURL: "http://issuer.test/jwks", JWTIssuer: "https://issuer.test", JWTAudiences: map[string]bool{"api": true}}, wantErr: "https"},
 		{name: "production jwks requires issuer", cfg: Config{Production: true, RequireAuth: true, JWKSURL: "https://issuer.test/.well-known/jwks.json", JWTAudiences: map[string]bool{"api": true}}, wantErr: "JWT_ISSUER"},
 		{name: "production jwks requires audience", cfg: Config{Production: true, RequireAuth: true, JWKSURL: "https://issuer.test/.well-known/jwks.json", JWTIssuer: "https://issuer.test"}, wantErr: "JWT_AUDIENCE"},
-		{name: "production accepts jwks", cfg: withProductionBacking(Config{Production: true, RequireAuth: true, JWKSURL: "https://issuer.test/.well-known/jwks.json", JWTIssuer: "https://issuer.test", JWTAudiences: map[string]bool{"api": true}})},
+		{name: "production accepts jwks", cfg: withProductionBacking(Config{Production: true, ServiceName: "iam-unit", RequireAuth: true, JWKSURL: "https://issuer.test/.well-known/jwks.json", JWTIssuer: "https://issuer.test", JWTAudiences: map[string]bool{"api": true}})},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1205,11 +1258,22 @@ func setValidProductionEnv(t *testing.T) {
 
 func validProductionConfig() Config {
 	return withRuntimeDefaults(withProductionBacking(Config{
+		ServiceName:      "iam-unit",
 		Production:       true,
 		RequireAuth:      true,
 		APIKeys:          map[string]bool{testAPIKey: true},
 		APIKeyPrincipals: map[string]APIKeyPrincipal{testAPIKey: {ID: "svc:test"}},
 	}))
+}
+
+func validProductionConfigForService(service string) Config {
+	cfg := validProductionConfig()
+	cfg.ServiceName = service
+	if !cfg.AllowsService("authorization-policy-service") {
+		cfg.AuthorizationPolicyURL = testPolicyURL
+		cfg.AuthorizationPolicyAPIKey = testPolicyKey
+	}
+	return cfg
 }
 
 func validLDAPConfig() Config {
@@ -1237,6 +1301,9 @@ func productionConfigWithout(envName string) Config {
 	case envEventBusURL:
 		cfg.EventBusURL = ""
 	case envObjectStoreURL:
+		cfg.ServiceName = "collaboration-unit"
+		cfg.AuthorizationPolicyURL = testPolicyURL
+		cfg.AuthorizationPolicyAPIKey = testPolicyKey
 		cfg.ObjectStoreURL = ""
 	}
 	return cfg

@@ -50,6 +50,14 @@ func TestRegisterAllAdminCoverageInProduction(t *testing.T) {
 	}
 }
 
+func TestRegisterAllRouteSecurityInProduction(t *testing.T) {
+	app := platform.NewApp(platform.Config{ServiceName: "all", HTTPAddr: ":0", RequireAuth: true})
+	RegisterAll(app)
+	if err := app.ValidateRouteSecurity(); err != nil {
+		t.Fatalf("production route-security gaps in registered catalog: %v", err)
+	}
+}
+
 // TestCatalogStateChangingRoutesHaveResourceOrAction guards against routes that
 // mutate state but neither name a resource nor an action, which would silently
 // fall through generic CRUD with an empty resource key.

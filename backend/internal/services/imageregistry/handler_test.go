@@ -100,6 +100,77 @@ func TestImageRegistryCatalogRequestsAndBuildWorkflow(t *testing.T) {
 	}
 }
 
+func TestImageCatalogPublishRequiresSupplyChainReadyCatalog(t *testing.T) {
+	cases := []struct {
+		name string
+		row  map[string]any
+	}{
+		{
+			name: "missing digest",
+			row:  map[string]any{"id": "tag-missing-digest", "registry": "registry.local", "repository": "library/base", "tag": "1.0", "scan_status": "Success"},
+		},
+		{
+			name: "missing scan",
+			row:  map[string]any{"id": "tag-missing-scan", "registry": "registry.local", "repository": "library/base", "tag": "1.0", "digest": "sha256:missing"},
+		},
+		{
+			name: "pending scan",
+			row:  map[string]any{"id": "tag-pending-scan", "registry": "registry.local", "repository": "library/base", "tag": "1.0", "digest": "sha256:pending", "scan_status": "pending"},
+		},
+		{
+			name: "failed scan",
+			row:  map[string]any{"id": "tag-failed-scan", "registry": "registry.local", "repository": "library/base", "tag": "1.0", "digest": "sha256:failed", "scan_status": "Failed"},
+		},
+		{
+			name: "deleted",
+			row:  map[string]any{"id": "tag-deleted", "registry": "registry.local", "repository": "library/base", "tag": "1.0", "digest": "sha256:deleted", "scan_status": "Success", "deleted": true},
+		},
+		{
+			name: "unavailable",
+			row:  map[string]any{"id": "tag-unavailable", "registry": "registry.local", "repository": "library/base", "tag": "1.0", "digest": "sha256:unavailable", "scan_status": "Success", "unavailable": "true"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := newImageRegistryTestApp(t)
+			createImageRecords(t, app, imageCatalogResource, []map[string]any{tc.row})
+			req := imageRequest(http.MethodPost, "/api/v1/image-catalog/publish", fmt.Sprintf(`{"tag_id":%q,"project_id":"P1"}`, tc.row["id"]), "ADMIN")
+
+			code, data, _ := publishCatalog(app, req, platform.RouteSpec{})
+			assertImageStatus(t, code, data, http.StatusConflict)
+			if message := data.(map[string]any)["message"]; message == "" {
+				t.Fatalf("publish rejection = %#v, want message", data)
+			}
+			if records := imageRows(app, req, projectImagesResource); len(records) != 0 {
+				t.Fatalf("allow-list records = %#v, want none", records)
+			}
+			if events := imageEventsByName(app, "ImagePublished"); len(events) != 0 {
+				t.Fatalf("ImagePublished events = %#v, want none", events)
+			}
+		})
+	}
+}
+
+func TestImageCatalogPublishAllowsPassingSupplyChainCatalog(t *testing.T) {
+	app := newImageRegistryTestApp(t)
+
+	req := imageRequest(http.MethodPost, "/api/v1/image-catalog/publish", `{"tag_id":"tag-1","project_id":"P1"}`, "ADMIN")
+	code, data, _ := publishCatalog(app, req, platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusOK)
+
+	rules := data.(map[string]any)["rules"].([]map[string]any)
+	if len(rules) != 1 {
+		t.Fatalf("publish result = %#v, want one rule", data)
+	}
+	if rules[0]["digest"] != "sha256:base" || rules[0]["scan_status"] != "Success" {
+		t.Fatalf("published rule supply-chain metadata = %#v, want digest and passing scan", rules[0])
+	}
+	if events := imageEventsByName(app, "ImagePublished"); len(events) != 1 {
+		t.Fatalf("ImagePublished events = %#v, want one", events)
+	}
+}
+
 func TestImageBuildSupplyChainDefaultsRecordedAndEmitted(t *testing.T) {
 	app := newImageRegistryTestApp(t)
 
@@ -1107,7 +1178,7 @@ func newImageRegistryTestApp(t *testing.T) *platform.App {
 		{"id": "U2:G1", "user_id": "U2", "group_id": "G1", "role": "user"},
 	})
 	createImageRecords(t, app, imageCatalogResource, []map[string]any{
-		{"id": "tag-1", "registry": "registry.local", "repository": "library/base", "tag": "1.0"},
+		{"id": "tag-1", "registry": "registry.local", "repository": "library/base", "tag": "1.0", "digest": "sha256:base", "scan_status": "Success"},
 	})
 	return app
 }

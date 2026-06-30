@@ -220,6 +220,53 @@ rendered_has_deployment() {
   rendered_deployment_names "${render_file}" | grep -Fxq "${deployment}"
 }
 
+rendered_service_name_for_unit() {
+  local render_file="$1"
+  local unit="$2"
+  awk -v config_name="${unit}-config" '
+    $0 == "kind: ConfigMap" {
+      in_configmap = 1
+      name = ""
+      service_name = ""
+    }
+    in_configmap && $0 ~ /^  name: / {
+      name = $2
+      gsub(/"/, "", name)
+    }
+    in_configmap && $0 ~ /^  SERVICE_NAME: / {
+      service_name = $2
+      gsub(/"/, "", service_name)
+    }
+    in_configmap && $0 == "---" {
+      if (name == config_name) {
+        print service_name
+      }
+      in_configmap = 0
+      name = ""
+      service_name = ""
+    }
+    END {
+      if (in_configmap && name == config_name) {
+        print service_name
+      }
+    }
+  ' "${render_file}"
+}
+
+validate_render_service_names() {
+  if grep -Eq 'SERVICE_NAME:[[:space:]]*"?all"?' "${RENDER_FILE}"; then
+    die "production-beta render contains forbidden SERVICE_NAME=all"
+  fi
+
+  local unit service_name
+  while IFS= read -r unit; do
+    [ -n "${unit}" ] || continue
+    service_name="$(rendered_service_name_for_unit "${RENDER_FILE}" "${unit}")"
+    [ "${service_name}" = "${unit}" ] \
+      || die "production-beta render ConfigMap ${unit}-config SERVICE_NAME=${service_name:-<missing>}, want ${unit}"
+  done <"${SERVICE_LIST_FILE}"
+}
+
 validate_render_secret_refs() {
   local pattern secret missing=0
   pattern="$(forbidden_secret_ref_pattern)"
@@ -258,6 +305,7 @@ validate_render() {
   if rendered_has_deployment "${RENDER_FILE}" "platform"; then
     die "production-beta render contains all-in-one platform Deployment"
   fi
+  validate_render_service_names
   validate_render_secret_refs
 }
 

@@ -342,11 +342,86 @@ func prepareDispatchManifestWithGroup(job map[string]any, resource dispatchResou
 	mergePodTemplateLabels(u, labels)
 	applyDispatchScheduling(u, job, groupName)
 	applyDispatchRuntimeLimit(u, job)
+	if err := rejectDispatchRuntimeSocketMounts(u); err != nil {
+		return nil, err
+	}
+	hardenDispatchPodSpecs(u)
 	raw, err := json.Marshal(u.Object)
 	if err != nil {
 		return nil, fmt.Errorf(dispatcherMarshalResourceError, u.GetName(), err)
 	}
 	return raw, nil
+}
+
+func rejectDispatchRuntimeSocketMounts(u *unstructured.Unstructured) error {
+	if isVolcanoVCJob(u) {
+		return rejectDispatchVCJobRuntimeSocketMounts(u)
+	}
+	for _, path := range podSpecPaths(u.GetKind()) {
+		podSpec, found, _ := unstructured.NestedMap(u.Object, path...)
+		if !found {
+			continue
+		}
+		if socketPath, found := shared.RuntimeSocketHostPath(podSpec); found {
+			return fmt.Errorf("%w: user workloads cannot mount container runtime socket %s", cluster.ErrInvalidManifest, socketPath)
+		}
+	}
+	return nil
+}
+
+func rejectDispatchVCJobRuntimeSocketMounts(u *unstructured.Unstructured) error {
+	tasks, found, _ := unstructured.NestedSlice(u.Object, "spec", "tasks")
+	if !found {
+		return nil
+	}
+	for _, raw := range tasks {
+		task, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		podSpec, found, _ := unstructured.NestedMap(task, "template", "spec")
+		if !found {
+			continue
+		}
+		if socketPath, found := shared.RuntimeSocketHostPath(podSpec); found {
+			return fmt.Errorf("%w: user workloads cannot mount container runtime socket %s", cluster.ErrInvalidManifest, socketPath)
+		}
+	}
+	return nil
+}
+
+func hardenDispatchPodSpecs(u *unstructured.Unstructured) {
+	if isVolcanoVCJob(u) {
+		hardenDispatchVCJobTasks(u)
+		return
+	}
+	for _, path := range podSpecPaths(u.GetKind()) {
+		setDispatchAutomountServiceAccountToken(u.Object, path)
+	}
+}
+
+func hardenDispatchVCJobTasks(u *unstructured.Unstructured) {
+	tasks, found, _ := unstructured.NestedSlice(u.Object, "spec", "tasks")
+	if !found {
+		return
+	}
+	changed := false
+	for i, raw := range tasks {
+		task, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		setDispatchAutomountServiceAccountToken(task, []string{"template", "spec"})
+		tasks[i] = task
+		changed = true
+	}
+	if changed {
+		_ = unstructured.SetNestedSlice(u.Object, tasks, "spec", "tasks")
+	}
+}
+
+func setDispatchAutomountServiceAccountToken(obj map[string]any, path []string) {
+	_ = unstructured.SetNestedField(obj, false, childPath(path, "automountServiceAccountToken")...)
 }
 
 func dispatchObject(resource dispatchResource) (*unstructured.Unstructured, error) {

@@ -10,6 +10,20 @@ This repository uses a controlled three-agent development workflow.
 | Code Agent | Implements only the approved plan |
 | Reviewer Agent | Reviews both the plan and implementation |
 
+## Tool Assignment
+
+When quota and local tooling are sufficient:
+
+| Role | Default Tool |
+|---|---|
+| Plan Agent | Claude Code |
+| Reviewer Agent | Claude Code |
+| Code Agent | Codex |
+
+If Claude Code or Codex is unavailable, agents must keep the same role
+separation, record the fallback in the plan or review, and continue only when
+the normal approval gates are satisfied.
+
 ## Required Flow
 
 ```text
@@ -28,6 +42,17 @@ User Requirement
 Implementation must not begin until the plan is approved.
 
 A task is not complete until Reviewer Agent marks the implementation as approved.
+
+For GA acceptance-criteria clearance, work in this order:
+
+1. V1 external production launch blockers.
+2. Non-deferred Full GA gaps.
+3. Deferred GPU-hardware or frontend/WebRTC items only after the required
+   environment exists.
+
+`problem.md`, `gap.md`, and `docs/acceptance/ga-acceptance-trace-matrix.md`
+must be updated only after matching evidence exists. Local, static, fixture, or
+single-cluster evidence must not be described as live external GA proof.
 
 ## Status Values
 
