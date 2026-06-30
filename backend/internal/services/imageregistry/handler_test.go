@@ -139,7 +139,7 @@ func TestImageCatalogPublishRequiresSupplyChainReadyCatalog(t *testing.T) {
 
 			code, data, _ := publishCatalog(app, req, platform.RouteSpec{})
 			assertImageStatus(t, code, data, http.StatusConflict)
-			if message := data.(map[string]any)["message"]; message == "" {
+			if data.(map[string]any)["message"] == "" {
 				t.Fatalf("publish rejection = %#v, want message", data)
 			}
 			if records := imageRows(app, req, projectImagesResource); len(records) != 0 {

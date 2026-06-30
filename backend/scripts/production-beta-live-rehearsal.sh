@@ -260,9 +260,9 @@ validate_render_service_names() {
 
   local unit service_name
   while IFS= read -r unit; do
-    [ -n "${unit}" ] || continue
+    [[ -n "${unit}" ]] || continue
     service_name="$(rendered_service_name_for_unit "${RENDER_FILE}" "${unit}")"
-    [ "${service_name}" = "${unit}" ] \
+    [[ "${service_name}" = "${unit}" ]] \
       || die "production-beta render ConfigMap ${unit}-config SERVICE_NAME=${service_name:-<missing>}, want ${unit}"
   done <"${SERVICE_LIST_FILE}"
 }
