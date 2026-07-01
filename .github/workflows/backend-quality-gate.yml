@@ -37,6 +37,12 @@ env:
   E2E_API_KEY: smoke-api-key
   E2E_SERVICE_API_KEY: smoke-service-key
   TRIVY_TIMEOUT: "10m"
+  HARBOR_VERSION: "v2.15.1"
+  HARBOR_HTTP_PORT: "18080"
+  HARBOR_ADMIN_PASSWORD: "Harbor12345-ci"
+  HARBOR_SEED_PROJECT: "nexuspaas-e2e"
+  HARBOR_SEED_REPOSITORY: "smoke"
+  HARBOR_SEED_TAG: "v1"
 
 jobs:
   detect-changes:
@@ -48,7 +54,7 @@ jobs:
     outputs:
       workflow_lint: ${{ steps.filter.outputs.workflow == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
       quick: ${{ steps.filter.outputs.backend_go == 'true' || steps.filter.outputs.backend_deps == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
-      integration: ${{ steps.filter.outputs.backend_go == 'true' || steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_migrations == 'true' || steps.filter.outputs.backend_docker == 'true' || steps.filter.outputs.backend_deploy == 'true' || steps.filter.outputs.backend_compose == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
+      integration: ${{ steps.filter.outputs.backend_go == 'true' || steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_migrations == 'true' || steps.filter.outputs.backend_docker == 'true' || steps.filter.outputs.backend_deploy == 'true' || steps.filter.outputs.backend_compose == 'true' || steps.filter.outputs.backend_scripts == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
       govulncheck: ${{ steps.filter.outputs.backend_go == 'true' || steps.filter.outputs.backend_deps == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
       osv: ${{ steps.filter.outputs.backend_deps == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
       trivy_fs: ${{ steps.filter.outputs.workflow == 'true' || steps.filter.outputs.backend_deps == 'true' || steps.filter.outputs.backend_docker == 'true' || steps.filter.outputs.backend_deploy == 'true' || steps.filter.outputs.backend_scripts == 'true' || (github.event_name == 'workflow_dispatch' && inputs.full_gate) }}
@@ -213,6 +219,18 @@ jobs:
             sleep 2
           done
 
+      - name: Cache Harbor installer
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: backend/.cache/harbor-${{ env.HARBOR_VERSION }}
+          key: harbor-installer-${{ env.HARBOR_VERSION }}
+
+      - name: Start Harbor
+        run: scripts/harbor-up.sh
+
+      - name: Seed Harbor
+        run: scripts/harbor-seed.sh
+
       - name: Integration coverage
         run: |
           go test -tags integration ./... -coverprofile=coverage.out -count=1
@@ -241,6 +259,18 @@ jobs:
           set -o pipefail
           go test -tags e2e ./internal/e2e -count=1 -v 2>&1 | tee full-e2e.log
 
+      - name: Live Harbor E2E
+        env:
+          TEST_LIVE_HARBOR_IMAGE_BUILD: "1"
+          HARBOR_URL: http://127.0.0.1:${{ env.HARBOR_HTTP_PORT }}
+        run: |
+          set -o pipefail
+          go test -tags e2e ./internal/e2e -run 'TestLiveHarborImageBuildE2E|TestLiveHarborCatalogSyncE2E' -count=1 -v 2>&1 | tee harbor-e2e.log
+
+      - name: Stop Harbor
+        if: always()
+        run: scripts/harbor-down.sh || true
+
       - name: Upload test artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -250,6 +280,7 @@ jobs:
             backend/coverage.out
             backend/focused-e2e.log
             backend/full-e2e.log
+            backend/harbor-e2e.log
           if-no-files-found: ignore
 
   govulncheck:

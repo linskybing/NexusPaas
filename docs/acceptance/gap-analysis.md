@@ -756,6 +756,23 @@ and load evidence remains tracked separately under PERF.
   Remaining performance evidence gaps are queue stress, large usage-query load,
   metrics cardinality, build concurrency, full WebRTC media concurrency,
   K8s-control throughput, and numeric DR RTO/RPO.
+- **IMG:** 2026-07-01 archive-validation + idempotency-fingerprint hardening:
+  image-build create now hashes/validates the build context (tar.gz/zip parser
+  with path-traversal, symlink/hardlink, and zip-bomb controls) and includes
+  Dockerfile/context/storage/build-args identity in the idempotency
+  fingerprint (`imageregistry/buildcontext.go`, `imageregistry/handler.go`).
+  This is local/code-level evidence only; it does not close multipart
+  transport, from-storage permission checks, live Tekton/BuildKit execution,
+  Harbor push, SBOM/signing/scan enforcement, full IMG, V1 external launch, or
+  Full GA.
+- **IMG/Harbor:** 2026-07-01 repeatable CI/local ephemeral Harbor smoke lane:
+  `backend/scripts/harbor-up.sh`/`harbor-seed.sh` install a pinned local Harbor
+  (v2.15.1) and seed one project/image; `TestLiveHarborImageBuildE2E` and
+  `TestLiveHarborCatalogSyncE2E` now run on every CI PR (executed live once
+  locally — `docs/acceptance/evidence/2026-07-01-harbor-ci-local-smoke-report.md`)
+  instead of being permanently skipped. This adds repeatability to the
+  existing one-off 2026-06-21 RKE2 Harbor evidence above; it does not replace
+  it, and it does not prove external registry promotion or rollback.
 
 ## Summary
 

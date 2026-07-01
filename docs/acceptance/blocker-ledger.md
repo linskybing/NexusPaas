@@ -6,6 +6,12 @@ _Re-verified 2026-06-30 (independent local pass) against
 `go test -race ./...` all green locally; domain-level reference parity
 re-confirmed. Local-only — no live external GA evidence added this pass._
 
+_Re-verified 2026-07-01: archive-validation (P0-1) and idempotency-fingerprint
+(P0-2) ledger entries corrected against current code; a repeatable CI/local
+ephemeral Harbor catalog-sync + health smoke lane also landed and was
+executed live once (`docs/acceptance/evidence/2026-07-01-harbor-ci-local-smoke-report.md`).
+No new external GA evidence added this pass._
+
 This pass independently re-ran the local toolchain on the current working tree:
 `go build ./...` clean, `go vet ./...` clean, full `go test ./...` **green across
 all 23 tested packages** (`cmd/microservice`, `internal/platform`,
@@ -46,9 +52,13 @@ deliberately out-of-scope reconciler (ADR 0006).
 5. Typed external API coverage and typed ownership remain **static fixtures
    only** ("Open") — not live-authorization proven; full image-build/SBOM/
    signing/scan GA workflow and live PERF/MON also remain open.
-6. Archive/image-build source support is **API contract / queued metadata only**:
-   Dockerfile/context/storage-path fields are not persisted, hashed, validated, or
-   dispatched; tar.gz/zip upload and archive security controls are not implemented.
+6. Archive/image-build source support: Dockerfile/context/storage-path fields
+   are now persisted, hashed, and validated — a real tar.gz/zip archive
+   validator (path traversal, symlink/hardlink, zip-bomb, file-count/depth
+   limits, deterministic digest) and a source-aware idempotency fingerprint
+   exist — but the archive is still base64-in-JSON (not a streamed
+   multipart/object-store upload), from-storage permission checks are not
+   implemented, and there is still no build **dispatch/execution** at all.
 
 **2026-07-01 kind-tier update (P0s 2–4 partially advanced, still Open for
 external):** a single local kind cluster now runs the full 8-unit
@@ -70,9 +80,9 @@ true microservice topology.
 
 | Priority | Reference Capability | Current Status | Expected Service | Evidence | Required Action |
 | -------- | -------------------- | -------------- | ---------------- | -------- | --------------- |
-| High | External image registry promotion/rollback (Harbor) | Partial | image-registry-service | Harbor is an isolated `harbor-system` foundation; never used for external promote/rollback (`blocker-ledger.md` prior evidence; `imageregistry/handler.go`) | Execute a real external Harbor build → promote → previous-image rollback drill and record evidence |
+| High | External image registry promotion/rollback (Harbor) | Partial | image-registry-service | Harbor is an isolated `harbor-system` foundation; never used for external promote/rollback (`blocker-ledger.md` prior evidence; `imageregistry/handler.go`). A repeatable CI/local ephemeral Harbor catalog-sync + health smoke lane now also exists (`backend/scripts/harbor-up.sh`/`harbor-seed.sh`, `internal/e2e/live_harbor_catalog_sync_e2e_test.go`, executed live — `docs/acceptance/evidence/2026-07-01-harbor-ci-local-smoke-report.md`) — proves the sync/health code path against real Harbor repeatably, but it is ephemeral CI/local infrastructure, not an external registry, and does not touch promotion or rollback | Execute a real external Harbor build → promote → previous-image rollback drill and record evidence |
 | High | Full image build workflow (BuildKit/Tekton, SBOM, signing, scan enforcement, allow-list admission) | Partial | image-registry-service | Static typed fixtures only for `POST /api/v1/images/build[/from-storage|/dockerfile]`; `ImageBuildStarted` event + queued supply-chain metadata are shape-only; local IMG-019 guard now rejects catalog publish without digest, passing scan, and available/not-deleted metadata, and (opt-in `IMAGE_PUBLISH_REQUIRE_PROVENANCE=true`) also rejects publish without SBOM-digest + signature-ref presence — presence guard only, default-off; live SBOM/sign execution unproven; scheduler-quota submit admission additionally rejects (opt-in `K8S_IMAGE_CHECK_ENABLED=true`) workload images not on the project's published allow-list via an owner-read of `image_allow_lists` (in-code defense-in-depth; external policy-engine parity + live cluster enforcement still open) | Run live build execution + SBOM/sign/scan/allow-list enforcement and capture evidence |
-| High | Archive/Dockerfile/from-storage build source handling | Missing | image-registry-service | 2026-06-30 archive/HPC audit: build handlers queue JSON metadata only; no multipart tar.gz/zip upload, archive extraction, Dockerfile/context persistence or hash, storage-path permission check, source digest, or object-context upload | Implement source upload/permission/provenance pipeline before advertising these as working build sources |
+| High | Archive/Dockerfile/from-storage build source handling | Partial | image-registry-service | Archive parsing/validation (path traversal, symlink/hardlink, zip-bomb, file-count/depth/length limits) and source fingerprinting (Dockerfile SHA-256, context-archive digest, storage path, build args) are implemented and persisted as `source_digest` (`imageregistry/buildcontext.go`, `imageregistry/handler.go`). Still missing: multipart/streamed archive upload (base64-in-JSON only), from-storage permission checks, and build execution (no Tekton/BuildKit dispatch, no Harbor push, no SBOM/scan/sign) | Add streamed multipart upload + object-store staging, from-storage permission checks, and implement build execution/dispatch |
 | High | 8-unit live staging deploy/smoke + per-unit previous-image rollback | Partial | all (platform-gateway + 14) | 8-unit kustomize/runtime-config/compose smoke + CI gates exist; live rollback evidence is 15-deployment namespace only (`deploy/k3s`, `kustomization.yaml`) | Perform live 8-unit staging deploy/smoke and per-unit image rollback |
 | High | Live staging DB migration/rollback drill | Missing | each service (owns `migrations/`) | Per-service `migrations/` present and built into image; no live staging migrate/rollback evidence | Run live staging migration + rollback drill per unit |
 | High | Live external staging Secret readiness/provenance | Partial | all | Static production-beta deploy-path proof of Secret names/keys + no placeholder refs; no live Secret objects/provenance | Provision + verify live external staging Secret objects |
@@ -87,8 +97,6 @@ true microservice topology.
 
 | Priority | Area | Problem | Evidence | Impact | Recommended Fix |
 | -------- | ---- | ------- | -------- | ------ | --------------- |
-| High | image-registry build API | Build source fields are advertised by fixtures/AC but currently ignored by the queued metadata path. Idempotency fingerprinting omits source type/content/identity, so the same key can replay a different Dockerfile/context/storage source as the same build. | `docs/acceptance/archive-image-build-hpc-storage-audit.md`; `imageregistry/handler.go` create/fingerprint path | Retry semantics, reproducibility, and source provenance are unreliable once real source inputs are accepted | Include source type, Dockerfile hash, context/archive digest, storage path/object id, build args, revision, checksum, project, user, resources, and timeout in the fingerprint |
-| High | archive build security | tar.gz/zip upload is listed as a GA target, but no archive parser/extractor or security controls exist in the image-build path. | `docs/acceptance/image-build.md`; archive audit | Enabling archive upload without controls would risk path traversal, symlink/hardlink abuse, zip bombs, and unbounded extraction | Add streaming extraction with canonical path checks, link policy, compressed/uncompressed limits, file-count limits, and checksum validation before enabling upload |
 | Medium | storage/FastTransfer HPC data plane | Storage is HPC-aware in metadata/manifests, not optimized in actual data movement. | `docs/acceptance/archive-image-build-hpc-storage-audit.md`; DataPlane/FastTransfer evidence | Large-file, small-file, multi-node, object-store, cache, and checkpoint workloads may be slow or unverifiable despite storage-profile labels | Add profile-driven mover strategies, checksum/resume/progress/throughput metrics, cache warmup/eviction, async checkpoint flush, and benchmark feedback |
 | Medium | repo / build (`cmd/microservice`, root `Dockerfile`) | Shared-binary distributed monolith: one Go module + one binary + one base image serve all 15 services; per-service Dockerfiles only `FROM ${BASE_IMAGE}` | `Dockerfile`, `audit-compliance-service/Dockerfile`, `internal/services/catalog.go` | A change in any service recompiles/reships every service image; blast radius is repo-wide; not true independent deployability | Accept as documented 8-unit topology OR split modules/images per unit; keep isolation guard tests as the compensating control |
 | Info | tests | Test LOC (~68k) exceeds product LOC (~57k); heavy intentional fixture/table duplication (Sonar CPD-excluded by design) | `internal/**/*_test.go`, `sonar.cpd.exclusions` | None functionally; review-cost only | None required; keep CPD exclusions scoped to fixtures/manifests |
@@ -102,6 +110,21 @@ longer tracked as a blocker. Strict staging/production runtime validation now
 rejects blank/`all` `SERVICE_NAME`, and the production-beta live rehearsal
 render guard also rejects `SERVICE_NAME=all` or unit ConfigMap mismatches before
 live mutation.
+
+Resolved image-build hardening (P0-1/P0-2): the idempotency fingerprint now
+includes Dockerfile SHA-256, build-context-archive digest, context reference,
+storage path, and build args (`imageBuildIdempotencyFingerprint`,
+`imageregistry/handler.go`), so a replayed `Idempotency-Key` with a different
+source now returns `409 Conflict` instead of replaying the first build. A
+tar.gz/zip build-context validator (`imageregistry/buildcontext.go`) now
+rejects path traversal, absolute paths, symlink/hardlink/device/fifo/socket
+entries, and zip bombs, and enforces file-count/path-depth/path-length caps
+with a deterministic sorted-entry content digest. This closes the two code
+problems that used to be listed above. It does not close: streamed/multipart
+archive transport (the archive is still carried as base64 inside the JSON
+body, capped at 100MB), a from-storage permission check, or build execution
+(no BuildKit/Tekton dispatch, no Harbor push, no SBOM/scan/sign) — see the
+Feature Gap Table row above, which stays Partial.
 
 ## 4. SOLID Review
 
@@ -178,9 +201,10 @@ buildable or deployable artifacts** — the boundary is logical, not physical.
 4. **(P0, live)** Live external staging Secret objects + provenance verification.
 5. **(P0, live)** Full image-build GA workflow: BuildKit/Tekton execution, SBOM,
    signing, scan enforcement, allow-list admission.
-6. **(P1)** Implement image-build source handling and provenance: archive upload
-   security, Dockerfile/context hashing, from-storage permission checks, source
-   digest persistence, and source-aware idempotency.
+6. **(P1)** Finish image-build source handling: streamed multipart/object-store
+   archive upload (parsing/hashing/idempotency are already done), from-storage
+   permission checks, and build dispatch/execution (Tekton/BuildKit, Harbor
+   push, SBOM/scan/sign).
 7. **(P1)** Turn storage profiles into a real HPC data plane: profile-based mover,
    checksum/resume/progress/throughput, cache lifecycle, checkpoint flush, and
    benchmark feedback.

@@ -169,7 +169,12 @@ func harborArtifactQuery(page int) url.Values {
 	query := url.Values{}
 	query.Set("with_tag", "true")
 	query.Set("with_scan_overview", "true")
-	query.Set("page_size", fmt.Sprintf("%d", harborArtifactPageSize))
+	// Harbor's real API v2.0 param is camelCase "pageSize" (verified against
+	// goharbor/harbor's swagger.yaml); "page_size" is silently ignored, which
+	// makes Harbor fall back to its own default (10) and, combined with the
+	// page-continuation check below, silently truncates sync to page 1 for
+	// any real project with more artifacts than that default.
+	query.Set("pageSize", fmt.Sprintf("%d", harborArtifactPageSize))
 	query.Set("page", fmt.Sprintf("%d", page))
 	return query
 }
