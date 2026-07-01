@@ -198,7 +198,7 @@ var domainReadContracts = map[string]readContract{
 	"identity-service:roles": {listPath: "/internal/identity/roles", getPath: "/internal/identity/roles/{id}"},
 
 	// org-project / workload read contracts consumed by scheduler-quota submit
-	// admission (problem.md #3). project_members and user_quotas are keyed by a
+	// admission (blocker-ledger.md #3). project_members and user_quotas are keyed by a
 	// composite "<projectID>/<userID>", so their provider get routes use a trailing
 	// wildcard; the get path here substitutes the raw key into that suffix. Workload
 	// jobs are list-only because admission only needs aggregate active usage.

@@ -17,8 +17,6 @@ coverage.out
 tmp/
 dist/
 microservice
-problem.md
-gap.md
 docs/
 backend/coverage.out
 backend/.tmp/

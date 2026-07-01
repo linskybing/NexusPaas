@@ -388,7 +388,7 @@ func bindPlanToProject(app *platform.App, r *http.Request, _ platform.RouteSpec)
 		return http.StatusNotFound, shared.ErrorData(msgPlanNotFound), nil
 	}
 	// The project aggregate (incl. its plan binding) is owned by org-project; apply
-	// the binding through the owner contract rather than writing it here (problem.md #2).
+	// the binding through the owner contract rather than writing it here (blocker-ledger.md #2).
 	client, err := newOrgProjectBindingClient(app)
 	if err != nil {
 		slog.Error("scheduler quota plan binding client unavailable", "error", err)
@@ -529,7 +529,7 @@ func queuesForPlan(app *platform.App, r *http.Request, planID string) (int, any,
 
 // unbindPlanFromProjects clears a deleted plan from every project bound to it
 // through the org-project owner contract, so scheduler-quota never writes project
-// records directly (problem.md #2). Failures are logged but do not fail the plan
+// records directly (blocker-ledger.md #2). Failures are logged but do not fail the plan
 // deletion, preserving the prior fire-and-forget cleanup semantics.
 func unbindPlanFromProjects(app *platform.App, r *http.Request, planID string) {
 	client, err := newOrgProjectBindingClient(app)

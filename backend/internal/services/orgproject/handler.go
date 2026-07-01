@@ -98,11 +98,11 @@ func Register(app *platform.App) {
 
 	// Service-key-gated internal command contract: lets plan-owning services
 	// (scheduler-quota) apply/clear project plan bindings without writing the
-	// org-project-owned project aggregate directly (problem.md #2).
+	// org-project-owned project aggregate directly (blocker-ledger.md #2).
 	app.RegisterCustomHandler(http.MethodPut, pathBindProjectPlan, bindProjectPlan)
 	app.RegisterCustomHandler(http.MethodDelete, pathClearPlanBindings, clearProjectsPlan)
 
-	// Service-key-gated read contracts for cross-service consumers (problem.md #3).
+	// Service-key-gated read contracts for cross-service consumers (blocker-ledger.md #3).
 	registerInternalReadContracts(app)
 }
 

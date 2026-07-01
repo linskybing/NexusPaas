@@ -48,7 +48,7 @@ or live portability.
 - Add provider adapter interfaces only when a replacement path is being built.
 - Prove at least one live provider replacement or dual-provider operation before
   claiming portability.
-- Keep `problem.md` and the GA acceptance matrix open until the implementation
+- Keep `blocker-ledger.md` and the GA acceptance matrix open until the implementation
   and evidence gates pass.
 
 ## Reversal

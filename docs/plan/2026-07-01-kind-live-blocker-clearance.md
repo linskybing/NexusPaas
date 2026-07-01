@@ -10,7 +10,7 @@ done" convention._
 
 ## Why
 
-`docs/acceptance/ga-acceptance-trace-matrix.md`, `gap.md`, and `problem.md` kept
+`docs/acceptance/ga-acceptance-trace-matrix.md`, `gap-tracker.md`, and `blocker-ledger.md` kept
 the V1 external production launch blockers `Open` with **render-only / static /
 fixture** evidence — the deploy/migration/rollback/supply-chain machinery had
 never executed on a real Kubernetes cluster. The user asked to actually run and
@@ -47,7 +47,7 @@ kind and still requires a real external cluster + registry.)
      rollback-pull previous.
 - Evidence: `docs/acceptance/evidence/2026-07-01-kind-live-e2e-report.md`.
 - Trackers updated honestly (classifications unchanged, rows stay `Open`):
-  `ga-acceptance-trace-matrix.md`, `gap.md`, `problem.md`, `image-build.md`,
+  `ga-acceptance-trace-matrix.md`, `gap-tracker.md`, `blocker-ledger.md`, `image-build.md`,
   `security.md` — each new datapoint labelled kind-tier / not-external.
 
 ## Honest residual (stays Open)

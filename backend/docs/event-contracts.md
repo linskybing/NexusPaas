@@ -6,7 +6,7 @@ one database transaction, a relay publishes events, and consumers record inbox
 processing for idempotency. Current runtime has event contracts, producer and
 consumer fixture coverage, and projection lag/retry/replay/dead-letter
 visibility, but durable transactional relay/inbox delivery is still a P0
-blocker in `problem.md`.
+blocker in `blocker-ledger.md`.
 
 Event payloads carry only UUIDs and necessary snapshots; internal primary keys
 that would enable cross-service joins are forbidden.

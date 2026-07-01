@@ -43,7 +43,7 @@ Day 0-15 prerequisite.
 - Observability records safe service identity labels or trace attributes without
   logging raw credentials, tokens, cookies, or assertions.
 - Rollback can restore static-key fallback only as an explicit, time-bound
-  transition with `problem.md` tracking.
+  transition with `blocker-ledger.md` tracking.
 
 ## Compatibility And Contract Requirements
 
@@ -83,7 +83,7 @@ Day 0-15 prerequisite.
   internal identities.
 - Capture staging evidence for identity issuance, rotation or replacement,
   trace-safe labels, and fail-closed behavior.
-- Keep the service identity blocker open in `problem.md` until the staging GA
+- Keep the service identity blocker open in `blocker-ledger.md` until the staging GA
   path no longer depends on static keys.
 
 ## Reversal

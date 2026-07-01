@@ -24,7 +24,7 @@ func (okBackingChecker) Check(context.Context, platform.BackingDependency) error
 // TestClusterReadinessGateE2E proves, against live Docker Desktop Kubernetes, that a
 // production deployment hosting a cluster-dependent service (workload-service) reports
 // ready only when a real cluster client is wired, and fails closed (503) when the
-// cluster client is absent — the previously silent degradation in problem.md #5.
+// cluster client is absent — the previously silent degradation in blocker-ledger.md #5.
 func TestClusterReadinessGateE2E(t *testing.T) {
 	if strings.TrimSpace(os.Getenv("TEST_LIVE_K8S_CLUSTER_READINESS")) != "1" {
 		t.Skip("TEST_LIVE_K8S_CLUSTER_READINESS=1 not set; skipping live Kubernetes cluster-readiness e2e")

@@ -76,7 +76,7 @@ By Day 90, a GA architecture candidate is acceptable only if:
   dispatch, cleanup, plan windows, duration limits, and preemption;
 - GitHub-hosted quality gates require tests, build, scans, and remote
   SonarScanner Quality Gate for trusted events;
-- `problem.md` contains no unaccepted GA architecture blocker.
+- `blocker-ledger.md` contains no unaccepted GA architecture blocker.
 
 ## Rejected Alternatives
 

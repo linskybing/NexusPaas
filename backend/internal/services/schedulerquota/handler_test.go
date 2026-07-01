@@ -188,7 +188,7 @@ func TestSchedulerQuotaPlanAdminEventsIncludeActorAndBeforeAfter(t *testing.T) {
 // TestBindPlanToProjectGoesThroughOwnerContract proves scheduler-quota does not
 // write the org-project project record directly: with org-project NOT co-hosted
 // and no remote URL configured, the bind must fail closed (no local write),
-// retiring the problem.md #2 ownership violation.
+// retiring the blocker-ledger.md #2 ownership violation.
 func TestBindPlanToProjectGoesThroughOwnerContract(t *testing.T) {
 	app := platform.NewApp(platform.Config{ServiceName: serviceName, HTTPAddr: ":0"})
 	Register(app)

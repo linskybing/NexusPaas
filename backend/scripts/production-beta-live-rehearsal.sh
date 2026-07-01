@@ -605,7 +605,7 @@ write_report() {
     printf -- '- Rollouts: `%s`\n' "${ROLLOUT_FILE}"
     printf -- '- Smoke checks: `%s`\n' "${SMOKE_FILE}"
     printf -- '- Rollback and redeploy: `%s`\n' "${ROLLBACK_FILE}"
-    printf '\nSuccessful harness execution still requires Reviewer acceptance before `problem.md` or `gap.md` can close live P0.2-P0.5.\n'
+    printf '\nSuccessful harness execution still requires Reviewer acceptance before `blocker-ledger.md` or `gap-tracker.md` can close live P0.2-P0.5.\n'
   } >"${REPORT_FILE}"
   log "Wrote ${REPORT_FILE}"
 }

@@ -521,7 +521,7 @@ live permission enforcement, live Kubernetes mount or data-plane execution,
 cluster PVC isolation, namespace enforcement, CSI behavior, local PV binding,
 byte-mover behavior, full storage GA, Full GA, or first-version readiness. The
 broader storage isolation and mount validation criteria below still should not
-be treated as fully proven unless `gap.md` records explicit evidence for those
+be treated as fully proven unless `gap-tracker.md` records explicit evidence for those
 slices.
 
 Storage CacheBinding and StorageBenchmarkRecord now also have local/static
@@ -773,7 +773,7 @@ core** thoroughly. The original v1 gap review identified the **supporting
 surfaces every real deployment touches** — Web UI, storage, secrets, audit
 query, Plan/Queue administration, and basic gateway abuse limits. Several of
 those proposed slices now have evidence, but that evidence must not be read as
-Full GA completion; the remaining GA gaps are tracked in `gap.md`.
+Full GA completion; the remaining GA gaps are tracked in `gap-tracker.md`.
 
 DATA-014 deploy/apply retry evidence now exists locally: the workload dispatcher
 selects a `waiting_infra` job whose `next_retry_at` is due, retries manifest

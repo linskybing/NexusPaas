@@ -126,7 +126,7 @@ The live rehearsal must prove:
 
 ## Remaining Issue Policy
 
-Production Beta may proceed only when every `problem.md` issue is either:
+Production Beta may proceed only when every `blocker-ledger.md` issue is either:
 
 - resolved with evidence,
 - explicitly accepted as a non-blocking Beta risk with an owner and follow-up,
@@ -165,4 +165,4 @@ A candidate can be called a Production Beta RC only after:
 
 - `bash backend/scripts/ci-security-gate.sh beta-rc` passes,
 - the live staging rehearsal above passes, and
-- `problem.md` contains no unaccepted launch blockers.
+- `blocker-ledger.md` contains no unaccepted launch blockers.

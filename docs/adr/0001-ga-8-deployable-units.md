@@ -75,7 +75,7 @@ domain invariants.
 - Add Outbox/Inbox and read-model slices for high-risk cross-unit state.
 - Capture deploy, smoke, rollback, redeploy, and post-redeploy smoke evidence for
   each unit in staging.
-- Keep `problem.md` blockers open until implementation and evidence gates pass.
+- Keep `blocker-ledger.md` blockers open until implementation and evidence gates pass.
 
 ## Reversal
 

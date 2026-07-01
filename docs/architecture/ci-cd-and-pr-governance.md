@@ -61,7 +61,7 @@ A candidate can move toward GA staging only when:
 - Dependencies, images, IaC, and policy definitions are scanned.
 - SBOM generation and Cosign signing are GA goals for release artifacts.
 - Exceptions require owner, expiry date, compensating control, and tracking in
-  `problem.md` or the release evidence.
+  `blocker-ledger.md` or the release evidence.
 
 ## Rollback Standard
 

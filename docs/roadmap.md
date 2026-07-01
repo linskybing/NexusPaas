@@ -1,7 +1,7 @@
 # NexusPaaS Architecture Remediation Roadmap
 
 The current goal is to turn the Go modular monolith into 8 credible deployable
-units without doing a big-bang 15-service split. `problem.md` is the blocker
+units without doing a big-bang 15-service split. `blocker-ledger.md` is the blocker
 ledger; this roadmap is the implementation order.
 
 ## P0: Before Production/GA
@@ -48,7 +48,7 @@ ledger; this roadmap is the implementation order.
 
 ## P2: Documentation And Tooling
 
-1. Keep README, `problem.md`, architecture docs, and backend docs aligned with
+1. Keep README, `blocker-ledger.md`, architecture docs, and backend docs aligned with
    the current implementation.
 2. Split the large CI/security script only when a check becomes hard to run or
    debug independently.
@@ -59,6 +59,6 @@ ledger; this roadmap is the implementation order.
 
 ## Acceptance Rule
 
-NexusPaaS can be called a GA microservice architecture only when `problem.md`
+NexusPaaS can be called a GA microservice architecture only when `blocker-ledger.md`
 has no unaccepted P0 blockers, the 8 deployable units have staging evidence, and
 core data/event boundaries no longer depend on undocumented shared-store paths.

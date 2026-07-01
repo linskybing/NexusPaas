@@ -68,7 +68,7 @@ The Production Beta / GA deployment direction is 8 deployable units:
 
 Shared infrastructure lives under [`backend/internal/platform`](backend/internal/platform)
 (config, auth, observability, backing services, cluster adapters). The current
-blocker ledger is [`problem.md`](problem.md), the remediation sequence is
+blocker ledger is [`blocker-ledger.md`](docs/acceptance/blocker-ledger.md), the remediation sequence is
 [`docs/roadmap.md`](docs/roadmap.md), and deeper backend docs are in
 [`backend/docs/`](backend/docs):
 [architecture](backend/README.md) ·

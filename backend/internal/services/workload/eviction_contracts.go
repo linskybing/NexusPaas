@@ -16,7 +16,7 @@ const jobStatusEvicted = "evicted"
 // plan-window reaper: the reaper performs the cluster-side cleanup, then calls this
 // service-key-protected internal contract so that workload — the owner of job state —
 // records the transition. This mirrors workloadPreemptJob and keeps cross-service job
-// writes out of scheduler-quota (problem.md issue #2).
+// writes out of scheduler-quota (blocker-ledger.md issue #2).
 //
 // Unlike preemption (which only acts on preemptible/running jobs), plan-window
 // eviction applies to any non-terminal job, matching the reference reaper's
