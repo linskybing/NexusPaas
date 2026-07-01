@@ -47,9 +47,9 @@ API_KEY="nexuspaas-kind-admin-key"
 IDENTITY_KEY="nexuspaas-kind-identity-key"
 AUTHZ_KEY="nexuspaas-kind-authz-key"
 TURN_SECRET="nexuspaas-kind-turn-secret"
-# classic dex example bcrypt hash for the literal string "password" (dex only needs
-# a syntactically valid hash to start; dex is scaled to 0 in this run anyway)
-DEX_HASH='$2a$10$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW'
+# dex is scaled to 0 in this run (DEX_URL empty, no OIDC consumers), so its
+# password hash is never consumed — use a non-secret placeholder, not a real hash.
+DEX_HASH="dex-scaled-to-zero-unused-in-kind-run"
 DB_URL="postgres://nexuspaas:${PG_PW}@postgres:5432/nexuspaas?sslmode=disable"
 API_KEY_PRINCIPALS='{"'"${API_KEY}"'":{"id":"kind-admin","username":"kind-admin","role":"admin","admin":true}}'
 TRUSTED_IDENTITIES='{"platform-gateway":{"key":"'"${IDENTITY_KEY}"'","audiences":["iam-unit","tenant-unit","collaboration-unit","platform-io-unit","usage-observability","compute-api","compute-control-plane"]}}'
@@ -69,7 +69,7 @@ REGISTRY_UNION="${ARTIFACT_DIR}/registry-union.txt"
 
 log() { printf '[%s] %s\n' "$(date -u '+%H:%M:%SZ')" "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
-need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required"; }
+need() { local cmd="$1"; command -v "${cmd}" >/dev/null 2>&1 || die "${cmd} is required"; }
 kc() { kubectl --context "${KIND_CONTEXT}" -n "${NAMESPACE}" "$@"; }
 
 preflight() {
@@ -136,11 +136,11 @@ create_ns_and_secrets() {
           --from-literal=API_KEY_PRINCIPALS="${API_KEY_PRINCIPALS}"
           --from-literal=SERVICE_IDENTITY_KEY="${IDENTITY_KEY}"
           --from-literal=SERVICE_TRUSTED_IDENTITIES="${TRUSTED_IDENTITIES}")
-    if [ "${u}" != "iam-unit" ]; then
+    if [[ "${u}" != "iam-unit" ]]; then
       args+=(--from-literal=AUTHORIZATION_POLICY_URL="http://iam-unit"
              --from-literal=AUTHORIZATION_POLICY_API_KEY="${AUTHZ_KEY}")
     fi
-    if [ "${u}" = "collaboration-unit" ]; then
+    if [[ "${u}" = "collaboration-unit" ]]; then
       args+=(--from-literal=OBJECT_STORE_ACCESS_KEY="${MINIO_AK}"
              --from-literal=OBJECT_STORE_SECRET_KEY="${MINIO_SK}")
     fi
@@ -247,24 +247,24 @@ wait_and_smoke() {
 }
 
 smoke_unit() {
-  # NOTE: separate `local` statements — a single-line `local a=$1 b=$((a))` expands
-  # the RHS against the outer scope before the locals bind (bash set -u gotcha).
+  # NOTE: separate `local` statements — combining assignments on one `local` line
+  # expands each RHS against the outer scope before the locals bind (set -u gotcha).
   local u="$1" phase="$2" idx="$3"
   local port=$((18080 + idx))
   local pf_log="${ARTIFACT_DIR}/pf-${phase}-${u}.log"
   kc port-forward "service/${u}" --address 127.0.0.1 "${port}:80" >"${pf_log}" 2>&1 &
   local pf=$!
   local deadline=$((SECONDS + SMOKE_TIMEOUT_SECONDS)) ok=0
-  while [ "${SECONDS}" -lt "${deadline}" ]; do
+  while [[ "${SECONDS}" -lt "${deadline}" ]]; do
     if curl -fsS "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then ok=1; break; fi
     sleep 1
   done
-  [ "${ok}" = 1 ] || { kill "${pf}" 2>/dev/null || true; die "${u} /healthz unreachable in ${phase}"; }
+  [[ "${ok}" = 1 ]] || { kill "${pf}" 2>/dev/null || true; die "${u} /healthz unreachable in ${phase}"; }
   local ep code
   for ep in /healthz /readyz /metrics /openapi.json; do
     code="$(curl -s -o /dev/null -w '%{http_code}' -H "X-API-Key: ${API_KEY}" "http://127.0.0.1:${port}${ep}")"
     printf '%s\t%s\t%s\t%s\n' "${phase}" "${u}" "${ep}" "${code}" >>"${SMOKE_TSV}"
-    [ "${code}" = 200 ] || { kill "${pf}" 2>/dev/null || true; die "${u} ${ep} returned ${code} in ${phase} (want 200)"; }
+    [[ "${code}" = 200 ]] || { kill "${pf}" 2>/dev/null || true; die "${u} ${ep} returned ${code} in ${phase} (want 200)"; }
   done
   # In the split 8-unit topology each unit's /service-registry lists only the
   # services IT hosts; the 15 logical services are proven as the UNION across units.
@@ -280,7 +280,7 @@ verify_registry_union() {
   done
   count="$(sort -u "${REGISTRY_UNION}" | grep -Fxf <(printf '%s\n' "${LOGICAL_SERVICES[@]}") | wc -l | tr -d ' ')"
   printf '%s\tALL-8-UNITS\t/service-registry (union)\t%s-of-15\n' "${phase}" "${count}" >>"${SMOKE_TSV}"
-  [ "${missing}" = 0 ] || die "service-registry union missing ${missing} of 15 logical services in ${phase}"
+  [[ "${missing}" = 0 ]] || die "service-registry union missing ${missing} of 15 logical services in ${phase}"
 }
 
 rollback_redeploy() {
@@ -320,8 +320,9 @@ registry_promote_rollback() {
 }
 
 tsv_table() { # render a tsv as a github md table
+  local f="$1"
   awk -F '\t' 'NR==1{h=$0; n=split(h,a,"\t"); printf "|"; for(i=1;i<=n;i++)printf" %s |",a[i]; printf"\n|"; for(i=1;i<=n;i++)printf" --- |"; printf"\n"; next}
-  /^---/{next} {printf "|"; for(i=1;i<=NF;i++)printf" %s |",$i; printf"\n"}' "$1"
+  /^---/{next} {printf "|"; for(i=1;i<=NF;i++)printf" %s |",$i; printf"\n"}' "${f}"
 }
 
 write_evidence() {
@@ -358,7 +359,7 @@ write_evidence() {
 }
 
 teardown() {
-  [ "${KEEP_CLUSTER}" = 1 ] && { log "KEEP_CLUSTER=1; leaving ${CLUSTER_NAME} up"; return; }
+  [[ "${KEEP_CLUSTER}" = 1 ]] && { log "KEEP_CLUSTER=1; leaving ${CLUSTER_NAME} up"; return; }
   log "tearing down"
   kind delete cluster --name "${CLUSTER_NAME}" >/dev/null 2>&1 || true
   docker rm -f "${REG_NAME}" >/dev/null 2>&1 || true
