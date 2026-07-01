@@ -27,14 +27,13 @@ env:
   GOVULNCHECK_VERSION: "v1.3.0"
   COVERAGE_THRESHOLD: "80.0"
   BACKEND_IMAGE: nexuspaas-backend:ci-${{ github.sha }}
-  TEST_POSTGRES_PASSWORD: nexuspaas
   TEST_REDIS_URL: redis://127.0.0.1:16379/0
   TEST_EVENT_BUS_URL: redis://127.0.0.1:16379/0
   TEST_OBJECT_STORE_ACCESS_KEY: nexuspaas
   TEST_OBJECT_STORE_SECRET_KEY: nexuspaas-local-only
   TEST_OBJECT_STORE_BUCKET: media-e2e
   TEST_OBJECT_STORE_URL: http://127.0.0.1:19000
-  TEST_DATABASE_URL: postgres://nexuspaas:nexuspaas@127.0.0.1:15432/nexuspaas?sslmode=disable
+  TEST_DATABASE_URL: postgres://nexuspaas@127.0.0.1:15432/nexuspaas?sslmode=disable
   E2E_API_KEY: smoke-api-key
   E2E_SERVICE_API_KEY: smoke-service-key
   TRIVY_TIMEOUT: "10m"
@@ -57,13 +56,13 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
 
       - name: Classify changed paths
         id: filter
-        uses: dorny/paths-filter@v4
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
         with:
           filters: |
             workflow:
@@ -98,10 +97,10 @@ jobs:
       checks: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Run actionlint
-        uses: reviewdog/action-actionlint@v1
+        uses: reviewdog/action-actionlint@e0207a28405ecad11953ba625a95d92f7889572a # v1
         with:
           reporter: github-pr-check
           fail_level: error
@@ -119,10 +118,10 @@ jobs:
         working-directory: backend
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: backend/go.sum
@@ -160,8 +159,8 @@ jobs:
         image: postgres:16-alpine
         env:
           POSTGRES_USER: nexuspaas
-          POSTGRES_PASSWORD: nexuspaas
           POSTGRES_DB: nexuspaas
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 15432:5432
         options: >-
@@ -180,10 +179,10 @@ jobs:
           --health-retries 12
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: backend/go.sum
@@ -244,7 +243,7 @@ jobs:
 
       - name: Upload test artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: backend-test-artifacts
           path: |
@@ -263,10 +262,10 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: backend/go.sum
@@ -289,7 +288,7 @@ jobs:
     name: OSV Dependency Scan
     needs: detect-changes
     if: needs.detect-changes.outputs.osv == 'true'
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.3.8
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
     with:
       scan-args: |-
         --recursive
@@ -312,10 +311,10 @@ jobs:
       security-events: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Run Trivy filesystem scan
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -334,13 +333,13 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Build backend image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: backend/Dockerfile
@@ -350,7 +349,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Run Trivy image scan
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: ${{ env.BACKEND_IMAGE }}
           format: table

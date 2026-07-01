@@ -10,7 +10,13 @@ Project.
 Builds must be resource-bounded, scanned, optionally signed, pushed to Harbor,
 and added to the Project image allow list only after policy passes.
 
-## Supported Build Sources
+## GA Target Build Sources
+
+Current implementation note: the routes and fixtures exist, but build-source
+handling is not implemented yet. The image-build handlers accept JSON requests
+and create queued metadata only; they do not accept multipart tar.gz/zip upload,
+parse/extract archives, persist or hash Dockerfile/context content, validate
+from-storage permissions, upload context objects, or dispatch a live executor.
 
 | Source | Policy |
 |---|---|
@@ -21,7 +27,9 @@ and added to the Project image allow list only after policy passes.
 | project storage | Allowed if Project role permits |
 | hostPath | Allowed only with explicit Project hostPath capability and prefix allow list |
 
-## Build Flow
+## GA Target Build Flow
+
+This is the required GA flow, not the current runtime behavior.
 
 ```text
 nexus image build
@@ -97,6 +105,19 @@ Tags may be displayed, but deployment admission must resolve and enforce digest.
 This is policy/metadata evidence only. It does not prove image conversion,
 lazy-pull runtime support, node prewarm execution, live Harbor build execution,
 SBOM/signing, or full image workflow GA.
+
+Image-build source support is currently API-contract evidence only:
+
+- `POST /api/v1/images/build`, `/from-storage`, and `/dockerfile` all queue
+  build metadata through the same create path.
+- Dockerfile/context/storage-path/build-args fields are fixture/schema shape
+  only; current records do not store source content or source digests.
+- tar.gz/zip upload and archive extraction are not implemented, so path
+  traversal, symlink/hardlink, zip bomb, max-size, max-file-count, and checksum
+  controls must be added before archive build sources can be advertised as
+  working.
+- Idempotency currently proves repeat/conflict semantics for queued metadata,
+  but the fingerprint does not include source content or source identity.
 
 Queued image builds now also carry local supply-chain status metadata in the
 response, stored record, and `ImageBuildStarted` event:

@@ -70,6 +70,7 @@ type Config struct {
 	MaxConfigFileDocuments      int
 	K8sNamespacePrefix          string
 	ImageCheckEnabled           bool
+	ImageProvenanceRequired     bool
 	DockerCleanupEnabled        bool
 	DockerCleanupNamespace      string
 	DockerCleanupImage          string
@@ -189,6 +190,7 @@ const (
 	envMaxConfigFileDocuments      = "MAX_CONFIGFILE_DOCUMENTS"
 	envAdapterConfig               = "ADAPTER_CONFIG"
 	envImageCheckEnabled           = "K8S_IMAGE_CHECK_ENABLED"
+	envImageProvenanceRequired     = "IMAGE_PUBLISH_REQUIRE_PROVENANCE"
 	envDockerCleanupEnabled        = "DOCKER_CLEANUP_ENABLED"
 	envDockerCleanupNamespace      = "DOCKER_CLEANUP_NAMESPACE"
 	envFastTransferMoverImage      = "FAST_TRANSFER_MOVER_IMAGE"
@@ -336,6 +338,7 @@ func ConfigFromEnv() Config {
 		MaxConfigFileDocuments:      parser.envInt(envMaxConfigFileDocuments, defaultMaxConfigFileDocuments),
 		K8sNamespacePrefix:          env("K8S_PROJECT_NAMESPACE_PREFIX", "proj"),
 		ImageCheckEnabled:           parser.envBool(envImageCheckEnabled, false),
+		ImageProvenanceRequired:     parser.envBool(envImageProvenanceRequired, false),
 		DockerCleanupEnabled:        parser.envBool(envDockerCleanupEnabled, false),
 		DockerCleanupNamespace:      strings.TrimSpace(env(envDockerCleanupNamespace, "default")),
 		DockerCleanupImage:          strings.TrimSpace(env(envDockerDindImage, "docker:24-dind")),

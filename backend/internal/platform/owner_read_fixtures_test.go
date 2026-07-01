@@ -23,6 +23,7 @@ func TestOwnerReadFixturesMatchDomainReadContracts(t *testing.T) {
 		"org-project-projects.json",
 		"org-project-user-groups.json",
 		"org-project-user-quotas.json",
+		"scheduler-image-allow-lists.json",
 		"workload-jobs.json",
 		"workload-org-project-project-members.json",
 		"workload-org-project-projects.json",
@@ -53,6 +54,7 @@ func TestOwnerReadFixturesMatchDomainReadContracts(t *testing.T) {
 	}
 	sort.Strings(gotContracts)
 	wantContracts := []string{
+		"scheduler-quota-service -> image-registry-service:image_allow_lists",
 		"scheduler-quota-service -> org-project-service:project_members",
 		"scheduler-quota-service -> org-project-service:projects",
 		"scheduler-quota-service -> org-project-service:user_groups",
@@ -84,7 +86,13 @@ func TestRemoteServiceReaderConsumesOwnerReadFixtures(t *testing.T) {
 		assertRemoteReaderGetConsumesFixture(t, reader, fixture)
 	}
 
-	if want := len(fixtures)*2 - 1; len(calls) != want {
+	listOnly := 0
+	for _, fixture := range fixtures {
+		if fixture.ListOnly {
+			listOnly++
+		}
+	}
+	if want := len(fixtures)*2 - listOnly; len(calls) != want {
 		t.Fatalf("remote reader calls = %v, want %d list/get calls", calls, want)
 	}
 
@@ -139,8 +147,9 @@ func newOwnerReadFixtureServer(fixtures []ownerReadPlatformFixture, serviceKey s
 func newOwnerReadFixtureReader(serverURL, serviceKey string) *RemoteServiceReader {
 	return NewRemoteServiceReader(Config{
 		ServiceURLs: map[string]string{
-			"org-project-service": serverURL,
-			"workload-service":    serverURL,
+			"org-project-service":    serverURL,
+			"workload-service":       serverURL,
+			"image-registry-service": serverURL,
 		},
 		ServiceAPIKey: serviceKey,
 	})

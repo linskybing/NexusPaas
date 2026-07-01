@@ -207,6 +207,11 @@ var domainReadContracts = map[string]readContract{
 	"org-project-service:user_quotas":     {listPath: "/internal/org-project/user-quotas", getPath: "/internal/org-project/user-quotas/{id}"},
 	"org-project-service:user_groups":     {listPath: "/internal/org-project/user-groups", getPath: "/internal/org-project/user-groups/{id}"},
 	"workload-service:jobs":               {listPath: "/internal/workload/jobs"},
+
+	// image-registry allow-list read consumed by scheduler-quota submit admission
+	// (in-code image allow-list enforcement). List-only — admission needs the full
+	// set of enabled rules for the project.
+	"image-registry-service:image_allow_lists": {listPath: "/internal/image-registry/image-allow-lists"},
 }
 
 // crossServiceStore decorates a RecordStore so reads of resources owned by a

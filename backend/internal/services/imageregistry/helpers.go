@@ -323,7 +323,7 @@ func allowRuleFromCatalog(app *platform.App, r *http.Request, tagID, projectID, 
 	return rule
 }
 
-func catalogAllowListRejection(tag map[string]any) string {
+func catalogAllowListRejection(tag map[string]any, requireProvenance bool) string {
 	if len(tag) == 0 {
 		return "catalog image not found"
 	}
@@ -338,6 +338,18 @@ func catalogAllowListRejection(tag map[string]any) string {
 	}
 	if !catalogScanPassed(shared.TextValue(tag, "scan_status", "scanStatus")) {
 		return "catalog image scan must pass before publish"
+	}
+	// Supply-chain enforcement is opt-in (IMAGE_PUBLISH_REQUIRE_PROVENANCE): when on,
+	// the catalog image must already carry an SBOM digest and a signature ref before
+	// it can be allow-listed. This guards the presence of provenance metadata; live
+	// SBOM generation / signature execution (Syft/Cosign) remains a separate gap.
+	if requireProvenance {
+		if shared.TextValue(tag, "sbom_digest", "sbomDigest", "sbom_ref", "sbom") == "" {
+			return "catalog image SBOM is required before publish"
+		}
+		if shared.TextValue(tag, "signature", "signature_ref", "signatureRef", "signed") == "" {
+			return "catalog image signature is required before publish"
+		}
 	}
 	return ""
 }
@@ -366,6 +378,8 @@ func promoteCatalogImageStatusFields(row, catalog map[string]any) {
 	promoteCatalogBoolField(row, catalog, "deleted", "deleted", "is_deleted", "isDeleted")
 	promoteCatalogBoolField(row, catalog, "unavailable", "unavailable", "is_unavailable", "isUnavailable")
 	promoteCatalogField(row, catalog, "status", "status")
+	promoteCatalogField(row, catalog, "sbom_digest", "sbom_digest", "sbomDigest", "sbom_ref", "sbom")
+	promoteCatalogField(row, catalog, "signature", "signature", "signature_ref", "signatureRef", "signed")
 }
 
 func promoteCatalogField(row, catalog map[string]any, target string, sources ...string) {

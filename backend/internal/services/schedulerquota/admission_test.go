@@ -820,6 +820,66 @@ func TestSubmitAdmissionRejectsPerUserRunningAndQueuedLimits(t *testing.T) {
 	}
 }
 
+func TestSubmitAdmissionEnforcesImageAllowList(t *testing.T) {
+	const allowedImage = "registry.local/library/base:1.0"
+	const blockedImage = "evil.example.com/malware:latest"
+
+	newReq := func(image string, enforce bool) submitAdmissionRequest {
+		return submitAdmissionRequest{
+			ProjectID: "P1", UserID: "U1", QueueName: "default-batch",
+			RequiredCPU: 1, RequiredMemory: 1024,
+			EnforceImageAllowList: enforce,
+			Resources: []admissionResourcePayload{
+				{Name: "p", Kind: "Pod", Raw: mustJSON(t, admissionPodWithImage(image))},
+			},
+		}
+	}
+	setup := func(t *testing.T) *platform.App {
+		t.Helper()
+		app := newSchedulerQuotaTestApp()
+		seedAdmissionProject(t, app, admissionFixture{})
+		createSchedulerRecord(t, app, imageAllowListsResource, map[string]any{
+			"id": "P1:tag-1", "project_id": "P1", "image_reference": allowedImage, "enabled": true,
+		})
+		return app
+	}
+
+	t.Run("denies non-allow-listed image", func(t *testing.T) {
+		app := setup(t)
+		_, err := evaluateSubmitAdmission(context.Background(), newAdmissionReader(app.Store), newReq(blockedImage, true), time.Now().UTC())
+		if err == nil || !strings.Contains(err.Error(), "not on the project allow list") {
+			t.Fatalf("image admission err = %v, want allow-list rejection", err)
+		}
+	})
+
+	t.Run("allows allow-listed image", func(t *testing.T) {
+		app := setup(t)
+		if _, err := evaluateSubmitAdmission(context.Background(), newAdmissionReader(app.Store), newReq(allowedImage, true), time.Now().UTC()); err != nil {
+			t.Fatalf("allow-listed image admission err = %v, want allowed", err)
+		}
+	})
+
+	t.Run("flag off allows any image", func(t *testing.T) {
+		app := setup(t)
+		if _, err := evaluateSubmitAdmission(context.Background(), newAdmissionReader(app.Store), newReq(blockedImage, false), time.Now().UTC()); err != nil {
+			t.Fatalf("flag-off admission err = %v, want allowed", err)
+		}
+	})
+}
+
+func admissionPodWithImage(image string) map[string]any {
+	return map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Pod",
+		"metadata":   map[string]any{"name": "p"},
+		"spec": map[string]any{
+			"containers": []any{
+				map[string]any{"name": "app", "image": image},
+			},
+		},
+	}
+}
+
 func TestAdmissionResourceFloorCoversControllersAndDRA(t *testing.T) {
 	req := submitAdmissionRequest{
 		RequiredGPU:    5,

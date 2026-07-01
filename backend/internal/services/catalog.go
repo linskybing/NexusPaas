@@ -72,6 +72,10 @@ func serviceOwnerReadDependencies() []ownerReadDependency {
 	return []ownerReadDependency{
 		{
 			service:  serviceSchedulerQuota,
+			resource: serviceImageRegistry + ":image_allow_lists",
+		},
+		{
+			service:  serviceSchedulerQuota,
 			resource: serviceOrgProject + ":project_members",
 		},
 		{

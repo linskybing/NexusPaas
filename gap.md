@@ -1,7 +1,10 @@
 # AC Completion — GA Gap Tracker
 
-_Updated: 2026-06-28 (re-verified; plan-ledger hygiene pass). Bar: **Full GA**
-(`docs/acceptance/ga-checklist.md`), not just the v1 launch bar._
+_Updated: 2026-06-30 (independent re-verification pass: local `go build`/`go
+vet`/`go test ./...` and `go test -race ./...` all green, domain-level reference
+parity re-confirmed against `references/CSCC_AI_Platform_Backend`, trace-matrix
+verify script green). Local-only — no live external GA evidence added. Bar:
+**Full GA** (`docs/acceptance/ga-checklist.md`), not just the v1 launch bar._
 
 ## First Version (V1) Status — single source of truth
 
@@ -19,9 +22,14 @@ _Updated: 2026-06-28 (re-verified; plan-ledger hygiene pass). Bar: **Full GA**
   references in source/render only. Remote PR #33 evidence
   now shows external SonarCloud Code Analysis and Backend Quality Gate passing;
   that evidence does not close live P0.2-P0.5 or V1 external production launch.
-- **Web UI (`WEB-*`) is out of V1 scope** (API/CLI-first). The existing
-  `frontend/` GUI is beta/future; `WEB-*` is required only before a future Web
-  UI launch.
+  It also does not close archive/source build handling, source-aware image-build
+  idempotency, or HPC storage data-plane optimization.
+- **Web UI (`WEB-*`) is out of V1 scope** (API/CLI-first). The first-party
+  `frontend/` GUI was **removed in the backend-only phase (#36)** and is no
+  longer in-repo, so every `WEB-*` / `frontend/`-referenced item below is
+  **historical evidence captured before removal**, not current in-repo state.
+  `WEB-*` is required only before a future Web UI launch, when the frontend is
+  rebuilt.
 - Throughout this file, **"first-version readiness/completion" in slice
   disclaimers means the V1 *external production launch* state above (OPEN)** — it
   does **not** mean the individual slice is unfinished.
@@ -176,6 +184,25 @@ P0.2-P0.5 launch evidence remains open.
 | SEC/CLI token lifecycle strengthen | `identity/auth_repository.go`, `auth.go`, internal identity auth contracts, and cleanup worker enforce session expiry, one-time refresh rotation/replay rejection, API-token expiry/revocation, and expired/revoked credential cleanup; focused handler/internal-contract tests pass | Done |
 
 Reference: evidence id `2026-06-20-v1-launch-gap-gate`.
+
+2026-06-30 archive/image-build/HPC audit sync:
+`docs/acceptance/archive-image-build-hpc-storage-audit.md` is now the source of
+truth for the archive build and HPC storage maturity caveats. Current image-build
+routes and fixtures are **API-contract / metadata-only** evidence: they queue
+JSON build metadata but do not parse multipart tar.gz/zip, extract archives,
+persist or hash Dockerfile/context content, validate from-storage permissions,
+upload build contexts to object storage, dispatch Tekton/BuildKit, push build
+outputs to Harbor, or complete SBOM/scan/sign/attestation transitions. Archive
+security controls remain open: path traversal, symlink/hardlink policy, zip bomb
+controls, max archive size, max file count, and checksum validation. Current HPC
+storage maturity is **HPC storage planning layer** plus basic data-plane evidence:
+storage profiles, DataPlanePlan, CacheBinding, BenchmarkRecord, and FastTransfer
+records exist, but stage-in is `cp -a`, the mover is single-worker
+`rsync -a --delete`, and checksum/resume/throughput/locality/cache
+warmup/eviction/fio/IOR/mdtest/checkpoint feedback is not proven. Local
+SonarScanner is clean, but remote SonarCloud cleanup still requires supported UI
+Analysis Scope exclusions or CI-based analysis; automatic-analysis wildcard
+source exclusions in `.sonarcloud.properties` are not a valid closure mechanism.
 
 2026-06-28 Identity auth/session typed API local/static fixture update:
 `backend/internal/contracts/fixtures/api/v1/identity-register.json`,
@@ -547,6 +574,28 @@ This is local/static admission evidence only; it does not claim live
 Tekton/BuildKit/Harbor execution, completed SBOM generation, signing, live scan
 execution, V1 external launch, or Full GA.
 
+2026-06-30 IMG supply-chain provenance presence guard update: the catalog
+publish guard now also enforces **SBOM-digest + signature-ref presence** when
+opt-in `IMAGE_PUBLISH_REQUIRE_PROVENANCE=true` (default off, so current behavior
+is unchanged), promoting `sbom_digest`/`signature` onto the published allow rule.
+Focused local tests cover flag-on rejection of missing SBOM, rejection of missing
+signature, acceptance with both present (provenance refs promoted, one
+`ImagePublished` event), and flag-off publish without provenance. This is a
+local/static **presence** guard only; it does not claim live SBOM generation
+(Syft), signing (Cosign), scan execution, V1 external launch, or Full GA.
+
+2026-06-30 IMG allow-list submit admission update: scheduler-quota submit
+admission now rejects (opt-in `K8S_IMAGE_CHECK_ENABLED=true`, default off) any
+workload container/init image not on the project's published allow-list, as
+in-code defense-in-depth. The scheduler reads `image-registry-service:image_allow_lists`
+through the established owner-read contract seam (new `RegisterReadContract`
+internal route, `domainReadContracts` entry, owner-read dependency + fixture);
+image matching is normalized `image_reference` (or `repository`+`tag`). Focused
+local tests cover flag-on deny of a non-allow-listed image, flag-on allow of an
+allow-listed image, and flag-off bypass. This is local/static admission evidence
+only; external policy-engine (OPA/Gatekeeper) parity, live cluster enforcement,
+and full image workflow remain open — IMG stays `Open`.
+
 2026-06-23 DATA-014 image build create idempotency local update:
 image-registry build create APIs now have local deterministic optional
 `Idempotency-Key` replay/conflict evidence. Same-key same-request replays return
@@ -559,6 +608,10 @@ contract evidence only. This is local image-build-create evidence only; it does
 not claim idempotency for deploy or all DATA-014
 commands, live Harbor/Tekton/BuildKit execution, SBOM/signing/scan enforcement,
 DATA GA, IMG GA, V1 external launch, or Full GA.
+Audit caveat: the current image-build idempotency fingerprint does not include
+source type, Dockerfile content hash, context/archive hash, storage path/object
+identity, build args, source revision, or checksum, so it must not be treated as
+source-provenance or reproducibility evidence.
 
 2026-06-24 DATA-014 image build cancel idempotency local update:
 image-registry build cancel routes now have local deterministic optional

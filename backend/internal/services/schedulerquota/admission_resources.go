@@ -136,7 +136,7 @@ func admissionRuntimeSocketPolicyViolationFromRequest(req submitAdmissionRequest
 
 func admissionRuntimeSocketPolicyViolationFromObject(obj map[string]any) (admissionRuntimeSocketPolicyViolation, bool) {
 	kind := stringField(obj, "kind")
-	for _, podSpec := range admissionRuntimeSocketPodSpecs(obj) {
+	for _, podSpec := range admissionResourcePodSpecs(obj) {
 		if socketPath, found := shared.RuntimeSocketHostPath(podSpec); found {
 			return admissionRuntimeSocketPolicyViolation{
 				ResourceName: admissionObjectName(obj),
@@ -149,7 +149,7 @@ func admissionRuntimeSocketPolicyViolationFromObject(obj map[string]any) (admiss
 	return admissionRuntimeSocketPolicyViolation{}, false
 }
 
-func admissionRuntimeSocketPodSpecs(obj map[string]any) []map[string]any {
+func admissionResourcePodSpecs(obj map[string]any) []map[string]any {
 	if strings.EqualFold(stringField(obj, "kind"), "Job") {
 		if tasks := admissionVolcanoTaskPodSpecs(obj); len(tasks) > 0 {
 			return tasks
