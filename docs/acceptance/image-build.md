@@ -10,7 +10,13 @@ Project.
 Builds must be resource-bounded, scanned, optionally signed, pushed to Harbor,
 and added to the Project image allow list only after policy passes.
 
-## Supported Build Sources
+## GA Target Build Sources
+
+Current implementation note: the routes and fixtures exist, but build-source
+handling is not implemented yet. The image-build handlers accept JSON requests
+and create queued metadata only; they do not accept multipart tar.gz/zip upload,
+parse/extract archives, persist or hash Dockerfile/context content, validate
+from-storage permissions, upload context objects, or dispatch a live executor.
 
 | Source | Policy |
 |---|---|
@@ -21,7 +27,9 @@ and added to the Project image allow list only after policy passes.
 | project storage | Allowed if Project role permits |
 | hostPath | Allowed only with explicit Project hostPath capability and prefix allow list |
 
-## Build Flow
+## GA Target Build Flow
+
+This is the required GA flow, not the current runtime behavior.
 
 ```text
 nexus image build
@@ -98,6 +106,19 @@ This is policy/metadata evidence only. It does not prove image conversion,
 lazy-pull runtime support, node prewarm execution, live Harbor build execution,
 SBOM/signing, or full image workflow GA.
 
+Image-build source support is currently API-contract evidence only:
+
+- `POST /api/v1/images/build`, `/from-storage`, and `/dockerfile` all queue
+  build metadata through the same create path.
+- Dockerfile/context/storage-path/build-args fields are fixture/schema shape
+  only; current records do not store source content or source digests.
+- tar.gz/zip upload and archive extraction are not implemented, so path
+  traversal, symlink/hardlink, zip bomb, max-size, max-file-count, and checksum
+  controls must be added before archive build sources can be advertised as
+  working.
+- Idempotency currently proves repeat/conflict semantics for queued metadata,
+  but the fingerprint does not include source content or source identity.
+
 Queued image builds now also carry local supply-chain status metadata in the
 response, stored record, and `ImageBuildStarted` event:
 
@@ -115,3 +136,24 @@ and listing tests keep schema version `1` valid and treat the missing fields as
 unknown. This is IMG-025 event-shape evidence only; it does not prove completed
 SBOM generation, scan execution, signing, allow-list admission, live
 Tekton/BuildKit/Harbor execution, or image promotion.
+
+## Platform-image supply chain — kind-tier evidence (2026-07-01)
+
+Distinct from the **product** image-build feature above (which remains
+API-contract/metadata only), the **platform's own** container image now has a
+live kind-tier supply-chain pass in
+[`evidence/2026-07-01-kind-live-e2e-report.md`](evidence/2026-07-01-kind-live-e2e-report.md)
+via `backend/scripts/kind-live-e2e.sh`:
+
+- BuildKit build of `backend/Dockerfile`;
+- syft SPDX SBOM;
+- trivy vulnerability scan (`HIGH/CRITICAL=0` at run time);
+- cosign keypair generation;
+- push/promote/rollback through a local (`localhost:5000`) registry.
+
+Per [`../agents/workflow.md`](../agents/workflow.md) this is single-cluster/local
+evidence, **not external GA proof**, and it does **not** enforce SBOM/signing in
+the build path, sign+push to an external registry, run the product
+Tekton/BuildKit build dispatch, or implement source upload/extraction/hashing.
+IMG source handling, live executor, external Harbor push, and enforced
+SBOM/scan/sign gates stay OPEN.

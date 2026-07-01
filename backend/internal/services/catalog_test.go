@@ -993,12 +993,19 @@ func TestGatewayOnlyAppDoesNotForwardRemovedCompatRoutes(t *testing.T) {
 	}
 }
 
+// TestDeploymentArtifactsExist guards the centralized layout: every logical
+// service in the catalog owns its schema migrations under backend/migrations/
+// and a non-production reference manifest under backend/deploy/reference. The
+// production source of truth is deploy/k3s/production-beta/backend-units.yaml.
 func TestDeploymentArtifactsExist(t *testing.T) {
 	for _, spec := range Catalog() {
-		for _, rel := range []string{"Dockerfile", "k8s/deployment.yaml", "migrations/0001_init.sql"} {
-			path := filepath.Join("..", "..", spec.Name, rel)
+		artifacts := map[string]string{
+			"migration":          filepath.Join("..", "..", "migrations", spec.Name, "0001_init.sql"),
+			"reference manifest": filepath.Join("..", "..", "deploy", "reference", "per-service", spec.Name, "deployment.yaml"),
+		}
+		for kind, path := range artifacts {
 			if _, err := os.Stat(path); err != nil {
-				t.Fatalf("missing deployment artifact for %s: %s", spec.Name, rel)
+				t.Fatalf("missing %s for %s: %s", kind, spec.Name, path)
 			}
 		}
 	}

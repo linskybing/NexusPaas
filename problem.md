@@ -1,15 +1,21 @@
 # Backend Gap & Code Problem Review
 
-_Scheduled backend gap/code audit. Branch: `feature/ga-ac-clearance`._
-_Re-verified live on 2026-06-30 against `references/CSCC_AI_Platform_Backend`._
+_Scheduled backend gap/code audit. Branch: `main` (post-#40 merge)._
+_Re-verified 2026-06-30 (independent local pass) against
+`references/CSCC_AI_Platform_Backend`: `go build`/`go vet`/`go test ./...` and
+`go test -race ./...` all green locally; domain-level reference parity
+re-confirmed. Local-only — no live external GA evidence added this pass._
 
 This pass independently re-ran the local toolchain on the current working tree:
-`go build ./...` clean, `go vet ./...` clean, and full `go test ./...` **green
-across all 24 packages** (`cmd/microservice`, `internal/platform`,
+`go build ./...` clean, `go vet ./...` clean, full `go test ./...` **green across
+all 23 tested packages** (`cmd/microservice`, `internal/platform`,
 `internal/platform/cluster`, `internal/contracts`, `internal/services`, and every
-per-service package). Reference parity re-checked file-by-file: every reference
-`internal/application` domain and every `internal/cron` reconciler has ported
-code in the current services. No new local code-quality regression surfaced.
+per-service package; `internal/e2e` has no test files, 24 total), and
+`go test -race ./...` also **green** (new datapoint — previously "Not Run").
+Reference parity re-confirmed at domain level against the provided
+`references/CSCC_AI_Platform_Backend`: every reference `internal/application`
+domain and every `internal/cron` reconciler maps to ported code in the current
+services. No new local code-quality regression surfaced.
 
 ## 1. Summary
 
@@ -40,6 +46,20 @@ deliberately out-of-scope reconciler (ADR 0006).
 5. Typed external API coverage and typed ownership remain **static fixtures
    only** ("Open") — not live-authorization proven; full image-build/SBOM/
    signing/scan GA workflow and live PERF/MON also remain open.
+6. Archive/image-build source support is **API contract / queued metadata only**:
+   Dockerfile/context/storage-path fields are not persisted, hashed, validated, or
+   dispatched; tar.gz/zip upload and archive security controls are not implemented.
+
+**2026-07-01 kind-tier update (P0s 2–4 partially advanced, still Open for
+external):** a single local kind cluster now runs the full 8-unit
+production-beta deploy/smoke, live DB migration apply/validate/idempotency,
+per-unit previous-image rollback/redeploy, kind-tier runtime Secret presence,
+local-registry promote/rollback, and a platform-image SBOM/scan/keypair pass
+(`docs/acceptance/evidence/2026-07-01-kind-live-e2e-report.md` via
+`backend/scripts/kind-live-e2e.sh`). Per `docs/agents/workflow.md` this is
+single-cluster/local evidence, **not external GA proof**; P0.1 external Harbor
+promotion, external staging cluster/Secret provenance, off-cluster DR, and
+schema down-migration/restore remain open.
 
 The structural risk worth flagging in code terms is the **shared-binary
 distributed-monolith boundary** (one module/binary/image for 15 services); it is
@@ -51,12 +71,14 @@ true microservice topology.
 | Priority | Reference Capability | Current Status | Expected Service | Evidence | Required Action |
 | -------- | -------------------- | -------------- | ---------------- | -------- | --------------- |
 | High | External image registry promotion/rollback (Harbor) | Partial | image-registry-service | Harbor is an isolated `harbor-system` foundation; never used for external promote/rollback (`problem.md` prior evidence; `imageregistry/handler.go`) | Execute a real external Harbor build → promote → previous-image rollback drill and record evidence |
-| High | Full image build workflow (BuildKit/Tekton, SBOM, signing, scan enforcement, allow-list admission) | Partial | image-registry-service | Static typed fixtures only for `POST /api/v1/images/build[/from-storage|/dockerfile]`; `ImageBuildStarted` event + queued supply-chain metadata are shape-only; local IMG-019 guard now rejects catalog publish without digest, passing scan, and available/not-deleted metadata | Run live build execution + SBOM/sign/scan/allow-list enforcement and capture evidence |
+| High | Full image build workflow (BuildKit/Tekton, SBOM, signing, scan enforcement, allow-list admission) | Partial | image-registry-service | Static typed fixtures only for `POST /api/v1/images/build[/from-storage|/dockerfile]`; `ImageBuildStarted` event + queued supply-chain metadata are shape-only; local IMG-019 guard now rejects catalog publish without digest, passing scan, and available/not-deleted metadata, and (opt-in `IMAGE_PUBLISH_REQUIRE_PROVENANCE=true`) also rejects publish without SBOM-digest + signature-ref presence — presence guard only, default-off; live SBOM/sign execution unproven; scheduler-quota submit admission additionally rejects (opt-in `K8S_IMAGE_CHECK_ENABLED=true`) workload images not on the project's published allow-list via an owner-read of `image_allow_lists` (in-code defense-in-depth; external policy-engine parity + live cluster enforcement still open) | Run live build execution + SBOM/sign/scan/allow-list enforcement and capture evidence |
+| High | Archive/Dockerfile/from-storage build source handling | Missing | image-registry-service | 2026-06-30 archive/HPC audit: build handlers queue JSON metadata only; no multipart tar.gz/zip upload, archive extraction, Dockerfile/context persistence or hash, storage-path permission check, source digest, or object-context upload | Implement source upload/permission/provenance pipeline before advertising these as working build sources |
 | High | 8-unit live staging deploy/smoke + per-unit previous-image rollback | Partial | all (platform-gateway + 14) | 8-unit kustomize/runtime-config/compose smoke + CI gates exist; live rollback evidence is 15-deployment namespace only (`deploy/k3s`, `kustomization.yaml`) | Perform live 8-unit staging deploy/smoke and per-unit image rollback |
 | High | Live staging DB migration/rollback drill | Missing | each service (owns `migrations/`) | Per-service `migrations/` present and built into image; no live staging migrate/rollback evidence | Run live staging migration + rollback drill per unit |
 | High | Live external staging Secret readiness/provenance | Partial | all | Static production-beta deploy-path proof of Secret names/keys + no placeholder refs; no live Secret objects/provenance | Provision + verify live external staging Secret objects |
 | Medium | Typed external REST API contract coverage (live authorization) | Partial | all | Typed API coverage repeatedly marked "Open"; current proof is static fixtures/producer tests, not live admin authz | Add live typed-API authorization evidence per route family |
 | Medium | Typed per-resource ownership coverage | Partial | all | Owner-read contracts wired (`RegisterOwnerReadDependencies`); scheduler-quota and workload owner-read dependencies now have local/static `(consumer_service, resource)` contract fixtures and a guard that every registered owner-read dependency has a matching fixture; typed ownership still "Open" for live drift jobs/replay cutover | Land remaining typed-ownership coverage and live drift jobs |
+| Medium | HPC storage data-plane optimization | Partial | storage-service + k8s-control-service | Storage profiles, DataPlanePlan, CacheBinding, BenchmarkRecord, HPC StorageClass manifests, and FastTransfer records exist, but maturity is **HPC storage planning layer**: stage-in is `cp -a`, mover is single-worker `rsync -a --delete`, and checksum/resume/throughput/locality/cache/benchmark feedback is not proven | Build profile-based mover strategies and live fio/IOR/mdtest/checkpoint/cache evidence before claiming HPC optimization |
 | Medium | Live performance + telemetry (PERF/MON) under real scheduler/K8s load | Partial | scheduler-quota, usage-observability | Local deterministic `PERF-003..008`, `MON-013..017`, queue-stress test only; bounded k6 read smoke; live retention/alerting open | Run live PERF/MON soak + alerting/retention evidence |
 | Low | `course_monitoring_reconciler` | Out of scope | n/a | ADR 0006 — deliberately excluded | None (documented decision) |
 | Low | All other reference `internal/application` domains + 15 `internal/cron` reconcilers | Implemented | mapped per service | File-by-file parity re-checked; all ported and registered via `RegisterMaintenanceTaskForService` | None |
@@ -65,6 +87,9 @@ true microservice topology.
 
 | Priority | Area | Problem | Evidence | Impact | Recommended Fix |
 | -------- | ---- | ------- | -------- | ------ | --------------- |
+| High | image-registry build API | Build source fields are advertised by fixtures/AC but currently ignored by the queued metadata path. Idempotency fingerprinting omits source type/content/identity, so the same key can replay a different Dockerfile/context/storage source as the same build. | `docs/acceptance/archive-image-build-hpc-storage-audit.md`; `imageregistry/handler.go` create/fingerprint path | Retry semantics, reproducibility, and source provenance are unreliable once real source inputs are accepted | Include source type, Dockerfile hash, context/archive digest, storage path/object id, build args, revision, checksum, project, user, resources, and timeout in the fingerprint |
+| High | archive build security | tar.gz/zip upload is listed as a GA target, but no archive parser/extractor or security controls exist in the image-build path. | `docs/acceptance/image-build.md`; archive audit | Enabling archive upload without controls would risk path traversal, symlink/hardlink abuse, zip bombs, and unbounded extraction | Add streaming extraction with canonical path checks, link policy, compressed/uncompressed limits, file-count limits, and checksum validation before enabling upload |
+| Medium | storage/FastTransfer HPC data plane | Storage is HPC-aware in metadata/manifests, not optimized in actual data movement. | `docs/acceptance/archive-image-build-hpc-storage-audit.md`; DataPlane/FastTransfer evidence | Large-file, small-file, multi-node, object-store, cache, and checkpoint workloads may be slow or unverifiable despite storage-profile labels | Add profile-driven mover strategies, checksum/resume/progress/throughput metrics, cache warmup/eviction, async checkpoint flush, and benchmark feedback |
 | Medium | repo / build (`cmd/microservice`, root `Dockerfile`) | Shared-binary distributed monolith: one Go module + one binary + one base image serve all 15 services; per-service Dockerfiles only `FROM ${BASE_IMAGE}` | `Dockerfile`, `audit-compliance-service/Dockerfile`, `internal/services/catalog.go` | A change in any service recompiles/reships every service image; blast radius is repo-wide; not true independent deployability | Accept as documented 8-unit topology OR split modules/images per unit; keep isolation guard tests as the compensating control |
 | Info | tests | Test LOC (~68k) exceeds product LOC (~57k); heavy intentional fixture/table duplication (Sonar CPD-excluded by design) | `internal/**/*_test.go`, `sonar.cpd.exclusions` | None functionally; review-cost only | None required; keep CPD exclusions scoped to fixtures/manifests |
 
@@ -137,11 +162,12 @@ buildable or deployable artifacts** — the boundary is logical, not physical.
 | ------- | ------- | ------ | ----- |
 | `go build ./...` | Compile all packages | Pass | Clean, exit 0 |
 | `go vet ./...` | Static analysis | Pass | Clean, exit 0 |
-| `go test ./...` | Full unit/integration suite | Pass | 24 packages green; `internal/e2e` has no test files |
+| `go test ./...` | Full unit/integration suite | Pass | 23 tested packages green; `internal/e2e` has no test files (24 total) |
 | File-by-file ref parity vs `references/CSCC_AI_Platform_Backend` | Feature gap check | Pass | All `application` domains + 15 cron reconcilers ported; `course_monitoring_reconciler` out of scope (ADR 0006) |
-| SonarScanner Quality Gate (local) | Code quality gate | Pass (prior) | Last `.scannerwork/report-task.txt` for `nexuspaas-backend`; latest API `new_coverage=81.8`, `new_violations=0`, `new_duplicated_lines_density=0.83`. Not re-run this pass (no scanner invoked) |
-| `go test -race ./...` | Race detection | Not Run | Recommend running per testing rule before release |
-| Live 8-unit staging deploy/rollback | Release readiness | Not Run | Open P0 — requires external cluster |
+| SonarScanner Quality Gate (local) | Code quality gate | Pass | Local scanner reached Quality Gate `PASSED` and local SECURITY issue total `0`; remote SonarCloud SECURITY cleanup still depends on supported Cloud Analysis Scope configuration or CI-based analysis because `.sonarcloud.properties` automatic-analysis wildcards are not supported |
+| `go test -race ./...` | Race detection | Pass | Clean, exit 0; 23 tested packages green (`internal/e2e` no test files) this pass |
+| Live 8-unit staging deploy/rollback (kind, single-cluster) | Release readiness | Pass (kind-tier) | 2026-07-01 `backend/scripts/kind-live-e2e.sh`: live 8-unit deploy/smoke, migration apply/validate/idempotency, per-unit previous-image rollback/redeploy, Secret presence, local-registry promote/rollback, SBOM/scan/keypair; single-cluster/local, **not external GA proof** — see `docs/acceptance/evidence/2026-07-01-kind-live-e2e-report.md` |
+| Live 8-unit staging deploy/rollback (external) | Release readiness | Not Run | Open P0 — requires external registry + external staging cluster |
 
 ## 8. Recommended Execution Order
 
@@ -152,13 +178,23 @@ buildable or deployable artifacts** — the boundary is logical, not physical.
 4. **(P0, live)** Live external staging Secret objects + provenance verification.
 5. **(P0, live)** Full image-build GA workflow: BuildKit/Tekton execution, SBOM,
    signing, scan enforcement, allow-list admission.
-6. **(P1)** Promote typed external API coverage from static fixtures to live
+6. **(P1)** Implement image-build source handling and provenance: archive upload
+   security, Dockerfile/context hashing, from-storage permission checks, source
+   digest persistence, and source-aware idempotency.
+7. **(P1)** Turn storage profiles into a real HPC data plane: profile-based mover,
+   checksum/resume/progress/throughput, cache lifecycle, checkpoint flush, and
+   benchmark feedback.
+8. **(P1)** Promote typed external API coverage from static fixtures to live
    authorization evidence; land typed ownership + live drift jobs.
-7. **(P1)** Live PERF/MON soak under real scheduler/K8s load; retention/alerting.
-8. **(P2, test hygiene)** Run `go test -race ./...` before release.
-9. **(P2, structural)** Decide whether to split the shared binary/module/image
+9. **(P1)** Live PERF/MON soak under real scheduler/K8s load; retention/alerting.
+10. **(P2, test hygiene)** Run `go test -race ./...` before release.
+11. **(P2, structural)** Decide whether to split the shared binary/module/image
    per deployable unit, or formally accept the 8-unit shared-binary topology as
    the GA boundary (document the trade-off in an ADR).
+
+Items 2–4 now have **kind-tier single-cluster** live evidence
+(`docs/acceptance/evidence/2026-07-01-kind-live-e2e-report.md`); this is not
+external GA proof, so the **external** portions of items 1–5 stay open.
 
 New feature expansion should not start before items 1–5 (live P0s) are evidenced.
 

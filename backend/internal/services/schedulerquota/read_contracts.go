@@ -18,10 +18,11 @@ import (
 // GAP-4; until then this interface is the boundary other services break against
 // if their schema changes.
 const (
-	workloadJobsResource   = "workload-service:jobs"
-	userQuotasResource     = "org-project-service:user_quotas"
-	projectMembersResource = "org-project-service:project_members"
-	userGroupsResource     = "org-project-service:user_groups"
+	workloadJobsResource    = "workload-service:jobs"
+	userQuotasResource      = "org-project-service:user_quotas"
+	projectMembersResource  = "org-project-service:project_members"
+	userGroupsResource      = "org-project-service:user_groups"
+	imageAllowListsResource = "image-registry-service:image_allow_lists"
 )
 
 type admissionRecord = contracts.Record[map[string]any]
@@ -45,6 +46,7 @@ type admissionReader interface {
 	UserQuota(ctx context.Context, key string) (admissionRecord, bool)
 	ListUserQuotas(ctx context.Context) []admissionRecord
 	ListWorkloadJobs(ctx context.Context) []admissionRecord
+	ListImageAllowRules(ctx context.Context) []admissionRecord
 }
 
 type workloadJobAvailabilityReader interface {
@@ -168,6 +170,10 @@ func (rdr storeAdmissionReader) ListWorkloadJobsAvailable(ctx context.Context) (
 	return rdr.list(ctx, workloadJobsResource), true
 }
 
+func (rdr storeAdmissionReader) ListImageAllowRules(ctx context.Context) []admissionRecord {
+	return rdr.list(ctx, imageAllowListsResource)
+}
+
 type ownerReadAdmissionReader struct {
 	local storeAdmissionReader
 	cfg   platform.Config
@@ -244,6 +250,10 @@ func (rdr ownerReadAdmissionReader) ListWorkloadJobsAvailable(ctx context.Contex
 		return nil, false
 	}
 	return records, true
+}
+
+func (rdr ownerReadAdmissionReader) ListImageAllowRules(ctx context.Context) []admissionRecord {
+	return rdr.listOwner(ctx, imageAllowListsResource)
 }
 
 func (rdr ownerReadAdmissionReader) getOwner(ctx context.Context, resource, id string) (admissionRecord, bool) {

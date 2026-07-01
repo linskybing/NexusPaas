@@ -6,7 +6,7 @@ The backend is still a modular monolith with a shared physical PostgreSQL
 runtime. Identity has started moving toward owned records and service-local
 migrations, and request-notification's owned-write data is now fully typed and
 service-owned as well: `forms` + `form_messages` (migration
-`request-notification-service/migrations/0002_request_notification_typed_forms.sql`)
+`migrations/request-notification-service/0002_request_notification_typed_forms.sql`)
 and `announcements` + `announcement_reads` + `notifications` (migration `0003`),
 with store routing in `internal/platform/store_postgres_requestnotification.go`.
 Its `project_access_*` resources remain on the generic store as read-model

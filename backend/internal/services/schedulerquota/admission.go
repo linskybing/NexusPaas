@@ -55,6 +55,7 @@ type submitAdmissionRequest struct {
 	PlacementProfile       string
 	AcceleratorProfile     string
 	PinnedMemoryLimit      *string
+	EnforceImageAllowList  bool
 	Resources              []admissionResourcePayload
 }
 
@@ -144,6 +145,7 @@ func reviewSubmitAdmission(app *platform.App, r *http.Request, _ platform.RouteS
 		return http.StatusBadRequest, shared.ErrorData(err.Error()), nil
 	}
 	applyAdmissionStreamConfig(&req, app.Config)
+	req.EnforceImageAllowList = app.Config.ImageCheckEnabled
 	if req.QueueName == "" {
 		req.QueueName = shared.FirstNonEmpty(strings.TrimSpace(app.Config.DefaultQueueName), defaultQueueName)
 	}
@@ -186,6 +188,9 @@ func evaluateSubmitAdmission(ctx context.Context, reader admissionReader, req su
 	}
 	review.QueueName = admissionCtx.queueName
 	applyAdmissionQueueReview(&review, admissionCtx.queue, admissionCtx.queueFound)
+	if err := enforceAdmissionImageAllowList(ctx, reader, req); err != nil {
+		return review, err
+	}
 	if err := resolveAdmissionProfiles(ctx, reader, &req, admissionCtx.queueName, &review); err != nil {
 		return review, err
 	}

@@ -18,6 +18,7 @@ func TestOwnerReadFixturesAreValidV1(t *testing.T) {
 		"org-project-projects.json",
 		"org-project-user-groups.json",
 		"org-project-user-quotas.json",
+		"scheduler-image-allow-lists.json",
 		"workload-jobs.json",
 		"workload-org-project-project-members.json",
 		"workload-org-project-projects.json",
@@ -50,6 +51,12 @@ func TestOwnerReadFixturesAreValidV1(t *testing.T) {
 			resource:     "org-project-service:user_quotas",
 			listPath:     "/internal/org-project/user-quotas",
 			getPath:      "/internal/org-project/user-quotas/{id}",
+		},
+		"scheduler-image-allow-lists.json": {
+			ownerService: "image-registry-service",
+			resource:     "image-registry-service:image_allow_lists",
+			listPath:     "/internal/image-registry/image-allow-lists",
+			listOnly:     true,
 		},
 		"workload-jobs.json": {
 			ownerService: "workload-service",
@@ -87,13 +94,14 @@ func TestOwnerReadFixturesAreValidV1(t *testing.T) {
 	}
 
 	wantSeen := map[string]string{
-		"scheduler-quota-service -> org-project-service:project_members": "org-project-service",
-		"scheduler-quota-service -> org-project-service:projects":        "org-project-service",
-		"scheduler-quota-service -> org-project-service:user_groups":     "org-project-service",
-		"scheduler-quota-service -> org-project-service:user_quotas":     "org-project-service",
-		"scheduler-quota-service -> workload-service:jobs":               "workload-service",
-		"workload-service -> org-project-service:project_members":        "org-project-service",
-		"workload-service -> org-project-service:projects":               "org-project-service",
+		"scheduler-quota-service -> org-project-service:project_members":      "org-project-service",
+		"scheduler-quota-service -> org-project-service:projects":             "org-project-service",
+		"scheduler-quota-service -> org-project-service:user_groups":          "org-project-service",
+		"scheduler-quota-service -> org-project-service:user_quotas":          "org-project-service",
+		"scheduler-quota-service -> workload-service:jobs":                    "workload-service",
+		"scheduler-quota-service -> image-registry-service:image_allow_lists": "image-registry-service",
+		"workload-service -> org-project-service:project_members":             "org-project-service",
+		"workload-service -> org-project-service:projects":                    "org-project-service",
 	}
 	if !reflect.DeepEqual(seenContracts, wantSeen) {
 		t.Fatalf("fixture contracts = %v, want %v", seenContracts, wantSeen)

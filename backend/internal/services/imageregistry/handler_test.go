@@ -171,6 +171,91 @@ func TestImageCatalogPublishAllowsPassingSupplyChainCatalog(t *testing.T) {
 	}
 }
 
+// Provenance enforcement is opt-in via IMAGE_PUBLISH_REQUIRE_PROVENANCE. When on,
+// publish additionally requires SBOM-digest + signature-ref presence (on top of
+// the existing digest + passing-scan checks). Default-off behavior is covered by
+// TestImageCatalogPublishAllowsPassingSupplyChainCatalog above.
+func TestImageCatalogPublishProvenanceEnforcement(t *testing.T) {
+	t.Run("rejects missing SBOM", func(t *testing.T) {
+		code, data, app := publishImageCatalogForProvenanceTest(t, true, imageCatalogProvenanceRow("prov-no-sbom", nil))
+		assertImageStatus(t, code, data, http.StatusConflict)
+		assertImageCatalogRejectionContains(t, data, "SBOM")
+		assertImagePublishedEventCount(t, app, 0)
+	})
+
+	t.Run("rejects missing signature", func(t *testing.T) {
+		row := imageCatalogProvenanceRow("prov-no-sig", map[string]any{"sbom_digest": "sha256:sbom"})
+		code, data, app := publishImageCatalogForProvenanceTest(t, true, row)
+		assertImageStatus(t, code, data, http.StatusConflict)
+		assertImageCatalogRejectionContains(t, data, "signature")
+		assertImagePublishedEventCount(t, app, 0)
+	})
+
+	t.Run("accepts full provenance and promotes refs", func(t *testing.T) {
+		row := imageCatalogProvenanceRow("prov-ok", map[string]any{"sbom_digest": "sha256:sbom", "signature": "sigstore://sig"})
+		code, data, app := publishImageCatalogForProvenanceTest(t, true, row)
+		assertImageStatus(t, code, data, http.StatusOK)
+		assertPublishedRuleProvenance(t, data)
+		assertImagePublishedEventCount(t, app, 1)
+	})
+
+	t.Run("flag off publishes without provenance", func(t *testing.T) {
+		code, data, _ := publishImageCatalogForProvenanceTest(t, false, imageCatalogProvenanceRow("prov-off", nil))
+		assertImageStatus(t, code, data, http.StatusOK)
+	})
+}
+
+func imageCatalogProvenanceRow(id string, extra map[string]any) map[string]any {
+	row := map[string]any{
+		"id":          id,
+		"registry":    "registry.local",
+		"repository":  "library/base",
+		"tag":         "1.0",
+		"digest":      "sha256:" + id,
+		"scan_status": "Success",
+	}
+	for k, v := range extra {
+		row[k] = v
+	}
+	return row
+}
+
+func publishImageCatalogForProvenanceTest(t *testing.T, requireProvenance bool, row map[string]any) (int, any, *platform.App) {
+	t.Helper()
+	app := newImageRegistryTestApp(t)
+	app.Config.ImageProvenanceRequired = requireProvenance
+	createImageRecords(t, app, imageCatalogResource, []map[string]any{row})
+	req := imageRequest(http.MethodPost, "/api/v1/image-catalog/publish", fmt.Sprintf(`{"tag_id":%q,"project_id":"P1"}`, row["id"]), "ADMIN")
+	code, data, _ := publishCatalog(app, req, platform.RouteSpec{})
+	return code, data, app
+}
+
+func assertImageCatalogRejectionContains(t *testing.T, data any, want string) {
+	t.Helper()
+	msg, _ := data.(map[string]any)["message"].(string)
+	if !strings.Contains(msg, want) {
+		t.Fatalf("rejection message = %q, want %s requirement", msg, want)
+	}
+}
+
+func assertImagePublishedEventCount(t *testing.T, app *platform.App, want int) {
+	t.Helper()
+	if events := imageEventsByName(app, "ImagePublished"); len(events) != want {
+		t.Fatalf("ImagePublished events = %#v, want %d", events, want)
+	}
+}
+
+func assertPublishedRuleProvenance(t *testing.T, data any) {
+	t.Helper()
+	rules := data.(map[string]any)["rules"].([]map[string]any)
+	if len(rules) != 1 {
+		t.Fatalf("publish result = %#v, want one rule", data)
+	}
+	if rules[0]["sbom_digest"] != "sha256:sbom" || rules[0]["signature"] != "sigstore://sig" {
+		t.Fatalf("published rule provenance = %#v, want sbom_digest and signature promoted", rules[0])
+	}
+}
+
 func TestImageBuildSupplyChainDefaultsRecordedAndEmitted(t *testing.T) {
 	app := newImageRegistryTestApp(t)
 

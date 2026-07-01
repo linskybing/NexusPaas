@@ -12,21 +12,7 @@ RUN apk add --no-cache --upgrade ca-certificates libcrypto3 libssl3 \
     && adduser -S -D -H -u 10001 -G app app
 COPY --from=build /out/microservice /usr/local/bin/microservice
 WORKDIR /app
-COPY --chown=app:app backend/audit-compliance-service/migrations ./audit-compliance-service/migrations
-COPY --chown=app:app backend/authorization-policy-service/migrations ./authorization-policy-service/migrations
-COPY --chown=app:app backend/ide-service/migrations ./ide-service/migrations
-COPY --chown=app:app backend/identity-service/migrations ./identity-service/migrations
-COPY --chown=app:app backend/image-registry-service/migrations ./image-registry-service/migrations
-COPY --chown=app:app backend/integration-proxy-service/migrations ./integration-proxy-service/migrations
-COPY --chown=app:app backend/k8s-control-service/migrations ./k8s-control-service/migrations
-COPY --chown=app:app backend/media-upload-service/migrations ./media-upload-service/migrations
-COPY --chown=app:app backend/org-project-service/migrations ./org-project-service/migrations
-COPY --chown=app:app backend/platform-gateway/migrations ./platform-gateway/migrations
-COPY --chown=app:app backend/request-notification-service/migrations ./request-notification-service/migrations
-COPY --chown=app:app backend/scheduler-quota-service/migrations ./scheduler-quota-service/migrations
-COPY --chown=app:app backend/storage-service/migrations ./storage-service/migrations
-COPY --chown=app:app backend/usage-observability-service/migrations ./usage-observability-service/migrations
-COPY --chown=app:app backend/workload-service/migrations ./workload-service/migrations
+COPY --chown=app:app backend/migrations ./migrations
 USER app:app
 ENV HTTP_ADDR=:8080
 EXPOSE 8080

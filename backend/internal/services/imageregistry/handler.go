@@ -93,6 +93,9 @@ func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/projects/{id}/image-builds", listProjectBuilds)
 	app.RegisterCustomHandler(http.MethodDelete, "/api/v1/projects/{id}/builds/{jobName}", cancelProjectBuild)
 	app.RegisterCustomHandler(http.MethodDelete, "/api/v1/projects/{id}/image-builds/{buildId}", cancelProjectBuild)
+	// Owner-read contract: scheduler-quota submit admission reads the published
+	// allow-list to reject non-allow-listed workload images (list-only).
+	app.RegisterReadContract(projectImagesResource, "/internal/image-registry/image-allow-lists", "")
 	registerHarborHealthChecks(app)
 	registerHarborCatalogSync(app)
 }
@@ -185,7 +188,7 @@ func publishCatalog(app *platform.App, r *http.Request, _ platform.RouteSpec) (i
 	if tagID == "" {
 		return http.StatusBadRequest, shared.ErrorData("tag_id is required"), nil
 	}
-	if rejection := catalogAllowListRejection(catalogByID(app, r, tagID)); rejection != "" {
+	if rejection := catalogAllowListRejection(catalogByID(app, r, tagID), app.Config.ImageProvenanceRequired); rejection != "" {
 		return http.StatusConflict, shared.ErrorData(rejection), nil
 	}
 	projectIDs := firstStringSlice(payload, "project_ids", "projectIds")

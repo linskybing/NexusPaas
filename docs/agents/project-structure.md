@@ -21,8 +21,11 @@ backend/
 ├── cmd/microservice/                 # shared service entrypoint
 ├── internal/platform/                # shared runtime, middleware, routing, config
 ├── internal/services/<service>/      # logical service packages
-├── deploy/                           # local, k3s, and production-beta manifests
+├── migrations/<service>/             # service-owned schema migrations (loaded by internal/platform)
+├── deploy/                           # local, k3s, and production-beta manifests (source of truth)
+│   └── reference/per-service/        # non-production per-service manifest sketches
 ├── docs/                             # backend operational and contract docs
+│   └── services/<service>.md         # per-logical-service contract docs
 └── scripts/                          # local and CI gates
 
 docs/
@@ -54,8 +57,11 @@ spec.go           # route and service registration
 model.go          # typed domain records when needed
 repository.go     # service-owned persistence
 *_test.go         # unit, contract, and boundary tests
-migrations/       # service-owned schema changes when applicable
 ```
+
+Schema migrations are **not** kept inside the package; they live centrally at
+`backend/migrations/<service>/` and are discovered by `internal/platform`
+(the shared binary COPYs the whole `migrations/` tree).
 
 Do not introduce this structure speculatively. Add files only when the service
 actually owns that behavior.

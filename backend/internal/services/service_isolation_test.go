@@ -94,15 +94,16 @@ func TestRegisterAllServiceIsolationAllowsSchedulerQuotaWithOwnerContracts(t *te
 		ServiceName: serviceSchedulerQuota,
 		HTTPAddr:    ":0",
 		ServiceURLs: map[string]string{
-			serviceOrgProject: "http://org-project-service",
-			serviceWorkload:   "http://workload-service",
+			serviceOrgProject:    "http://org-project-service",
+			serviceWorkload:      "http://workload-service",
+			serviceImageRegistry: "http://image-registry-service",
 		},
 		ServiceAPIKey: "service-key",
 	})
 	RegisterAll(app)
 
 	if err := app.ValidateServiceIsolation(); err != nil {
-		t.Fatalf("scheduler-quota with org-project/workload read contracts should pass isolation: %v", err)
+		t.Fatalf("scheduler-quota with org-project/workload/image-registry read contracts should pass isolation: %v", err)
 	}
 }
 
@@ -156,6 +157,7 @@ func TestRegisterAllServiceIsolationFailsSchedulerQuotaWithUnrelatedIdentityCont
 func TestSchedulerQuotaUsesOwnerReadDependenciesNotStoreDependencies(t *testing.T) {
 	got := ownerReadResourcesForService(serviceSchedulerQuota)
 	want := []string{
+		serviceImageRegistry + ":image_allow_lists",
 		serviceOrgProject + ":project_members",
 		serviceOrgProject + ":projects",
 		serviceOrgProject + ":user_groups",
