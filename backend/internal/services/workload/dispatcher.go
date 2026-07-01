@@ -422,19 +422,37 @@ func rejectUnsafeDispatchPodSpec(podSpec map[string]any) error {
 }
 
 func unsafePodSpecField(podSpec map[string]any) (string, bool) {
+	if field, found := unsafeHostNamespaceField(podSpec); found {
+		return field, true
+	}
+	if unsafeHostPathVolume(podSpec) {
+		return "hostPath volume", true
+	}
+	return unsafePodContainerField(podSpec)
+}
+
+func unsafeHostNamespaceField(podSpec map[string]any) (string, bool) {
 	for _, hostNS := range []string{"hostNetwork", "hostPID", "hostIPC"} {
 		if enabled, found, _ := unstructured.NestedBool(podSpec, hostNS); found && enabled {
 			return hostNS, true
 		}
 	}
+	return "", false
+}
+
+func unsafeHostPathVolume(podSpec map[string]any) bool {
 	volumes, _, _ := unstructured.NestedSlice(podSpec, "volumes")
 	for _, raw := range volumes {
 		if vol, ok := raw.(map[string]any); ok {
 			if _, hasHostPath := vol["hostPath"]; hasHostPath {
-				return "hostPath volume", true
+				return true
 			}
 		}
 	}
+	return false
+}
+
+func unsafePodContainerField(podSpec map[string]any) (string, bool) {
 	for _, key := range []string{"containers", "initContainers", "ephemeralContainers"} {
 		containers, _, _ := unstructured.NestedSlice(podSpec, key)
 		for _, raw := range containers {

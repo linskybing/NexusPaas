@@ -84,33 +84,56 @@ func validateTarGzBuildContext(data []byte) (buildContextInfo, error) {
 		if err != nil {
 			return buildContextInfo{}, buildContextError("tar: %v", err)
 		}
-		// Links (symlink + hardlink) are rejected outright: their targets are the
-		// classic context-escape vector and a build context never needs them.
-		if hdr.Typeflag == tar.TypeSymlink || hdr.Typeflag == tar.TypeLink {
-			return buildContextInfo{}, buildContextError("archive contains link entry %q (not permitted)", hdr.Name)
-		}
-		mode := hdr.FileInfo().Mode()
-		if mode.IsDir() {
-			continue
-		}
-		if !mode.IsRegular() {
-			return buildContextInfo{}, buildContextError("archive contains special file %q (not permitted)", hdr.Name)
-		}
-		name, err := normalizeBuildContextPath(hdr.Name)
+		// Links (symlink + hardlink) are the classic context-escape vector.
+		isLink := hdr.Typeflag == tar.TypeSymlink || hdr.Typeflag == tar.TypeLink
+		skip, err := archiveEntryDisposition(hdr.Name, hdr.FileInfo().Mode(), isLink)
 		if err != nil {
 			return buildContextInfo{}, err
 		}
-		sum, n, err := hashBuildContextEntry(tr, total)
+		if skip {
+			continue
+		}
+		entry, n, err := hashedBuildContextEntry(hdr.Name, tr, total)
 		if err != nil {
 			return buildContextInfo{}, err
 		}
 		total += n
-		entries = append(entries, buildContextEntry{name: name, sha256: sum})
+		entries = append(entries, entry)
 		if len(entries) > maxBuildContextFileCount {
 			return buildContextInfo{}, buildContextError("archive exceeds %d files", maxBuildContextFileCount)
 		}
 	}
 	return finalizeBuildContext(entries, total)
+}
+
+// archiveEntryDisposition classifies an archive entry by its mode: skip=true for
+// directories, an error for links and special files (device/fifo/socket), and
+// (false, nil) for a regular file that should be hashed into the context.
+func archiveEntryDisposition(name string, mode os.FileMode, isLink bool) (skip bool, err error) {
+	if isLink {
+		return false, buildContextError("archive contains link entry %q (not permitted)", name)
+	}
+	if mode.IsDir() {
+		return true, nil
+	}
+	if !mode.IsRegular() {
+		return false, buildContextError("archive contains special file %q (not permitted)", name)
+	}
+	return false, nil
+}
+
+// hashedBuildContextEntry normalizes an entry name and streams its content into a
+// content hash, returning the entry and its uncompressed byte count.
+func hashedBuildContextEntry(rawName string, r io.Reader, priorTotal int64) (buildContextEntry, int64, error) {
+	name, err := normalizeBuildContextPath(rawName)
+	if err != nil {
+		return buildContextEntry{}, 0, err
+	}
+	sum, n, err := hashBuildContextEntry(r, priorTotal)
+	if err != nil {
+		return buildContextEntry{}, 0, err
+	}
+	return buildContextEntry{name: name, sha256: sum}, n, nil
 }
 
 func validateZipBuildContext(data []byte) (buildContextInfo, error) {
@@ -121,31 +144,27 @@ func validateZipBuildContext(data []byte) (buildContextInfo, error) {
 	entries := make([]buildContextEntry, 0, len(zr.File))
 	var total int64
 	for _, f := range zr.File {
-		mode := f.Mode()
-		if strings.HasSuffix(f.Name, "/") || mode.IsDir() {
+		if strings.HasSuffix(f.Name, "/") {
 			continue
 		}
-		if mode&os.ModeSymlink != 0 {
-			return buildContextInfo{}, buildContextError("archive contains symlink %q (not permitted)", f.Name)
-		}
-		if !mode.IsRegular() {
-			return buildContextInfo{}, buildContextError("archive contains special file %q (not permitted)", f.Name)
-		}
-		name, err := normalizeBuildContextPath(f.Name)
+		skip, err := archiveEntryDisposition(f.Name, f.Mode(), f.Mode()&os.ModeSymlink != 0)
 		if err != nil {
 			return buildContextInfo{}, err
+		}
+		if skip {
+			continue
 		}
 		rc, err := f.Open()
 		if err != nil {
 			return buildContextInfo{}, buildContextError("open entry %q: %v", f.Name, err)
 		}
-		sum, n, err := hashBuildContextEntry(rc, total)
+		entry, n, err := hashedBuildContextEntry(f.Name, rc, total)
 		_ = rc.Close()
 		if err != nil {
 			return buildContextInfo{}, err
 		}
 		total += n
-		entries = append(entries, buildContextEntry{name: name, sha256: sum})
+		entries = append(entries, entry)
 		if len(entries) > maxBuildContextFileCount {
 			return buildContextInfo{}, buildContextError("archive exceeds %d files", maxBuildContextFileCount)
 		}
@@ -187,7 +206,7 @@ func normalizeBuildContextPath(name string) (string, error) {
 	if clean == ".." || strings.HasPrefix(clean, "../") {
 		return "", buildContextError("archive entry escapes the context directory: %q", name)
 	}
-	if depth := strings.Count(strings.Trim(clean, "/"), "/") + 1; depth > maxBuildContextPathDepth {
+	if strings.Count(strings.Trim(clean, "/"), "/")+1 > maxBuildContextPathDepth {
 		return "", buildContextError("archive entry path depth exceeds %d", maxBuildContextPathDepth)
 	}
 	return clean, nil
