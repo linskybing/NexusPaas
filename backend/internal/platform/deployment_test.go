@@ -66,6 +66,28 @@ func TestProductionBetaKustomizationIncludesEightBackendUnits(t *testing.T) {
 	}
 }
 
+// P0-4: only compute-control-plane gets a Kubernetes API identity, via a dedicated
+// ServiceAccount + wildcard-free least-privilege ClusterRole.
+func TestProductionBetaComputeControlPlaneRBAC(t *testing.T) {
+	path := "../../deploy/k3s/production-beta/backend-units.yaml"
+	body := readTextFile(t, path)
+
+	if got := strings.Count(body, "automountServiceAccountToken: true"); got != 1 {
+		t.Fatalf("automountServiceAccountToken: true count = %d, want exactly 1 (compute-control-plane only)", got)
+	}
+	for _, want := range []string{
+		"serviceAccountName: compute-control-plane",
+		"kind: ServiceAccount",
+		"kind: ClusterRole",
+		"kind: ClusterRoleBinding",
+	} {
+		requireContains(t, path, body, want)
+	}
+	if strings.Contains(body, `"*"`) || strings.Contains(body, "[*]") {
+		t.Fatalf("%s must not grant RBAC wildcards", path)
+	}
+}
+
 func TestProductionBetaRuntimeConfigAndSecretContract(t *testing.T) {
 	configPath := "../../deploy/k3s/production-beta/runtime-config.yaml"
 	config := readTextFile(t, configPath)

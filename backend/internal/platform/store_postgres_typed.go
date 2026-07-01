@@ -10,5 +10,8 @@ func typedPostgresResourceFor(resource string) (identityPostgresResource, bool) 
 	if spec, ok := identityPostgresResourceFor(resource); ok {
 		return spec, true
 	}
-	return requestNotificationPostgresResourceFor(resource)
+	if spec, ok := requestNotificationPostgresResourceFor(resource); ok {
+		return spec, true
+	}
+	return imageRegistryPostgresResourceFor(resource)
 }

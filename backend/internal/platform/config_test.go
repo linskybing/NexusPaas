@@ -1245,7 +1245,9 @@ func setValidProductionEnv(t *testing.T) {
 		envObjectStoreBucket:             "media",
 		envTrustedProxyCIDRs:             "",
 		envAdapterConfig:                 "",
-		envImageCheckEnabled:             "false",
+		envImageCheckEnabled:             "true",
+		envImageProvenanceRequired:       "true",
+		"OTEL_EXPORTER_OTLP_ENDPOINT":    "http://collector:4318",
 		envDockerCleanupEnabled:          "false",
 		envDockerCleanupNamespace:        "default",
 		envDockerDindImage:               "docker:24-dind",
@@ -1363,6 +1365,9 @@ func withProductionBacking(cfg Config) Config {
 	cfg.ObjectStoreURL = testObjectURL
 	cfg.ObjectStoreAccessKey = "access"
 	cfg.ObjectStoreSecretKey = "secret"
+	cfg.ImageCheckEnabled = true
+	cfg.ImageProvenanceRequired = true
+	cfg.OTLPEndpoint = "http://collector:4318"
 	return cfg
 }
 

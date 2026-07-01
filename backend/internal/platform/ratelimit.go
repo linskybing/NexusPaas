@@ -11,9 +11,12 @@ import (
 
 // Limiter is the rate-limiting port the guard chain depends on. The in-memory
 // *RateLimiter is the default; a Redis-backed limiter can be injected via
-// WithRateLimiter so counters are shared across replicas (finding 4).
+// WithRateLimiter so counters are shared across replicas (finding 4). Allow uses
+// the limiter's configured default quota; AllowWithin lets the caller supply a
+// per-route-class quota so build/transfer/workload/auth get tighter caps. (P1-7)
 type Limiter interface {
 	Allow(key string) bool
+	AllowWithin(key string, limit int, window time.Duration) bool
 }
 
 var _ Limiter = (*RateLimiter)(nil)
@@ -35,17 +38,21 @@ func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 }
 
 func (r *RateLimiter) Allow(key string) bool {
+	return r.AllowWithin(key, r.limit, r.window)
+}
+
+func (r *RateLimiter) AllowWithin(key string, limit int, window time.Duration) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now().UTC()
 	r.deleteExpiredLocked(now)
 	counter := r.counters[key]
 	if counter.expiresAt.Before(now) {
-		counter = rateCounter{expiresAt: now.Add(r.window)}
+		counter = rateCounter{expiresAt: now.Add(window)}
 	}
 	counter.count++
 	r.counters[key] = counter
-	return counter.count <= r.limit
+	return counter.count <= limit
 }
 
 func (r *RateLimiter) deleteExpiredLocked(now time.Time) {
@@ -56,15 +63,68 @@ func (r *RateLimiter) deleteExpiredLocked(now time.Time) {
 	}
 }
 
-func rateLimitKey(r *http.Request, route RouteSpec, trustedProxies []*net.IPNet) string {
+// Route classes with quotas distinct from ordinary reads. Resource-heavy and
+// security-sensitive routes get tighter caps so one principal cannot flood image
+// builds / data transfers / workload submits or brute-force login/token endpoints.
+const (
+	rateClassDefault  = "default"
+	rateClassBuild    = "build"
+	rateClassTransfer = "transfer"
+	rateClassWorkload = "workload"
+	rateClassAuth     = "auth"
+)
+
+type rateLimitRule struct {
+	limit  int
+	window time.Duration
+}
+
+// specialRateLimit returns a tighter per-class quota, or false for the default
+// class (which uses the limiter's configured default so a single global cap still
+// applies to everything else). All windows are one minute to match Retry-After.
+func specialRateLimit(class string) (rateLimitRule, bool) {
+	switch class {
+	case rateClassBuild:
+		return rateLimitRule{limit: 30, window: time.Minute}, true
+	case rateClassTransfer:
+		return rateLimitRule{limit: 60, window: time.Minute}, true
+	case rateClassWorkload:
+		return rateLimitRule{limit: 60, window: time.Minute}, true
+	case rateClassAuth:
+		return rateLimitRule{limit: 20, window: time.Minute}, true
+	default:
+		return rateLimitRule{}, false
+	}
+}
+
+func rateLimitClass(route RouteSpec) string {
+	p := route.Pattern
+	switch {
+	case strings.Contains(p, "/images/build"):
+		return rateClassBuild
+	case strings.Contains(p, "/storage/transfers"):
+		return rateClassTransfer
+	case route.Method == http.MethodPost && (p == "/api/v1/jobs" || strings.HasPrefix(p, "/api/v1/jobs/")):
+		return rateClassWorkload
+	case strings.Contains(p, "/login") || strings.Contains(p, "/api-tokens"):
+		return rateClassAuth
+	default:
+		return rateClassDefault
+	}
+}
+
+// rateLimitKey scopes the counter to the route class and the acting principal
+// (verified user on authed routes, else client IP), so each class has its own
+// per-principal budget and abuse in one class cannot exhaust another.
+func rateLimitKey(r *http.Request, route RouteSpec, class string, trustedProxies []*net.IPNet) string {
 	if route.AuthRequired {
 		if user, ok := verifiedUser(r); ok {
 			if id := asString(user["id"]); id != "" {
-				return "user:" + id
+				return class + "|user:" + id
 			}
 		}
 	}
-	return clientKey(r, trustedProxies)
+	return class + "|ip:" + clientKey(r, trustedProxies)
 }
 
 func clientKey(r *http.Request, trustedProxies []*net.IPNet) string {

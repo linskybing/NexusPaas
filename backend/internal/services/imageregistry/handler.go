@@ -2,6 +2,7 @@ package imageregistry
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -644,15 +645,25 @@ func createBuild(app *platform.App, r *http.Request, route platform.RouteSpec, b
 		return status, data, nil
 	}
 	requestedID := imageBuildRequestedID(payload)
+	contextArchiveDigest, status, data := imageBuildContextArchiveDigest(payload)
+	if status != 0 {
+		return status, data, nil
+	}
+	dockerfileSHA256, contextRef, storagePath, buildArgs := imageBuildSourceFingerprint(payload)
 	keyHash, fingerprintHash := imageBuildIdempotencyHashes(r, imageBuildIdempotencyFingerprint{
-		RequestedID:         requestedID,
-		UserID:              userID,
-		BuildType:           buildType,
-		ProjectID:           projectID,
-		ImageReference:      imageRef,
-		CPU:                 resources.cpuCores,
-		MemoryGiB:           resources.memoryGiB,
-		MaxBuildTimeSeconds: resources.maxBuildTimeSeconds,
+		RequestedID:          requestedID,
+		UserID:               userID,
+		BuildType:            buildType,
+		ProjectID:            projectID,
+		ImageReference:       imageRef,
+		CPU:                  resources.cpuCores,
+		MemoryGiB:            resources.memoryGiB,
+		MaxBuildTimeSeconds:  resources.maxBuildTimeSeconds,
+		DockerfileSHA256:     dockerfileSHA256,
+		ContextRef:           contextRef,
+		ContextArchiveDigest: contextArchiveDigest,
+		StoragePath:          storagePath,
+		BuildArgs:            buildArgs,
 	})
 	if status, data, degraded := imageBuildIdempotencyResult(app, r, route, keyHash, fingerprintHash); status != 0 {
 		return status, data, degraded
@@ -683,6 +694,9 @@ func createBuild(app *platform.App, r *http.Request, route platform.RouteSpec, b
 		"created_at":              now,
 		"updated_at":              now,
 		"logs":                    "build queued\n",
+	}
+	if contextArchiveDigest != "" {
+		build["source_digest"] = contextArchiveDigest
 	}
 	if keyHash != "" {
 		build[internalImageBuildIdempotencyKeyHash] = keyHash
@@ -774,6 +788,52 @@ type imageBuildIdempotencyFingerprint struct {
 	CPU                 float64 `json:"cpu_cores"`
 	MemoryGiB           float64 `json:"memory_gib"`
 	MaxBuildTimeSeconds int     `json:"max_build_time_seconds"`
+	// Source content is part of the idempotency identity: the same
+	// Idempotency-Key replayed with a different Dockerfile, context,
+	// storage source, or build args must be a 409, not a replay of the
+	// first build. json.Marshal sorts map keys, so BuildArgs hashes
+	// deterministically. (P0-2)
+	DockerfileSHA256     string         `json:"dockerfile_sha256"`
+	ContextRef           string         `json:"context_ref"`
+	ContextArchiveDigest string         `json:"context_archive_digest"`
+	StoragePath          string         `json:"storage_path"`
+	BuildArgs            map[string]any `json:"build_args"`
+}
+
+// imageBuildContextArchiveDigest validates an optional inline build-context archive
+// and returns its deterministic content digest. The archive is carried as base64 in
+// the JSON body — an interim transport until the multipart + object-store staging
+// path lands.
+// ponytail: base64-in-JSON, bounded by maxBuildContextArchiveBytes; upgrade to a
+// streamed multipart upload + object-store staging when large contexts are needed.
+func imageBuildContextArchiveDigest(payload map[string]any) (string, int, any) {
+	encoded := strings.TrimSpace(shared.TextValue(payload, "context_archive", "contextArchive"))
+	if encoded == "" {
+		return "", 0, nil
+	}
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", http.StatusBadRequest, shared.ErrorData("context_archive must be base64-encoded")
+	}
+	info, err := validateBuildContextArchive(data)
+	if err != nil {
+		return "", http.StatusBadRequest, shared.ErrorData(err.Error())
+	}
+	return info.Digest, 0, nil
+}
+
+// imageBuildSourceFingerprint extracts the source-content identity fields from
+// a build request payload. Dockerfile bodies are hashed (they can be large);
+// context/storage references and build args are carried verbatim so the
+// enclosing fingerprint hash covers them.
+func imageBuildSourceFingerprint(payload map[string]any) (dockerfileSHA256, contextRef, storagePath string, buildArgs map[string]any) {
+	if dockerfile := shared.TextValue(payload, "dockerfile"); dockerfile != "" {
+		dockerfileSHA256 = imageBuildHash(dockerfile)
+	}
+	contextRef = shared.TextValue(payload, "context")
+	storagePath = shared.TextValue(payload, "storage_path", "storagePath")
+	buildArgs, _ = payload["build_args"].(map[string]any)
+	return dockerfileSHA256, contextRef, storagePath, buildArgs
 }
 
 type imageBuildCancelIdempotencyFingerprint struct {

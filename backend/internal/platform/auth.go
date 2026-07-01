@@ -99,17 +99,20 @@ func (a *App) authorizeAPIToken(r *http.Request, token string) bool {
 }
 
 // tokenRevoked reports whether a credential has been explicitly revoked via the
-// distributed denylist. A backend error fails open (treats the credential as not
-// revoked) so a transient revocation-store outage cannot reject every valid
-// credential; the error is logged for visibility.
+// distributed denylist. On a revocation-store error the behaviour is
+// environment-dependent: production fails CLOSED (treats the credential as
+// revoked) so a store outage cannot silently let revoked tokens through, while
+// non-production fails open so a transient outage does not reject every valid
+// credential during local/dev runs. (P0-7)
 func (a *App) tokenRevoked(ctx context.Context, kind, id string) bool {
 	if a.Revocations == nil {
 		return false
 	}
 	revoked, err := a.Revocations.IsRevoked(ctx, kind, id)
 	if err != nil {
-		slog.Warn("revocation check failed", "kind", kind, "error", err)
-		return false
+		failClosed := a.Config.IsProductionProfile()
+		slog.Error("revocation check failed", "kind", kind, "fail_closed", failClosed, "error", err)
+		return failClosed
 	}
 	return revoked
 }
