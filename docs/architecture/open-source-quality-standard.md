@@ -14,7 +14,7 @@ unreviewed security exceptions make microservices unsafe to operate.
 - Service READMEs identify responsibility, owned data, dependencies, operations,
   and local test commands.
 - Architecture docs record accepted tradeoffs and rejected alternatives.
-- `problem.md` tracks unresolved blockers, accepted risks, and follow-ups.
+- `blocker-ledger.md` tracks unresolved blockers, accepted risks, and follow-ups.
 - Plans under `docs/plan/` document significant work before implementation.
 
 ## Code And Design Standard

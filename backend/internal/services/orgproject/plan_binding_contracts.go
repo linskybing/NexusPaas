@@ -17,7 +17,7 @@ import (
 // and decides *which* plan binds to a project, but it must not write project
 // records directly. These service-key-gated endpoints let scheduler-quota apply
 // and clear bindings through the owner, exactly as the workload eviction
-// contract keeps job-state writes inside workload-service (problem.md #2).
+// contract keeps job-state writes inside workload-service (blocker-ledger.md #2).
 const (
 	pathBindProjectPlan    = "/internal/org-project/projects/{project_id}/plan"
 	pathClearPlanBindings  = "/internal/org-project/plans/{plan_id}/project-bindings"

@@ -9,7 +9,7 @@ import (
 
 // TestPlanBindingOwnerContractE2E proves that, across separate scheduler-quota
 // and org-project processes, scheduler-quota applies and clears a project's plan
-// binding only through the org-project-owned internal contract (problem.md #2):
+// binding only through the org-project-owned internal contract (blocker-ledger.md #2):
 // the org-project project record reflects the binding even though scheduler-quota
 // has no write access to org-project:projects.
 func TestPlanBindingOwnerContractE2E(t *testing.T) {

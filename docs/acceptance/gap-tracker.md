@@ -84,7 +84,7 @@ verify script green). Local-only — no live external GA evidence added. Bar:
 
 This is the live status tracker. The verbose narrative analysis lives in
 [`docs/acceptance/gap-analysis.md`](docs/acceptance/gap-analysis.md). Code-level
-issues are in [`problem.md`](problem.md).
+issues are in [`blocker-ledger.md`](blocker-ledger.md).
 
 Verification basis (independent, not from the slice plans' self-attestation):
 full `go test ./...`, quick gate, coverage run, focused audit retention,
@@ -986,7 +986,7 @@ runtime Secret patches, and seed data were cleaned.
 
 ## 3. Architecture blockers backing DATA / SEC / OPS acceptance
 
-Cross-referenced with [`problem.md`](problem.md):
+Cross-referenced with [`blocker-ledger.md`](blocker-ledger.md):
 
 | Blocker | Status |
 |---|---|

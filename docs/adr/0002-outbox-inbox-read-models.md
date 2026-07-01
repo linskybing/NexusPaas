@@ -110,7 +110,7 @@ Every migration slice follows this sequence:
 - Add provider/consumer tests for owner-read and command APIs.
 - Implement Outbox/Inbox infrastructure with idempotency, retry, dead-letter,
   lag, replay, and drift evidence.
-- Update `problem.md` only when implementation and evidence blockers are reduced.
+- Update `blocker-ledger.md` only when implementation and evidence blockers are reduced.
 
 ## Reversal
 

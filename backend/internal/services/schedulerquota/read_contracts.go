@@ -12,7 +12,7 @@ import (
 // Cross-service resource keys the submit-admission evaluator depends on. They
 // are owned by other services (workload-service, org-project-service); the
 // scheduler may only *read* them. Keeping the keys in this one file localizes
-// the cross-service data coupling (problem.md §3 / §4 DIP) to a single typed
+// the cross-service data coupling (blocker-ledger.md §3 / §4 DIP) to a single typed
 // seam instead of scattering raw shared-store string keys through the admission
 // logic. Full data-ownership moves to typed per-aggregate repositories under
 // GAP-4; until then this interface is the boundary other services break against

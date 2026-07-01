@@ -57,8 +57,8 @@ implementation.
 | symlink / hardlink 防護 | archive extraction 必須具備。 | 沒有。 | no tar header link policy in imageregistry。 | 沒實作。 |
 | zip bomb 防護 | zip upload 必須具備。 | 沒有。 | no compressed/uncompressed ratio, max files, max entry size checks。 | 沒實作。 |
 | max archive size / max file count | archive upload 必須具備。 | 沒有。 | no image-build upload limiter or archive counter。 | 沒實作。 |
-| build logs | 有 IMG-011。 | 部分。GET logs returns stored string with redaction; no live executor streaming/tailing。 | `handler.go:543-558`; redaction at `handler.go:561-583`; gap says no live logs at `gap.md:641-646`。 | local/static log response only。 |
-| cancel build | 有 IMG-012。 | 部分。DELETE sets metadata status `cancelled`; no executor/K8s termination。 | `handler.go:586-615`; gap says no live executor cancellation at `gap.md:591-600`。 | metadata cancellation only。 |
+| build logs | 有 IMG-011。 | 部分。GET logs returns stored string with redaction; no live executor streaming/tailing。 | `handler.go:543-558`; redaction at `handler.go:561-583`; gap says no live logs at `gap-tracker.md:641-646`。 | local/static log response only。 |
+| cancel build | 有 IMG-012。 | 部分。DELETE sets metadata status `cancelled`; no executor/K8s termination。 | `handler.go:586-615`; gap says no live executor cancellation at `gap-tracker.md:591-600`。 | metadata cancellation only。 |
 | build status update/result digest | 有 IMG-015/017/018/019/025。 | queued create only; no completion controller writing digest or final scan/sign/SBOM states。 | `handler.go:675-681`。 | 只有 pending metadata。 |
 
 ## C. 文件與程式碼偏離清單

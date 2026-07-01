@@ -7,7 +7,7 @@ Date: 2026-06-19
 
 The GA roadmap requires the 8 deployable units to prove deploy, smoke, rollback,
 and redeploy behavior before any unit is declared GA-ready. Existing local and
-non-live gates provide strong Production Beta confidence, but `problem.md` still
+non-live gates provide strong Production Beta confidence, but `blocker-ledger.md` still
 tracks missing live staging deploy, smoke, rollback, and redeploy evidence.
 
 This ADR records the evidence gate that future runtime and staging slices must
@@ -23,7 +23,7 @@ post-redeploy smoke.
 
 Evidence must be attached to the PR, release notes, or an approved evidence
 artifact directory. A skipped live gate requires an owner-approved reason and an
-open `problem.md` blocker.
+open `blocker-ledger.md` blocker.
 
 ## Required Evidence Per Unit
 
@@ -99,4 +99,4 @@ open `problem.md` blocker.
 A future ADR can revise the evidence gate only if it preserves equivalent proof
 of rollout, readiness, observability, smoke, rollback, redeploy, correlation, and
 secret hygiene. Reversal must keep unproven staging readiness tracked in
-`problem.md`.
+`blocker-ledger.md`.

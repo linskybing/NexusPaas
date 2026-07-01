@@ -44,7 +44,7 @@ func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodPost, "/internal/workload/jobs/{id}/evict", workloadEvictJob)
 	registerJobAccessHandlers(app)
 	// Service-key-gated read contract: scheduler-quota submit-admission lists jobs to
-	// count running/queued usage (problem.md #3). List-only — admission never fetches a
+	// count running/queued usage (blocker-ledger.md #3). List-only — admission never fetches a
 	// single job cross-service.
 	app.RegisterReadContract(jobsResource, "/internal/workload/jobs", "")
 	registerRuntimeReaper(app)

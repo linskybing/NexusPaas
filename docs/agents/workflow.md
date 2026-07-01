@@ -50,7 +50,7 @@ For GA acceptance-criteria clearance, work in this order:
 3. Deferred GPU-hardware or frontend/WebRTC items only after the required
    environment exists.
 
-`problem.md`, `gap.md`, and `docs/acceptance/ga-acceptance-trace-matrix.md`
+`blocker-ledger.md`, `gap-tracker.md`, and `docs/acceptance/ga-acceptance-trace-matrix.md`
 must be updated only after matching evidence exists. Local, static, fixture, or
 single-cluster evidence must not be described as live external GA proof.
 
