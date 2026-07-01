@@ -10,7 +10,7 @@ data:
   PRODUCTION: "true"
   APP_ENV: "production"
   LOG_LEVEL: "info"
-  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318" # NOSONAR S5332: in-cluster OTLP; collector serves plaintext 4318 (no TLS listener), intra-cluster transport security is a mesh/NetworkPolicy concern
   K8S_IMAGE_CHECK_ENABLED: "true"
   IMAGE_PUBLISH_REQUIRE_PROVENANCE: "true"
   OTEL_SERVICE_NAME: "platform-gateway"
@@ -30,7 +30,7 @@ data:
   PRODUCTION: "true"
   APP_ENV: "production"
   LOG_LEVEL: "info"
-  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318" # NOSONAR S5332: in-cluster OTLP; collector serves plaintext 4318 (no TLS listener), intra-cluster transport security is a mesh/NetworkPolicy concern
   K8S_IMAGE_CHECK_ENABLED: "true"
   IMAGE_PUBLISH_REQUIRE_PROVENANCE: "true"
   OTEL_SERVICE_NAME: "iam-unit"
@@ -50,7 +50,7 @@ data:
   PRODUCTION: "true"
   APP_ENV: "production"
   LOG_LEVEL: "info"
-  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318" # NOSONAR S5332: in-cluster OTLP; collector serves plaintext 4318 (no TLS listener), intra-cluster transport security is a mesh/NetworkPolicy concern
   K8S_IMAGE_CHECK_ENABLED: "true"
   IMAGE_PUBLISH_REQUIRE_PROVENANCE: "true"
   OTEL_SERVICE_NAME: "tenant-unit"
@@ -71,7 +71,7 @@ data:
   APP_ENV: "production"
   LOG_LEVEL: "info"
   OBJECT_STORE_BUCKET: "media"
-  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318" # NOSONAR S5332: in-cluster OTLP; collector serves plaintext 4318 (no TLS listener), intra-cluster transport security is a mesh/NetworkPolicy concern
   K8S_IMAGE_CHECK_ENABLED: "true"
   IMAGE_PUBLISH_REQUIRE_PROVENANCE: "true"
   OTEL_SERVICE_NAME: "collaboration-unit"
@@ -91,7 +91,7 @@ data:
   PRODUCTION: "true"
   APP_ENV: "production"
   LOG_LEVEL: "info"
-  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318" # NOSONAR S5332: in-cluster OTLP; collector serves plaintext 4318 (no TLS listener), intra-cluster transport security is a mesh/NetworkPolicy concern
   K8S_IMAGE_CHECK_ENABLED: "true"
   IMAGE_PUBLISH_REQUIRE_PROVENANCE: "true"
   OTEL_SERVICE_NAME: "platform-io-unit"
@@ -111,7 +111,7 @@ data:
   PRODUCTION: "true"
   APP_ENV: "production"
   LOG_LEVEL: "info"
-  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318" # NOSONAR S5332: in-cluster OTLP; collector serves plaintext 4318 (no TLS listener), intra-cluster transport security is a mesh/NetworkPolicy concern
   K8S_IMAGE_CHECK_ENABLED: "true"
   IMAGE_PUBLISH_REQUIRE_PROVENANCE: "true"
   OTEL_SERVICE_NAME: "usage-observability"
@@ -131,7 +131,7 @@ data:
   PRODUCTION: "true"
   APP_ENV: "production"
   LOG_LEVEL: "info"
-  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318" # NOSONAR S5332: in-cluster OTLP; collector serves plaintext 4318 (no TLS listener), intra-cluster transport security is a mesh/NetworkPolicy concern
   K8S_IMAGE_CHECK_ENABLED: "true"
   IMAGE_PUBLISH_REQUIRE_PROVENANCE: "true"
   OTEL_SERVICE_NAME: "compute-api"
@@ -151,7 +151,7 @@ data:
   PRODUCTION: "true"
   APP_ENV: "production"
   LOG_LEVEL: "info"
-  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318" # NOSONAR S5332: in-cluster OTLP; collector serves plaintext 4318 (no TLS listener), intra-cluster transport security is a mesh/NetworkPolicy concern
   K8S_IMAGE_CHECK_ENABLED: "true"
   IMAGE_PUBLISH_REQUIRE_PROVENANCE: "true"
   OTEL_SERVICE_NAME: "compute-control-plane"
