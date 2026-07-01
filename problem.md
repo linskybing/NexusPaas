@@ -50,6 +50,17 @@ deliberately out-of-scope reconciler (ADR 0006).
    Dockerfile/context/storage-path fields are not persisted, hashed, validated, or
    dispatched; tar.gz/zip upload and archive security controls are not implemented.
 
+**2026-07-01 kind-tier update (P0s 2–4 partially advanced, still Open for
+external):** a single local kind cluster now runs the full 8-unit
+production-beta deploy/smoke, live DB migration apply/validate/idempotency,
+per-unit previous-image rollback/redeploy, kind-tier runtime Secret presence,
+local-registry promote/rollback, and a platform-image SBOM/scan/keypair pass
+(`docs/acceptance/evidence/2026-07-01-kind-live-e2e-report.md` via
+`backend/scripts/kind-live-e2e.sh`). Per `docs/agents/workflow.md` this is
+single-cluster/local evidence, **not external GA proof**; P0.1 external Harbor
+promotion, external staging cluster/Secret provenance, off-cluster DR, and
+schema down-migration/restore remain open.
+
 The structural risk worth flagging in code terms is the **shared-binary
 distributed-monolith boundary** (one module/binary/image for 15 services); it is
 intentional and test-guarded, but it is the largest standing deviation from a
@@ -155,7 +166,8 @@ buildable or deployable artifacts** — the boundary is logical, not physical.
 | File-by-file ref parity vs `references/CSCC_AI_Platform_Backend` | Feature gap check | Pass | All `application` domains + 15 cron reconcilers ported; `course_monitoring_reconciler` out of scope (ADR 0006) |
 | SonarScanner Quality Gate (local) | Code quality gate | Pass | Local scanner reached Quality Gate `PASSED` and local SECURITY issue total `0`; remote SonarCloud SECURITY cleanup still depends on supported Cloud Analysis Scope configuration or CI-based analysis because `.sonarcloud.properties` automatic-analysis wildcards are not supported |
 | `go test -race ./...` | Race detection | Pass | Clean, exit 0; 23 tested packages green (`internal/e2e` no test files) this pass |
-| Live 8-unit staging deploy/rollback | Release readiness | Not Run | Open P0 — requires external cluster |
+| Live 8-unit staging deploy/rollback (kind, single-cluster) | Release readiness | Pass (kind-tier) | 2026-07-01 `backend/scripts/kind-live-e2e.sh`: live 8-unit deploy/smoke, migration apply/validate/idempotency, per-unit previous-image rollback/redeploy, Secret presence, local-registry promote/rollback, SBOM/scan/keypair; single-cluster/local, **not external GA proof** — see `docs/acceptance/evidence/2026-07-01-kind-live-e2e-report.md` |
+| Live 8-unit staging deploy/rollback (external) | Release readiness | Not Run | Open P0 — requires external registry + external staging cluster |
 
 ## 8. Recommended Execution Order
 
@@ -179,6 +191,10 @@ buildable or deployable artifacts** — the boundary is logical, not physical.
 11. **(P2, structural)** Decide whether to split the shared binary/module/image
    per deployable unit, or formally accept the 8-unit shared-binary topology as
    the GA boundary (document the trade-off in an ADR).
+
+Items 2–4 now have **kind-tier single-cluster** live evidence
+(`docs/acceptance/evidence/2026-07-01-kind-live-e2e-report.md`); this is not
+external GA proof, so the **external** portions of items 1–5 stay open.
 
 New feature expansion should not start before items 1–5 (live P0s) are evidenced.
 

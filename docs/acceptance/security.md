@@ -67,3 +67,15 @@ Part of the [GA Acceptance docs](README.md).
   admin routes. The full registered catalog is checked in production-auth mode.
   This does not close live authorization, workload identity, mTLS, live staging
   security, SEC GA, or Full GA.
+- 2026-07-01 kind-tier launch drill secret evidence + disclosed deviation
+  ([`evidence/2026-07-01-kind-live-e2e-report.md`](evidence/2026-07-01-kind-live-e2e-report.md)):
+  all required backing and per-unit runtime Secret objects were created and
+  verified present by name/key (no values printed) and loaded into the live
+  8-unit deployment. **Deviation (kind-tier only):** the platform units that host
+  cluster-dependent services were granted an automounted ServiceAccount token
+  bound to `cluster-admin` so the in-cluster readiness ping succeeds on a
+  throwaway local cluster. This is a platform-unit convenience for kind and is
+  **not** a production posture — production uses least-privilege workload
+  identity, and the SEC-016 `automountServiceAccountToken=false` guard for
+  **user workloads** is unchanged. External Secret provenance/rotation, workload
+  identity, and mTLS remain open.

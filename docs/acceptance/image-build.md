@@ -136,3 +136,24 @@ and listing tests keep schema version `1` valid and treat the missing fields as
 unknown. This is IMG-025 event-shape evidence only; it does not prove completed
 SBOM generation, scan execution, signing, allow-list admission, live
 Tekton/BuildKit/Harbor execution, or image promotion.
+
+## Platform-image supply chain — kind-tier evidence (2026-07-01)
+
+Distinct from the **product** image-build feature above (which remains
+API-contract/metadata only), the **platform's own** container image now has a
+live kind-tier supply-chain pass in
+[`evidence/2026-07-01-kind-live-e2e-report.md`](evidence/2026-07-01-kind-live-e2e-report.md)
+via `backend/scripts/kind-live-e2e.sh`:
+
+- BuildKit build of `backend/Dockerfile`;
+- syft SPDX SBOM;
+- trivy vulnerability scan (`HIGH/CRITICAL=0` at run time);
+- cosign keypair generation;
+- push/promote/rollback through a local (`localhost:5000`) registry.
+
+Per [`../agents/workflow.md`](../agents/workflow.md) this is single-cluster/local
+evidence, **not external GA proof**, and it does **not** enforce SBOM/signing in
+the build path, sign+push to an external registry, run the product
+Tekton/BuildKit build dispatch, or implement source upload/extraction/hashing.
+IMG source handling, live executor, external Harbor push, and enforced
+SBOM/scan/sign gates stay OPEN.

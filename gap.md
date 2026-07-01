@@ -65,6 +65,22 @@ verify script green). Local-only — no live external GA evidence added. Bar:
   workload kinds such as DaemonSet/CronJob. This is local/static admission
   evidence only; it does not close live staging security, workload identity,
   mTLS, V1 external production launch, SEC GA, or Full GA.
+- 2026-07-01 kind-tier live launch-blocker execution update: a single local
+  kind cluster ran the full 8-unit production-beta topology deploy + smoke
+  (`/healthz`, `/readyz`, `/metrics` per unit and the 15-of-15 service-registry
+  union), live DB migration apply/validate/idempotent re-apply on a real
+  Postgres pod, per-unit previous-image rollback/redeploy, kind-tier runtime
+  Secret object creation/presence (names/keys only, no values), local-registry
+  image promote/rollback, and a platform-image supply-chain pass (BuildKit
+  build, syft SPDX SBOM, trivy scan `HIGH/CRITICAL=0`, cosign keypair).
+  Evidence: `docs/acceptance/evidence/2026-07-01-kind-live-e2e-report.md` via
+  `backend/scripts/kind-live-e2e.sh`. This is **single-cluster (kind) live
+  evidence only**: it upgrades prior render-only/static launch-blocker evidence
+  but per [`workflow.md`](docs/agents/workflow.md) is **not external GA proof**.
+  The external registry host, live external staging cluster, external Secret
+  provenance/rotation, off-cluster DR, schema down-migration/restore, and the
+  product image-build dispatch feature remain OPEN, so **V1 external production
+  launch stays OPEN**.
 
 This is the live status tracker. The verbose narrative analysis lives in
 [`docs/acceptance/gap-analysis.md`](docs/acceptance/gap-analysis.md). Code-level
@@ -846,6 +862,18 @@ Full GA remain open.
 
 (K8S manifest size/document cap — **done** via `GATE-*`.)
 
+2026-07-01 kind-tier launch-blocker note (applies to the E2E, Backup/restore,
+and Rollback rows above): the 8-unit production-beta topology now has live
+single-cluster (kind) deploy/smoke, per-unit previous-image rollback/redeploy,
+live DB migration apply/validate/idempotency, kind-tier Secret object presence,
+and local-registry promote/rollback evidence in
+`docs/acceptance/evidence/2026-07-01-kind-live-e2e-report.md` (via
+`backend/scripts/kind-live-e2e.sh`). Per [`workflow.md`](docs/agents/workflow.md)
+this is single-cluster/local evidence, **not external GA proof**: external
+registry host, external staging cluster/Secret provenance/rotation, off-cluster
+DR, and schema down-migration/restore stay open, so V1 external production
+launch and Full GA remain OPEN.
+
 2026-06-22 stream credential update: WEB-006 credential issuance through the
 first-party GUI is now evidenced on
 `ci-ga-web-stream-cred-20260622102018`
@@ -967,7 +995,7 @@ Cross-referenced with [`problem.md`](problem.md):
 | API-token indexed lookup | Done — token id is parsed from `nexuspaas_<token-id>_<secret>` and verification loads one indexed record; focused/full tests, quick gate, Sonar Quality Gate, reviewer approval, and live RKE2 auth evidence passed |
 | Centralized trusted-IP resolver | Done — identity failure/captcha/API-token audit paths reuse the trusted-proxy resolver; focused/full tests, quick gate, Sonar Quality Gate, reviewer approval, and live spoofed-header evidence passed |
 | Env profiles + PDP fail-closed | Done — explicit `APP_ENV` profiles, conflict validation, staging/production strict startup checks, production manifest profile declarations, focused/full tests, quick gate, Sonar Quality Gate, reviewer approval, and live RKE2 health/readiness evidence passed |
-| Service identity / JWT-JWKS lib / migration-runner maturity | Scoped internal service identity slice done for v1; JWT/JWKS library-verifier slice done with `github.com/coreos/go-oidc/v3` replacing production custom JWK parsing and RSA/ECDSA JWT signature verification while preserving multi-audience, one-minute skew, `jti`, and role/user mapping behavior; migration runner ledger/checksum/advisory-lock/dirty-state code slice implemented with focused/full backend tests, DB-free `validate-migrations` evidence, and live PostgreSQL integration evidence for temporary-schema isolation plus dirty/checksum/adoption/lock behavior through redacted `platform-gateway-runtime-secret:DATABASE_URL`; service credential rotation/workload identity/mTLS, live staging migration drill, and full schema rollback maturity remain open |
+| Service identity / JWT-JWKS lib / migration-runner maturity | Scoped internal service identity slice done for v1; JWT/JWKS library-verifier slice done with `github.com/coreos/go-oidc/v3` replacing production custom JWK parsing and RSA/ECDSA JWT signature verification while preserving multi-audience, one-minute skew, `jti`, and role/user mapping behavior; migration runner ledger/checksum/advisory-lock/dirty-state code slice implemented with focused/full backend tests, DB-free `validate-migrations` evidence, and live PostgreSQL integration evidence for temporary-schema isolation plus dirty/checksum/adoption/lock behavior through redacted `platform-gateway-runtime-secret:DATABASE_URL`, plus 2026-07-01 kind-tier live `apply-migrations`/`validate-migrations`/idempotent re-apply run as in-cluster Jobs against a real Postgres pod (`docs/acceptance/evidence/2026-07-01-kind-live-e2e-report.md`); service credential rotation/workload identity/mTLS, external staging migration drill, and full schema rollback (restore-from-backup; down-migration is not an app capability) remain open |
 
 ## 4. Live cutover caveat
 
