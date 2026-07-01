@@ -80,11 +80,11 @@ default — a class of bug only a real Harbor instance can surface, since
 existing fixture-based unit tests control the full response body directly.
 Fixed to `pageSize`; confirmed live via the direct `curl` call in §3 above.
 
-## 5. Environment notes (local Docker Desktop only, not expected to recur on native Linux CI runners)
+## 5. Environment notes
 
-Two Docker-Desktop-specific issues surfaced and were fixed in the scripts;
-neither is expected to reproduce on GitHub Actions' native Linux Docker
-daemon (no VM/virtiofs layer):
+Four Docker-Desktop-specific issues surfaced during the local dry run above
+and were fixed in the scripts; none is expected to reproduce on GitHub
+Actions' native Linux Docker daemon (no VM/virtiofs layer):
 
 - Harbor's `prepare` step transiently failed to bind-mount a just-generated
   secret file (`root.crt`) under Docker Desktop's virtiofs file sharing
@@ -106,6 +106,25 @@ daemon (no VM/virtiofs layer):
   though the registry itself accepted the actual image blob correctly (seen
   in registry logs). Switched the seed image to `busybox:1.36`, confirmed to
   push cleanly.
+
+**A fifth issue went the other direction — caught by CI, not the local
+dry run.** The first `integration-e2e` CI run on GitHub's native Linux
+Docker Engine failed with `open .../common/config/core/env: permission
+denied`. Root cause: Harbor's `prepare` container writes
+`common/config/*/env` unmapped (container UID 0 → host UID 0, no
+userns-remap), and `docker compose up`/`down` then needs to read those
+files back client-side to resolve `env_file` directives — which fails for
+a non-root invoking user on a native Linux Docker Engine. Docker Desktop's
+Linux VM (used for the local dry run above) masks this entirely, which is
+exactly why it didn't surface locally. Harbor's own install documentation
+in fact assumes root/sudo throughout, a detail the initial research pass
+missed by stopping at the hardware-requirements page. Fixed by elevating
+`install.sh` and both `docker compose up`/`down` invocations with `sudo`
+when not already root (GitHub Actions' `ubuntu-latest` runners have
+passwordless sudo). **This fix has not yet been re-verified locally** —
+this sandbox lacks passwordless sudo, so the corrected scripts are
+verified by `bash -n` syntax check and reasoning about the root cause
+only; the next CI run on this PR is the actual verification.
 
 ## 6. What remains Open
 

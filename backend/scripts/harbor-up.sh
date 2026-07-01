@@ -31,6 +31,17 @@ done
 docker info >/dev/null 2>&1 || { echo "error: docker daemon is not running" >&2; exit 1; }
 docker compose version >/dev/null 2>&1 || { echo "error: docker compose plugin not found (Harbor's installer auto-detects it)" >&2; exit 1; }
 
+# Harbor's own docs assume root/sudo for install.sh: its "prepare" container
+# writes common/config/*/env unmapped (container UID 0 = host UID 0 without
+# userns-remap), and docker compose then needs to read those files back
+# client-side to resolve env_file directives. Docker Desktop's Linux VM masks
+# this (verified locally); a native Linux Docker Engine (GitHub Actions
+# runners, most Linux dev machines) enforces real host UID/GID permissions
+# and hits "permission denied" as a non-root user (verified in CI). Elevate
+# unless already root.
+SUDO=""
+[[ "$(id -u)" -eq 0 ]] || SUDO="sudo"
+
 mkdir -p "${HARBOR_CACHE_DIR}"
 if [[ ! -f "${HARBOR_CACHE_DIR}/${HARBOR_TARBALL}" ]]; then
   echo ">> downloading Harbor ${HARBOR_VERSION} online installer"
@@ -70,7 +81,7 @@ echo ">> running Harbor install.sh (no --with-trivy: scan enforcement is out of 
 # `prepare` just wrote moments earlier (verified: "mountpoint ... is outside
 # of rootfs" on first attempt, succeeds immediately on retry with the same
 # generated files) — one retry absorbs this without masking a real failure.
-./install.sh || { echo ">> install.sh failed, retrying once (known Docker Desktop virtiofs race)"; docker compose up -d; }
+${SUDO} ./install.sh || { echo ">> install.sh failed, retrying once (known Docker Desktop virtiofs race)"; ${SUDO} docker compose up -d; }
 
 echo ">> waiting for Harbor to answer /api/v2.0/ping"
 ready=

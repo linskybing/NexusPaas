@@ -222,7 +222,11 @@ jobs:
       - name: Cache Harbor installer
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: backend/.cache/harbor-${{ env.HARBOR_VERSION }}
+          # Cache only the immutable release tarball, never the extracted
+          # harbor/ directory or its data_volume: those hold per-run runtime
+          # state (Postgres data, generated secrets/certs) and must stay
+          # ephemeral, not leak across CI runs.
+          path: backend/.cache/harbor-${{ env.HARBOR_VERSION }}/harbor-online-installer-${{ env.HARBOR_VERSION }}.tgz
           key: harbor-installer-${{ env.HARBOR_VERSION }}
 
       - name: Start Harbor
