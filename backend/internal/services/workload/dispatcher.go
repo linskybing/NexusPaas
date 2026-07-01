@@ -259,8 +259,8 @@ func dispatchResources(data map[string]any) ([]dispatchResource, error) {
 			continue
 		}
 		kind := shared.FirstNonEmpty(shared.TextValue(item, "kind", "Kind"), dispatchResourceKind(raw))
-		if strings.EqualFold(kind, "Secret") {
-			return nil, fmt.Errorf("raw Kubernetes Secret resources are rejected; use the platform secret API or an approved ExternalSecret profile")
+		if err := deniedDispatchResourceKind(kind); err != nil {
+			return nil, err
 		}
 		out = append(out, dispatchResource{
 			Name: shared.TextValue(item, "name", "Name"),
@@ -362,8 +362,8 @@ func rejectDispatchRuntimeSocketMounts(u *unstructured.Unstructured) error {
 		if !found {
 			continue
 		}
-		if socketPath, found := shared.RuntimeSocketHostPath(podSpec); found {
-			return fmt.Errorf("%w: user workloads cannot mount container runtime socket %s", cluster.ErrInvalidManifest, socketPath)
+		if err := rejectUnsafeDispatchPodSpec(podSpec); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -383,11 +383,87 @@ func rejectDispatchVCJobRuntimeSocketMounts(u *unstructured.Unstructured) error 
 		if !found {
 			continue
 		}
-		if socketPath, found := shared.RuntimeSocketHostPath(podSpec); found {
-			return fmt.Errorf("%w: user workloads cannot mount container runtime socket %s", cluster.ErrInvalidManifest, socketPath)
+		if err := rejectUnsafeDispatchPodSpec(podSpec); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// deniedDispatchResourceKind rejects Kubernetes kinds a tenant workload must never
+// create directly. Secrets go through the platform secret API; namespaces, RBAC,
+// service accounts, persistent volumes, admission webhooks, CRDs and network/quota
+// policy objects are platform-owned scoping resources. (P0-3)
+func deniedDispatchResourceKind(kind string) error {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "secret":
+		return errors.New("raw Kubernetes Secret resources are rejected; use the platform secret API or an approved ExternalSecret profile")
+	case "namespace", "serviceaccount", "role", "rolebinding", "clusterrole", "clusterrolebinding",
+		"ingress", "persistentvolume", "mutatingwebhookconfiguration", "validatingwebhookconfiguration",
+		"customresourcedefinition", "resourcequota", "limitrange", "networkpolicy":
+		return fmt.Errorf("raw Kubernetes %s resources are rejected; this resource is managed by the platform", kind)
+	}
+	return nil
+}
+
+// rejectUnsafeDispatchPodSpec fails a dispatch when a tenant pod template requests
+// a privilege escalation the platform never grants: container runtime sockets, host
+// namespaces, host paths/ports, privileged containers, or added capabilities. It is
+// the single chokepoint every raw and synthesized pod template routes through before
+// CreateByJSON. (P0-3)
+func rejectUnsafeDispatchPodSpec(podSpec map[string]any) error {
+	if socketPath, found := shared.RuntimeSocketHostPath(podSpec); found {
+		return fmt.Errorf("%w: user workloads cannot mount container runtime socket %s", cluster.ErrInvalidManifest, socketPath)
+	}
+	if field, found := unsafePodSpecField(podSpec); found {
+		return fmt.Errorf("%w: user workloads cannot set %s", cluster.ErrInvalidManifest, field)
+	}
+	return nil
+}
+
+func unsafePodSpecField(podSpec map[string]any) (string, bool) {
+	for _, hostNS := range []string{"hostNetwork", "hostPID", "hostIPC"} {
+		if enabled, found, _ := unstructured.NestedBool(podSpec, hostNS); found && enabled {
+			return hostNS, true
+		}
+	}
+	volumes, _, _ := unstructured.NestedSlice(podSpec, "volumes")
+	for _, raw := range volumes {
+		if vol, ok := raw.(map[string]any); ok {
+			if _, hasHostPath := vol["hostPath"]; hasHostPath {
+				return "hostPath volume", true
+			}
+		}
+	}
+	for _, key := range []string{"containers", "initContainers", "ephemeralContainers"} {
+		containers, _, _ := unstructured.NestedSlice(podSpec, key)
+		for _, raw := range containers {
+			if c, ok := raw.(map[string]any); ok {
+				if field, found := unsafeContainerField(c); found {
+					return field, true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+func unsafeContainerField(container map[string]any) (string, bool) {
+	if privileged, found, _ := unstructured.NestedBool(container, "securityContext", "privileged"); found && privileged {
+		return "privileged container", true
+	}
+	if adds, found, _ := unstructured.NestedSlice(container, "securityContext", "capabilities", "add"); found && len(adds) > 0 {
+		return "added Linux capabilities", true
+	}
+	ports, _, _ := unstructured.NestedSlice(container, "ports")
+	for _, raw := range ports {
+		if port, ok := raw.(map[string]any); ok {
+			if _, hasHostPort := port["hostPort"]; hasHostPort {
+				return "hostPort", true
+			}
+		}
+	}
+	return "", false
 }
 
 func hardenDispatchPodSpecs(u *unstructured.Unstructured) {

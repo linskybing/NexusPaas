@@ -333,6 +333,48 @@ func TestDispatchVolcanoSynthesisRejectsRuntimeSocketHostPath(t *testing.T) {
 	}
 }
 
+// P0-3: tenants must not create platform-owned / cluster-scoping kinds via raw
+// dispatch resources.
+func TestDispatchResourcesRejectPrivilegedKinds(t *testing.T) {
+	for _, kind := range []string{"Namespace", "ServiceAccount", "ClusterRoleBinding", "Ingress", "PersistentVolume", "NetworkPolicy", "MutatingWebhookConfiguration"} {
+		t.Run(kind, func(t *testing.T) {
+			raw := `{"apiVersion":"v1","kind":"` + kind + `","metadata":{"name":"x"}}`
+			_, err := dispatchResources(map[string]any{
+				"resources": []any{map[string]any{"name": "x", "manifest": raw}},
+			})
+			if err == nil || !strings.Contains(err.Error(), "rejected") {
+				t.Fatalf("dispatchResources(%s) err = %v, want rejection", kind, err)
+			}
+		})
+	}
+}
+
+// P0-3: tenants must not request pod-security escalations in raw workload templates.
+func TestDispatchManifestsRejectUnsafePodFields(t *testing.T) {
+	job := map[string]any{"id": "J-p03", "job_id": "J-p03", "project_id": "P1", "user_id": "U1"}
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"privileged", `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"p"},"spec":{"containers":[{"name":"m","image":"busybox","securityContext":{"privileged":true}}]}}`, "privileged"},
+		{"hostNetwork", `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"p"},"spec":{"hostNetwork":true,"containers":[{"name":"m","image":"busybox"}]}}`, "hostNetwork"},
+		{"hostPID", `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"p"},"spec":{"hostPID":true,"containers":[{"name":"m","image":"busybox"}]}}`, "hostPID"},
+		{"hostIPC", `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"p"},"spec":{"hostIPC":true,"containers":[{"name":"m","image":"busybox"}]}}`, "hostIPC"},
+		{"hostPath", `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"p"},"spec":{"volumes":[{"name":"v","hostPath":{"path":"/etc"}}],"containers":[{"name":"m","image":"busybox"}]}}`, "hostPath"},
+		{"hostPort", `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"p"},"spec":{"containers":[{"name":"m","image":"busybox","ports":[{"containerPort":80,"hostPort":80}]}]}}`, "hostPort"},
+		{"capabilities", `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"p"},"spec":{"containers":[{"name":"m","image":"busybox","securityContext":{"capabilities":{"add":["SYS_ADMIN"]}}}]}}`, "capabilities"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := prepareDispatchManifest(job, dispatchResource{Name: "p", Kind: "Pod", Raw: []byte(tc.raw)}, "proj-p1")
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("prepareDispatchManifest(%s) err = %v, want containing %q", tc.name, err, tc.want)
+			}
+		})
+	}
+}
+
 func TestDispatchFailureReleasesReservation(t *testing.T) {
 	now := time.Date(2026, 6, 27, 9, 0, 0, 0, time.UTC)
 	cl := cluster.New(fake.NewSimpleClientset(), "proj")

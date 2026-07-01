@@ -81,6 +81,9 @@ func TestValidateProductionObjectStore(t *testing.T) {
 		ServiceIdentityKey:       "scoped-key",
 		ServiceTrustedIdentities: map[string]ServiceTrustedIdentity{"iam-unit": {Key: "iam-key", Audiences: []string{mediaUploadServiceName}}},
 		DatabaseURL:              "postgres://h:5432", RedisURL: "redis://h:6379", EventBusURL: "redis://h:6379",
+		ImageCheckEnabled:       true,
+		ImageProvenanceRequired: true,
+		OTLPEndpoint:            "http://collector:4318",
 	})
 	// Missing object store URL fails in production.
 	if err := base.Validate(); err == nil {

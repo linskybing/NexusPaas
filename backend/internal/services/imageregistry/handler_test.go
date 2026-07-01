@@ -1126,6 +1126,68 @@ func TestImageBuildIdempotencyKeyRejectsDifferentPayload(t *testing.T) {
 	}
 }
 
+// P0-2: the same Idempotency-Key must 409 when only the build source changes,
+// even though project/image-reference/resources are identical.
+func TestImageBuildIdempotencyKeyRejectsDifferentSource(t *testing.T) {
+	body := func(dockerfile, buildArgs string) string {
+		return fmt.Sprintf(`{"id":"src-idem","project_id":"P1","image_reference":"registry.local/team/app:src","cpu_cores":2,"memory_gib":4,"max_build_seconds":600,"dockerfile":%q,"context":".","build_args":%s}`, dockerfile, buildArgs)
+	}
+	cases := []struct {
+		name        string
+		first, next string
+	}{
+		{"different dockerfile", body("FROM alpine", `{"A":"1"}`), body("FROM ubuntu", `{"A":"1"}`)},
+		{"different build args", body("FROM alpine", `{"A":"1"}`), body("FROM alpine", `{"A":"2"}`)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := newImageRegistryTestApp(t)
+			const key = "image-build-source-key"
+			firstReq := imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", tc.first, "U1")
+			firstReq.Header.Set(idempotencyKeyHeader, key)
+			code, data, _ := startDockerfileImageBuild(app, firstReq, platform.RouteSpec{})
+			assertImageStatus(t, code, data, http.StatusAccepted)
+
+			nextReq := imageRequest(http.MethodPost, "/api/v1/images/build/dockerfile", tc.next, "U1")
+			nextReq.Header.Set(idempotencyKeyHeader, key)
+			code, data, _ = startDockerfileImageBuild(app, nextReq, platform.RouteSpec{})
+			assertImageStatus(t, code, data, http.StatusConflict)
+
+			if records := app.Store.List(context.Background(), imageBuildsResource); len(records) != 1 {
+				t.Fatalf("image build records = %d, want no duplicate after source-change conflict", len(records))
+			}
+		})
+	}
+}
+
+// P0-2: from-storage builds are fingerprinted by storage_path — a replay with a
+// different source path is a 409, an identical one replays.
+func TestImageBuildIdempotencyKeyFingerprintsStorageSource(t *testing.T) {
+	app := newImageRegistryTestApp(t)
+	const key = "image-build-storage-key"
+	body := func(path string) string {
+		return fmt.Sprintf(`{"id":"stor-idem","project_id":"P1","image_reference":"registry.local/team/app:stor","cpu_cores":2,"memory_gib":4,"max_build_seconds":600,"storage_path":%q}`, path)
+	}
+	firstReq := imageRequest(http.MethodPost, "/api/v1/images/build/from-storage", body("images/a.tar"), "U1")
+	firstReq.Header.Set(idempotencyKeyHeader, key)
+	code, data, _ := startStorageImageBuild(app, firstReq, platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusAccepted)
+
+	replayReq := imageRequest(http.MethodPost, "/api/v1/images/build/from-storage", body("images/a.tar"), "U1")
+	replayReq.Header.Set(idempotencyKeyHeader, key)
+	code, data, _ = startStorageImageBuild(app, replayReq, platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusAccepted)
+
+	conflictReq := imageRequest(http.MethodPost, "/api/v1/images/build/from-storage", body("images/b.tar"), "U1")
+	conflictReq.Header.Set(idempotencyKeyHeader, key)
+	code, data, _ = startStorageImageBuild(app, conflictReq, platform.RouteSpec{})
+	assertImageStatus(t, code, data, http.StatusConflict)
+
+	if records := app.Store.List(context.Background(), imageBuildsResource); len(records) != 1 {
+		t.Fatalf("image build records = %d, want one after storage-source fingerprinting", len(records))
+	}
+}
+
 func TestImageBuildCancelIdempotencyKeyReplaysSameTarget(t *testing.T) {
 	app := newImageRegistryTestApp(t)
 	key := "image-build-cancel-idempotency-key"

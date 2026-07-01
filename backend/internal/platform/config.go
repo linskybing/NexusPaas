@@ -540,7 +540,28 @@ func (c Config) validateProduction() error {
 	if err := c.validateProductionAuth(); err != nil {
 		return err
 	}
-	return c.validateProductionBackingServices()
+	if err := c.validateProductionBackingServices(); err != nil {
+		return err
+	}
+	return c.validateProductionSupplyChain()
+}
+
+// validateProductionSupplyChain fails closed on the image-provenance and
+// telemetry controls that must never ship disabled: an unscanned/unsigned image
+// must not be runnable, and a production process with no OTLP endpoint is a
+// blind spot. Redis-backed rate limiting and revocation are enforced
+// transitively because production already requires REDIS_URL. (P0-7 / P0-9)
+func (c Config) validateProductionSupplyChain() error {
+	if !c.ImageCheckEnabled {
+		return errors.New(envImageCheckEnabled + " must be true in production")
+	}
+	if !c.ImageProvenanceRequired {
+		return errors.New(envImageProvenanceRequired + " must be true in production")
+	}
+	if strings.TrimSpace(c.OTLPEndpoint) == "" {
+		return errors.New("OTEL_EXPORTER_OTLP_ENDPOINT must be set in production")
+	}
+	return nil
 }
 
 func (c Config) validateStrictServiceName() error {

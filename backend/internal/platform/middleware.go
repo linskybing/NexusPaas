@@ -68,7 +68,16 @@ var requestGuards = []routeGuard{
 		if !rateLimitApplies(route) {
 			return false, 0, "", ""
 		}
-		if !a.Rate.Allow(rateLimitKey(r, route, a.Config.TrustedProxyCIDRs)) {
+		class := rateLimitClass(route)
+		key := rateLimitKey(r, route, class, a.Config.TrustedProxyCIDRs)
+		allowed := true
+		if rule, special := specialRateLimit(class); special {
+			allowed = a.Rate.AllowWithin(key, rule.limit, rule.window)
+		} else {
+			allowed = a.Rate.Allow(key)
+		}
+		if !allowed {
+			a.recordRateLimitRejection(class)
 			return true, http.StatusTooManyRequests, "rate_limited", "too many requests"
 		}
 		return false, 0, "", ""
@@ -83,6 +92,15 @@ var requestGuards = []routeGuard{
 
 func rateLimitApplies(route RouteSpec) bool {
 	return !route.ServiceAuthRequired
+}
+
+// recordRateLimitRejection emits an audit log and a per-class counter so quota
+// rejections are observable and alertable rather than silent. (P1-7)
+func (a *App) recordRateLimitRejection(class string) {
+	slog.Warn("rate limit rejected", "class", class)
+	if a.Metrics != nil {
+		a.Metrics.IncLabeledCounter("rate_limit_rejected_total", map[string]string{"class": class})
+	}
 }
 
 func (a *App) wrap(service string, route RouteSpec) http.HandlerFunc {

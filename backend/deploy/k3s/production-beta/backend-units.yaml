@@ -10,7 +10,9 @@ data:
   PRODUCTION: "true"
   APP_ENV: "production"
   LOG_LEVEL: "info"
-  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318"
+  K8S_IMAGE_CHECK_ENABLED: "true"
+  IMAGE_PUBLISH_REQUIRE_PROVENANCE: "true"
   OTEL_SERVICE_NAME: "platform-gateway"
   OTEL_TRACES_SAMPLER: "parentbased_traceratio"
   OTEL_TRACES_SAMPLER_ARG: "0.1"
@@ -28,7 +30,9 @@ data:
   PRODUCTION: "true"
   APP_ENV: "production"
   LOG_LEVEL: "info"
-  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318"
+  K8S_IMAGE_CHECK_ENABLED: "true"
+  IMAGE_PUBLISH_REQUIRE_PROVENANCE: "true"
   OTEL_SERVICE_NAME: "iam-unit"
   OTEL_TRACES_SAMPLER: "parentbased_traceratio"
   OTEL_TRACES_SAMPLER_ARG: "0.1"
@@ -46,7 +50,9 @@ data:
   PRODUCTION: "true"
   APP_ENV: "production"
   LOG_LEVEL: "info"
-  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318"
+  K8S_IMAGE_CHECK_ENABLED: "true"
+  IMAGE_PUBLISH_REQUIRE_PROVENANCE: "true"
   OTEL_SERVICE_NAME: "tenant-unit"
   OTEL_TRACES_SAMPLER: "parentbased_traceratio"
   OTEL_TRACES_SAMPLER_ARG: "0.1"
@@ -65,7 +71,9 @@ data:
   APP_ENV: "production"
   LOG_LEVEL: "info"
   OBJECT_STORE_BUCKET: "media"
-  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318"
+  K8S_IMAGE_CHECK_ENABLED: "true"
+  IMAGE_PUBLISH_REQUIRE_PROVENANCE: "true"
   OTEL_SERVICE_NAME: "collaboration-unit"
   OTEL_TRACES_SAMPLER: "parentbased_traceratio"
   OTEL_TRACES_SAMPLER_ARG: "0.1"
@@ -83,7 +91,9 @@ data:
   PRODUCTION: "true"
   APP_ENV: "production"
   LOG_LEVEL: "info"
-  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318"
+  K8S_IMAGE_CHECK_ENABLED: "true"
+  IMAGE_PUBLISH_REQUIRE_PROVENANCE: "true"
   OTEL_SERVICE_NAME: "platform-io-unit"
   OTEL_TRACES_SAMPLER: "parentbased_traceratio"
   OTEL_TRACES_SAMPLER_ARG: "0.1"
@@ -101,7 +111,9 @@ data:
   PRODUCTION: "true"
   APP_ENV: "production"
   LOG_LEVEL: "info"
-  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318"
+  K8S_IMAGE_CHECK_ENABLED: "true"
+  IMAGE_PUBLISH_REQUIRE_PROVENANCE: "true"
   OTEL_SERVICE_NAME: "usage-observability"
   OTEL_TRACES_SAMPLER: "parentbased_traceratio"
   OTEL_TRACES_SAMPLER_ARG: "0.1"
@@ -119,7 +131,9 @@ data:
   PRODUCTION: "true"
   APP_ENV: "production"
   LOG_LEVEL: "info"
-  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318"
+  K8S_IMAGE_CHECK_ENABLED: "true"
+  IMAGE_PUBLISH_REQUIRE_PROVENANCE: "true"
   OTEL_SERVICE_NAME: "compute-api"
   OTEL_TRACES_SAMPLER: "parentbased_traceratio"
   OTEL_TRACES_SAMPLER_ARG: "0.1"
@@ -137,7 +151,9 @@ data:
   PRODUCTION: "true"
   APP_ENV: "production"
   LOG_LEVEL: "info"
-  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318"
+  K8S_IMAGE_CHECK_ENABLED: "true"
+  IMAGE_PUBLISH_REQUIRE_PROVENANCE: "true"
   OTEL_SERVICE_NAME: "compute-control-plane"
   OTEL_TRACES_SAMPLER: "parentbased_traceratio"
   OTEL_TRACES_SAMPLER_ARG: "0.1"
@@ -149,7 +165,7 @@ metadata:
   name: platform-gateway
   labels: {app: platform-gateway}
 spec:
-  replicas: 1
+  replicas: 2
   selector: {matchLabels: {app: platform-gateway}}
   template:
     metadata:
@@ -190,7 +206,7 @@ metadata:
   name: iam-unit
   labels: {app: iam-unit}
 spec:
-  replicas: 1
+  replicas: 2
   selector: {matchLabels: {app: iam-unit}}
   template:
     metadata:
@@ -231,7 +247,7 @@ metadata:
   name: tenant-unit
   labels: {app: tenant-unit}
 spec:
-  replicas: 1
+  replicas: 2
   selector: {matchLabels: {app: tenant-unit}}
   template:
     metadata:
@@ -272,7 +288,7 @@ metadata:
   name: collaboration-unit
   labels: {app: collaboration-unit}
 spec:
-  replicas: 1
+  replicas: 2
   selector: {matchLabels: {app: collaboration-unit}}
   template:
     metadata:
@@ -336,7 +352,7 @@ metadata:
   name: platform-io-unit
   labels: {app: platform-io-unit}
 spec:
-  replicas: 1
+  replicas: 2
   selector: {matchLabels: {app: platform-io-unit}}
   template:
     metadata:
@@ -377,7 +393,7 @@ metadata:
   name: usage-observability
   labels: {app: usage-observability}
 spec:
-  replicas: 1
+  replicas: 2
   selector: {matchLabels: {app: usage-observability}}
   template:
     metadata:
@@ -418,7 +434,7 @@ metadata:
   name: compute-api
   labels: {app: compute-api}
 spec:
-  replicas: 1
+  replicas: 2
   selector: {matchLabels: {app: compute-api}}
   template:
     metadata:
@@ -459,13 +475,16 @@ metadata:
   name: compute-control-plane
   labels: {app: compute-control-plane}
 spec:
-  replicas: 1
+  replicas: 2
   selector: {matchLabels: {app: compute-control-plane}}
   template:
     metadata:
       labels: {app: compute-control-plane}
     spec:
-      automountServiceAccountToken: false
+      # Only compute-control-plane talks to the Kubernetes API, so only it mounts a
+      # projected SA token; every other unit keeps automount disabled. (P0-4)
+      serviceAccountName: compute-control-plane
+      automountServiceAccountToken: true
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -628,7 +647,7 @@ metadata:
   name: platform-gateway
 spec:
   scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: platform-gateway}
-  minReplicas: 1
+  minReplicas: 2
   maxReplicas: 4
   metrics:
     - type: Resource
@@ -640,7 +659,7 @@ metadata:
   name: iam-unit
 spec:
   scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: iam-unit}
-  minReplicas: 1
+  minReplicas: 2
   maxReplicas: 4
   metrics:
     - type: Resource
@@ -652,7 +671,7 @@ metadata:
   name: tenant-unit
 spec:
   scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: tenant-unit}
-  minReplicas: 1
+  minReplicas: 2
   maxReplicas: 4
   metrics:
     - type: Resource
@@ -664,7 +683,7 @@ metadata:
   name: collaboration-unit
 spec:
   scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: collaboration-unit}
-  minReplicas: 1
+  minReplicas: 2
   maxReplicas: 4
   metrics:
     - type: Resource
@@ -676,7 +695,7 @@ metadata:
   name: platform-io-unit
 spec:
   scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: platform-io-unit}
-  minReplicas: 1
+  minReplicas: 2
   maxReplicas: 4
   metrics:
     - type: Resource
@@ -688,7 +707,7 @@ metadata:
   name: usage-observability
 spec:
   scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: usage-observability}
-  minReplicas: 1
+  minReplicas: 2
   maxReplicas: 4
   metrics:
     - type: Resource
@@ -700,7 +719,7 @@ metadata:
   name: compute-api
 spec:
   scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: compute-api}
-  minReplicas: 1
+  minReplicas: 2
   maxReplicas: 4
   metrics:
     - type: Resource
@@ -712,8 +731,89 @@ metadata:
   name: compute-control-plane
 spec:
   scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: compute-control-plane}
-  minReplicas: 1
+  minReplicas: 2
   maxReplicas: 4
   metrics:
     - type: Resource
       resource: {name: cpu, target: {type: Utilization, averageUtilization: 70}}
+---
+# P0-4: dedicated identity for the only unit that touches the Kubernetes API.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: compute-control-plane
+  namespace: nexuspaas
+  labels: {app: compute-control-plane}
+automountServiceAccountToken: false
+---
+# Least-privilege, wildcard-free ClusterRole enumerating exactly the resources and
+# verbs the cluster client uses (namespaces are cluster-scoped and workloads span
+# many project namespaces, so this must be cluster-scoped). (P0-4)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: compute-control-plane
+  labels: {app: compute-control-plane}
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, create]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, create, delete]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [configmaps, services]
+    verbs: [create, list, delete]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [list]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [create, list, delete]
+  - apiGroups: [apps]
+    resources: [statefulsets]
+    verbs: [list, delete]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, create, delete]
+  - apiGroups: [batch]
+    resources: [cronjobs]
+    verbs: [get, create, update]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [create]
+  - apiGroups: [scheduling.k8s.io]
+    resources: [priorityclasses]
+    verbs: [get, create, update, delete]
+  - apiGroups: [batch.volcano.sh]
+    resources: [jobs]
+    verbs: [create, list, delete]
+  - apiGroups: [scheduling.volcano.sh]
+    resources: [podgroups, queues]
+    verbs: [list, delete]
+  - apiGroups: [resource.k8s.io]
+    resources: [resourceclaims, resourceclaimtemplates]
+    verbs: [create, list, delete]
+  - apiGroups: [longhorn.io]
+    resources: [volumes, snapshots]
+    verbs: [get, list, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: compute-control-plane
+  labels: {app: compute-control-plane}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: compute-control-plane
+subjects:
+  - kind: ServiceAccount
+    name: compute-control-plane
+    namespace: nexuspaas

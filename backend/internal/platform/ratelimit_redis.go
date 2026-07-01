@@ -33,12 +33,16 @@ end
 return n`)
 
 func (l *RedisLimiter) Allow(key string) bool {
+	return l.AllowWithin(key, l.limit, l.window)
+}
+
+func (l *RedisLimiter) AllowWithin(key string, limit int, window time.Duration) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	n, err := incrWindowScript.Run(ctx, l.rdb, []string{"rate:" + key}, l.window.Milliseconds()).Int64()
+	n, err := incrWindowScript.Run(ctx, l.rdb, []string{"rate:" + key}, window.Milliseconds()).Int64()
 	if err != nil {
 		slog.Warn("redis rate limiter unavailable; allowing request", "error", err)
 		return true
 	}
-	return n <= int64(l.limit)
+	return n <= int64(limit)
 }
