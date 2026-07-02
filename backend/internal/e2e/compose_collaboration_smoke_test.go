@@ -471,7 +471,7 @@ func (s *composeSmoke) seedAuthorizationPolicies(step *composeSmokeStep) error {
 			"obj": "platform-runtime:service-registry",
 			"act": "platform_runtime_service_registry",
 		},
-		headers: map[string]string{"X-API-Key": s.serviceKey},
+		headers: map[string]string{"X-API-Key": s.serviceKey, "X-Service-Name": "platform-gateway", "X-Service-Key": s.serviceKey},
 		want:    http.StatusOK,
 		step:    step,
 		hop:     "policy service enforces seeded raw policy",
@@ -538,7 +538,7 @@ func (s *composeSmoke) assertPolicyAllowed(step *composeSmokeStep, subject strin
 			"obj": route.Resource,
 			"act": route.OperationID,
 		},
-		headers: map[string]string{"X-API-Key": s.serviceKey},
+		headers: map[string]string{"X-API-Key": s.serviceKey, "X-Service-Name": "platform-gateway", "X-Service-Key": s.serviceKey},
 		want:    http.StatusOK,
 		step:    step,
 		hop:     "policy service enforces workflow route policy",
@@ -774,7 +774,7 @@ func (s *composeSmoke) submitJob(step *composeSmokeStep, ids identityIDs, jobID 
 			"required_memory": 1024,
 			"e2e_run_id":      s.runID,
 		},
-		headers: map[string]string{"X-API-Key": s.apiKey},
+		headers: map[string]string{"X-API-Key": s.apiKey, "Idempotency-Key": "idem-" + s.runID + "-" + sanitizeID(jobID)},
 		want:    want,
 		step:    step,
 		hop:     "workload -> scheduler-quota admission",
@@ -798,7 +798,7 @@ func (s *composeSmoke) assertSchedulerOwnerReadContracts(step *composeSmokeStep)
 			"required_memory": 1024,
 			"e2e_run_id":      s.runID,
 		},
-		headers: map[string]string{"X-API-Key": s.serviceKey, "X-Service-Key": s.serviceKey},
+		headers: map[string]string{"X-API-Key": s.serviceKey, "X-Service-Name": "platform-gateway", "X-Service-Key": s.serviceKey},
 		want:    http.StatusOK,
 		step:    step,
 		hop:     "scheduler -> org-project/workload owner-read",
@@ -835,7 +835,7 @@ func (s *composeSmoke) assertSchedulerOwnerReadContracts(step *composeSmokeStep)
 			"required_memory": 1024,
 			"e2e_run_id":      s.runID,
 		},
-		headers: map[string]string{"X-API-Key": "wrong-" + s.serviceKey, "X-Service-Key": "wrong-" + s.serviceKey},
+		headers: map[string]string{"X-API-Key": "wrong-" + s.serviceKey, "X-Service-Name": "platform-gateway", "X-Service-Key": "wrong-" + s.serviceKey},
 		want:    http.StatusUnauthorized,
 		step:    step,
 		hop:     "bad service credential -> scheduler internal route",
@@ -852,7 +852,7 @@ func (s *composeSmoke) assertSchedulerOwnerReadContracts(step *composeSmokeStep)
 		service: orgProjectService,
 		method:  http.MethodGet,
 		path:    "/internal/org-project/projects/" + projectID,
-		headers: map[string]string{"X-Service-Key": "wrong-" + s.serviceKey},
+		headers: map[string]string{"X-Service-Name": "platform-gateway", "X-Service-Key": "wrong-" + s.serviceKey},
 		want:    http.StatusUnauthorized,
 		step:    step,
 		hop:     "bad service credential -> org-project owner-read",
@@ -878,8 +878,9 @@ func (s *composeSmoke) assertStorageMountPlan(step *composeSmokeStep) error {
 		path:    "/internal/storage/projects/" + ids.projectID + "/mount-plan",
 		body:    bytes.NewReader(body),
 		headers: map[string]string{
-			"Content-Type":  "application/json",
-			"X-Service-Key": s.serviceKey,
+			"Content-Type":   "application/json",
+			"X-Service-Name": "platform-gateway",
+			"X-Service-Key":  s.serviceKey,
 		},
 		want: http.StatusOK,
 		step: step,
@@ -910,8 +911,9 @@ func (s *composeSmoke) assertStorageMountPlan(step *composeSmokeStep) error {
 		path:    "/internal/storage/projects/" + ids.projectID + "/mount-plan",
 		body:    bytes.NewReader(body),
 		headers: map[string]string{
-			"Content-Type":  "application/json",
-			"X-Service-Key": "wrong-" + s.serviceKey,
+			"Content-Type":   "application/json",
+			"X-Service-Name": "platform-gateway",
+			"X-Service-Key":  "wrong-" + s.serviceKey,
 		},
 		want: http.StatusUnauthorized,
 		step: step,
@@ -1139,7 +1141,12 @@ func (s *composeSmoke) do(req composeRequest) (composeHTTPResponse, error) {
 	}
 	httpReq.Header.Set("X-Request-ID", "req-"+s.runID)
 	httpReq.Header.Set("X-Trace-ID", "trace-"+s.runID)
-	httpReq.Header.Set("Idempotency-Key", "idem-"+s.runID+"-"+sanitizeID(req.service+req.method+req.path))
+	// Route-derived default only; steps that issue distinct logical requests on
+	// the same route must supply their own Idempotency-Key or the server will
+	// (correctly) reject the second body as a key conflict.
+	if httpReq.Header.Get("Idempotency-Key") == "" {
+		httpReq.Header.Set("Idempotency-Key", "idem-"+s.runID+"-"+sanitizeID(req.service+req.method+req.path))
+	}
 	resp, err := s.client.Do(httpReq)
 	if err != nil {
 		req.step.HTTP = append(req.step.HTTP, composeSmokeHTTPHop{Service: req.service, Method: req.method, Path: req.path, Status: 0, Hop: req.hop})

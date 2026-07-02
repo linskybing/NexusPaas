@@ -18,7 +18,20 @@ dated bullets below. No new external GA evidence added this pass._
   passed the `beta-rc` gate and a **local** RKE2 staging rollout/rollback
   rehearsal (`localhost:5000` registry, 15 deployments). See
   evidence id `2026-06-20-v1-launch-gap-gate`.
-- **V1 external production launch: OPEN.** Still unproven: a real external image
+- **V1 production launch: LAUNCHED 2026-07-02 (owner decision, ADR 0008).**
+  The full official gate `production-beta-live-rehearsal.sh` ran green on the
+  **owner-accepted kind-tier staging cluster** with a **genuine external
+  registry (ghcr.io)**: crane promote + digest-pinned candidate + trivy-clean
+  scan, all 12 Secrets present, live migration apply/validate Jobs, 8-unit
+  rollout, 15-of-15 registry union smoke, 16/16 per-unit previous-image
+  rollback/redeploy (`docs/acceptance/evidence/2026-07-02-v1-launch-rehearsal-report.md`).
+  P0.5 product build dispatch is Accepted-with-mitigation per ADR 0008. This is
+  **not external-staging proof**: the external-cluster rerun stays a tracked
+  post-launch follow-up, and the row wording below keeps the historical
+  "external launch OPEN" caveats for everything not covered by the owner
+  decision.
+- **Historical (pre-launch) external-launch gap statement, retained for
+  context:** Still unproven before 2026-07-02: a real external image
   registry (Harbor is only an isolated `harbor-system` foundation, never used
   for external promotion/rollback), 8-unit topology deploy/smoke, previous-image
   rollback per unit, live external staging Secret readiness, and live staging DB

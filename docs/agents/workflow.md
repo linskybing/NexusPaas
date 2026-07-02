@@ -54,6 +54,14 @@ For GA acceptance-criteria clearance, work in this order:
 must be updated only after matching evidence exists. Local, static, fixture, or
 single-cluster evidence must not be described as live external GA proof.
 
+**Owner-decision exception (ADR 0008, 2026-07-02):** the project owner may
+close a launch row on non-external evidence only through an explicit, recorded
+launch decision. Such rows must cite ADR 0008, keep their true evidence scope
+visible (e.g. "kind-tier, owner-accepted staging"), and must never be worded as
+external proof. The V1 launch sign-off uses this exception: staging =
+owner-accepted kind cluster; registry evidence (ghcr.io promote/rollback) is
+genuinely external.
+
 ## Status Values
 
 Use only these status values:

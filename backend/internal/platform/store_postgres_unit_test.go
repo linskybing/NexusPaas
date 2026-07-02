@@ -615,8 +615,8 @@ func TestNewBackingResourcesRelaysPostgresOutboxToRedisWhenBothAreConfigured(t *
 	}
 
 	isolated := NewApp(Config{ServiceName: "identity-service"}, backing.Options...)
-	if got := isolated.MaintenanceTaskNames(); len(got) != 0 {
-		t.Fatalf("isolated maintenance tasks = %#v, want none", got)
+	if got, want := isolated.MaintenanceTaskNames(), []string{"event-outbox-relay"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("isolated maintenance tasks = %#v, want %#v (outbox relay is process-local)", got, want)
 	}
 }
 
