@@ -81,6 +81,17 @@ func (s *minioObjectStore) Put(ctx context.Context, key string, body []byte, con
 	return nil
 }
 
+func (s *minioObjectStore) PutStream(ctx context.Context, key string, body io.Reader, size int64, contentType string) error {
+	if key == "" {
+		return fmt.Errorf("object key is required")
+	}
+	_, err := s.client.PutObject(ctx, s.bucket, key, body, size, minio.PutObjectOptions{ContentType: contentType})
+	if err != nil {
+		return fmt.Errorf("put object stream: %w", err)
+	}
+	return nil
+}
+
 func (s *minioObjectStore) Get(ctx context.Context, key string) ([]byte, string, bool, error) {
 	obj, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
 	if err != nil {

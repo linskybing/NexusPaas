@@ -14,6 +14,7 @@ import (
 
 	"github.com/linskybing/nexuspaas/backend/internal/contracts"
 	"github.com/linskybing/nexuspaas/backend/internal/platform"
+	storageservice "github.com/linskybing/nexuspaas/backend/internal/services/storage"
 )
 
 func TestImageRegistryCatalogRequestsAndBuildWorkflow(t *testing.T) {
@@ -441,7 +442,7 @@ func TestImageRegistryBuildAndListRoutesSurfaceHarborDegradedAdditively(t *testi
 	assertImageMapValue(t, data, "status", "queued")
 
 	storageBuildRoute := platform.RouteSpec{Method: http.MethodPost, OperationID: "imageBuildFromStorage"}
-	storageBuildReq := imageRequest(http.MethodPost, "/api/v1/images/build/from-storage", imageBuildBody("build-harbor-storage-down", "P1", "registry.local/team/app:storage-down"), "U1")
+	storageBuildReq := imageRequest(http.MethodPost, "/api/v1/images/build/from-storage", imageStorageBuildBody("build-harbor-storage-down", "P1", "registry.local/team/app:storage-down"), "U1")
 	code, data, degraded = startStorageImageBuild(app, storageBuildReq, storageBuildRoute)
 	assertImageStatus(t, code, data, http.StatusAccepted)
 	assertHarborDegraded(t, degraded)
@@ -902,7 +903,7 @@ func TestImageRegistryRequestAdministrationAndBuildTypes(t *testing.T) {
 	assertImageStatus(t, code, data, http.StatusAccepted)
 	assertImageMapValue(t, data, "build_type", "context")
 
-	storageBuild := imageRequest(http.MethodPost, "/api/v1/images/build/from-storage", imageBuildBody("storage-build", "P1", "registry.local/team/app:storage"), "U1")
+	storageBuild := imageRequest(http.MethodPost, "/api/v1/images/build/from-storage", imageStorageBuildBody("storage-build", "P1", "registry.local/team/app:storage"), "U1")
 	code, data, _ = startStorageImageBuild(app, storageBuild, platform.RouteSpec{})
 	assertImageStatus(t, code, data, http.StatusAccepted)
 	assertImageMapValue(t, data, "build_type", "storage")
@@ -1301,8 +1302,22 @@ func TestImageRegistryProjectionUpsertAndDelete(t *testing.T) {
 
 func newImageRegistryTestApp(t *testing.T) *platform.App {
 	t.Helper()
-	app := platform.NewApp(platform.Config{ServiceName: "all", HTTPAddr: ":0"})
+	// ServiceAPIKey lets the co-hosted build-source-access hop authenticate via
+	// the non-strict service-key fallback.
+	app := platform.NewApp(platform.Config{ServiceName: "all", HTTPAddr: ":0", ServiceAPIKey: "image-test-service-key"})
 	Register(app)
+	// from-storage builds consult storage-service's build-source-access
+	// contract; co-host it (spec registration wires the internal route into
+	// dispatch) and seed a project binding with a read-capable default policy
+	// so storage builds in these tests are authorized.
+	app.RegisterService(storageservice.Spec())
+	storageservice.Register(app)
+	createImageRecords(t, app, "storage-service:storage_bindings", []map[string]any{
+		{"id": "P1:PVC1", "project_id": "P1", "group_id": "G1", "pvc_id": "PVC1"},
+	})
+	createImageRecords(t, app, "storage-service:storage_access_policies", []map[string]any{
+		{"id": "G1:PVC1", "group_id": "G1", "pvc_id": "PVC1", "default_permission": "read_write"},
+	})
 	createImageRecords(t, app, identityUsersResource, []map[string]any{
 		{"id": "ADMIN", "username": "admin", "capabilities": map[string]any{"adminPanel": true}},
 		{"id": "U1", "username": "alice"},
@@ -1341,6 +1356,10 @@ func createImageRecords(t *testing.T, app *platform.App, resource string, rows [
 
 func imageBuildBody(id, projectID, imageRef string) string {
 	return fmt.Sprintf(`{"id":%q,"project_id":%q,"image_reference":%q,"cpu_cores":2,"memory_gib":4,"max_build_seconds":600}`, id, projectID, imageRef)
+}
+
+func imageStorageBuildBody(id, projectID, imageRef string) string {
+	return fmt.Sprintf(`{"id":%q,"project_id":%q,"image_reference":%q,"cpu_cores":2,"memory_gib":4,"max_build_seconds":600,"storage_path":"images/context.tar"}`, id, projectID, imageRef)
 }
 
 func updateImageProject(t *testing.T, app *platform.App, projectID string, data map[string]any) {

@@ -87,6 +87,7 @@ func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodPut, "/api/v1/image-requests/{id}/approve", approveImageRequest)
 	app.RegisterCustomHandler(http.MethodPut, "/api/v1/image-requests/{id}/reject", rejectImageRequest)
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/images/build", startImageBuild)
+	app.RegisterCustomHandler(http.MethodPost, pathImageBuildContextUpload, uploadBuildContext)
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/images/build/from-storage", startStorageImageBuild)
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/images/build/dockerfile", startDockerfileImageBuild)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/images/build/{buildId}/logs", getBuildLogs)
@@ -649,7 +650,27 @@ func createBuild(app *platform.App, r *http.Request, route platform.RouteSpec, b
 	if status != 0 {
 		return status, data, nil
 	}
+	contextKey, contextKeyDigest, status, data := imageBuildContextKeyDigest(app, r, payload)
+	if status != 0 {
+		return status, data, nil
+	}
+	if contextKeyDigest != "" {
+		contextArchiveDigest = contextKeyDigest
+	}
 	dockerfileSHA256, contextRef, storagePath, buildArgs := imageBuildSourceFingerprint(payload)
+	if buildType == "storage" {
+		if storagePath == "" {
+			return http.StatusBadRequest, shared.ErrorData("storage_path is required for from-storage builds"), nil
+		}
+		decision, err := newBuildSourceAccessResolver(app)(r.Context(), projectID, buildSourceAccessRequest{UserID: userID, StoragePath: storagePath})
+		if err != nil {
+			// Fail closed: an unverifiable source grant must not start a build.
+			return http.StatusInternalServerError, shared.ErrorData("build source access check failed"), nil
+		}
+		if !decision.Allowed {
+			return http.StatusForbidden, shared.ErrorData("storage source access denied"), nil
+		}
+	}
 	keyHash, fingerprintHash := imageBuildIdempotencyHashes(r, imageBuildIdempotencyFingerprint{
 		RequestedID:          requestedID,
 		UserID:               userID,
@@ -661,6 +682,7 @@ func createBuild(app *platform.App, r *http.Request, route platform.RouteSpec, b
 		MaxBuildTimeSeconds:  resources.maxBuildTimeSeconds,
 		DockerfileSHA256:     dockerfileSHA256,
 		ContextRef:           contextRef,
+		ContextKey:           contextKey,
 		ContextArchiveDigest: contextArchiveDigest,
 		StoragePath:          storagePath,
 		BuildArgs:            buildArgs,
@@ -697,6 +719,9 @@ func createBuild(app *platform.App, r *http.Request, route platform.RouteSpec, b
 	}
 	if contextArchiveDigest != "" {
 		build["source_digest"] = contextArchiveDigest
+	}
+	if contextKey != "" {
+		build["context_key"] = contextKey
 	}
 	if keyHash != "" {
 		build[internalImageBuildIdempotencyKeyHash] = keyHash
@@ -795,17 +820,16 @@ type imageBuildIdempotencyFingerprint struct {
 	// deterministically. (P0-2)
 	DockerfileSHA256     string         `json:"dockerfile_sha256"`
 	ContextRef           string         `json:"context_ref"`
+	ContextKey           string         `json:"context_key"`
 	ContextArchiveDigest string         `json:"context_archive_digest"`
 	StoragePath          string         `json:"storage_path"`
 	BuildArgs            map[string]any `json:"build_args"`
 }
 
 // imageBuildContextArchiveDigest validates an optional inline build-context archive
-// and returns its deterministic content digest. The archive is carried as base64 in
-// the JSON body — an interim transport until the multipart + object-store staging
-// path lands.
-// ponytail: base64-in-JSON, bounded by maxBuildContextArchiveBytes; upgrade to a
-// streamed multipart upload + object-store staging when large contexts are needed.
+// and returns its deterministic content digest. The base64-in-JSON transport is
+// retained for small contexts and backward compatibility; large contexts use the
+// multipart upload endpoint + context_key staging path instead.
 func imageBuildContextArchiveDigest(payload map[string]any) (string, int, any) {
 	encoded := strings.TrimSpace(shared.TextValue(payload, "context_archive", "contextArchive"))
 	if encoded == "" {

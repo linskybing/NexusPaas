@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"fmt"
+	"io"
 	"sort"
 	"sync"
 )
@@ -17,6 +18,11 @@ import (
 type ObjectStore interface {
 	// Put writes body under key, overwriting any existing object.
 	Put(ctx context.Context, key string, body []byte, contentType string) error
+	// PutStream writes body from a reader under key, overwriting any existing
+	// object. size is the exact byte count when known, or -1 to let the backend
+	// determine it. Callers own bounding the reader (e.g. http.MaxBytesReader /
+	// io.LimitReader) — the store trusts the stream it is handed.
+	PutStream(ctx context.Context, key string, body io.Reader, size int64, contentType string) error
 	// Get returns the object body and content type. found is false when the key
 	// does not exist; err is only non-nil on a transport/backend failure.
 	Get(ctx context.Context, key string) (body []byte, contentType string, found bool, err error)
@@ -61,6 +67,14 @@ func (s *MemoryObjectStore) Put(_ context.Context, key string, body []byte, cont
 	defer s.mu.Unlock()
 	s.objects[key] = memoryObject{body: append([]byte(nil), body...), contentType: contentType}
 	return nil
+}
+
+func (s *MemoryObjectStore) PutStream(ctx context.Context, key string, body io.Reader, _ int64, contentType string) error {
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return fmt.Errorf("read object stream: %w", err)
+	}
+	return s.Put(ctx, key, data, contentType)
 }
 
 func (s *MemoryObjectStore) Get(_ context.Context, key string) ([]byte, string, bool, error) {

@@ -17,10 +17,10 @@
     "image_reference",
     "cpu_cores",
     "memory_gib",
-    "max_build_time_seconds"
+    "max_build_time_seconds",
+    "storage_path"
   ],
   "optional_request_fields": [
-    "storage_path",
     "tag",
     "registry",
     "repository",
