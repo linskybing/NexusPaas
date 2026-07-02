@@ -2,6 +2,15 @@
 
 Date: 2026-06-30
 
+_Re-verified 2026-07-01: archive parsing/validation (path traversal,
+symlink/hardlink, zip-bomb, file-count/depth/length limits, deterministic
+digest) and source-aware idempotency fingerprinting are now implemented and
+merged (`imageregistry/buildcontext.go`, `imageregistry/handler.go`);
+corrections are marked inline below with "(2026-07-01 更新/已解決)". HPC
+storage findings (§D) and build execution/dispatch (BuildKit/Tekton/Harbor
+push/SBOM/scan/sign, §B/§E/§F) are unchanged by this pass and remain
+accurate._
+
 This audit cross-checks documentation, handlers, service code, fixtures, tests,
 Kubernetes manifests, and deployment/security configuration. It deliberately
 does not treat `references/CSCC_AI_Platform_Backend/**` as product
@@ -14,14 +23,21 @@ implementation.
    描述加上 local/static evidence，不是完整 production pipeline。
 2. `POST /api/v1/images/build`、`/from-storage`、`/dockerfile` 都已註冊，但
    handler 只進入同一個 `createBuild`，解 JSON body 後建立 `queued` metadata。
-3. 目前沒有 tar.gz/zip multipart upload、archive parsing、Dockerfile context
-   unpack、object-storage build-context upload、BuildKit/Tekton job dispatch、
-   Harbor push、SBOM/scan/sign/attestation 實際狀態轉移。
-4. Dockerfile/context/storage_path/build_args 在 API fixture 中是 optional
-   contract 欄位，但 `createBuild` 沒有保存、hash、驗證或派工使用這些 source。
-5. image build idempotency fingerprint 只含 requested id、user、build type、
-   project、image reference、CPU、memory、timeout，沒有包含 Dockerfile 內容、
-   archive/context hash、storage object/path、build args、source revision/checksum。
+3. （2026-07-01 更新）現在有 tar.gz/zip archive parser（含 path traversal、
+   symlink/hardlink、zip bomb 防護與 deterministic digest，見
+   `imageregistry/buildcontext.go`），但傳輸方式是 JSON body 內的 base64
+   （非 multipart form upload），且沒有 object-storage build-context upload、
+   BuildKit/Tekton job dispatch、Harbor push、SBOM/scan/sign/attestation
+   實際狀態轉移。
+4. （2026-07-01 更新）Dockerfile/context/storage_path/build_args 在 API
+   fixture 中是 optional contract 欄位；`createBuild` 現在會 hash Dockerfile
+   內容、驗證並 hash context archive、保存 `source_digest`（見
+   `imageregistry/handler.go`），但仍未派工使用這些 source 執行實際 build。
+5. （2026-07-01 更新）image build idempotency fingerprint 現在包含 Dockerfile
+   SHA-256、context archive digest、context reference、storage path、
+   build args（見 `imageBuildIdempotencyFingerprint`），同一 `Idempotency-Key`
+   換不同 source 會回傳 `409 Conflict`。仍未包含 from-storage 參照物件本身的
+   content checksum（只有 path 字串）或獨立 source revision 欄位。
 6. HPC storage 有設計與 control-plane metadata：storage profiles、HPC
    StorageClass manifests、DataPlanePlan、CacheBinding、BenchmarkRecord、
    FastTransfer record 和 mover Job。
@@ -34,11 +50,11 @@ implementation.
 
 | 檢查項目 | 是否有文件宣稱 | 是否有程式碼實作 | 證據 | 結論 |
 |---|---|---|---|---|
-| tar.gz upload | 有。`image-build.md` 把 `tar.gz / zip upload` 列為 supported source。 | 沒有。image build handler 沒有 `ParseMultipartForm`/`FormFile`/archive parser。 | `docs/acceptance/image-build.md:13-23`; `backend/internal/services/imageregistry/handler.go:618-626` 只 `DecodeMapWithError`。 | 文件超前實作；不是已支援。 |
-| zip upload | 有。與 tar.gz 同列。 | 沒有。沒有 zip build-context extraction 或 zip bomb 防護。 | 同上；repo 搜尋未找到 image build 使用 `archive/zip`。 | 文件超前實作。 |
-| Dockerfile + build context | 有。CLI local Dockerfile + context 是 supported source，fixture 也有 `dockerfile`/`context`。 | 只有 API contract/metadata。handler 沒讀取或保存 Dockerfile/context。 | `docs/acceptance/image-build.md:17`; fixture `image-registry-dockerfile-build.json:22-47`; handler `createBuild` 只保存 build metadata at `handler.go:665-686`。 | 只有 API contract + metadata queue。 |
+| tar.gz upload | 有。`image-build.md` 把 `tar.gz / zip upload` 列為 supported source。 | （2026-07-01 更新）有基本 archive parser/validator（`imageregistry/buildcontext.go`：格式偵測、path traversal/symlink/hardlink/zip bomb 防護、file-count/depth/length 限制、deterministic digest），但透過 JSON body 內 base64 傳輸（interim `context_archive` 欄位），非 multipart form upload。 | `imageregistry/buildcontext.go`; `handler.go` `imageBuildContextArchiveDigest`。 | archive 解析/驗證已實作；multipart upload 仍未實作。 |
+| zip upload | 有。與 tar.gz 同列。 | （2026-07-01 更新）同上，zip 格式已由同一 validator 支援（含 zip bomb 防護），但同樣非 multipart upload。 | 同上。 | archive 解析/驗證已實作；multipart upload 仍未實作。 |
+| Dockerfile + build context | 有。CLI local Dockerfile + context 是 supported source，fixture 也有 `dockerfile`/`context`。 | （2026-07-01 更新）handler 現在會讀取並 hash Dockerfile 內容、驗證並 hash context archive，保存為 `source_digest`；但不做 Dockerfile 語法驗證，也不會實際使用這些 source 執行 build。 | `docs/acceptance/image-build.md:17`; fixture `image-registry-dockerfile-build.json:22-47`; `imageregistry/handler.go` `imageBuildSourceFingerprint`/`imageBuildContextArchiveDigest`。 | source 內容已 hash/驗證/保存；build 執行仍未實作。 |
 | from-storage build | 有。user/group/project storage 是 supported source，`/from-storage` route 存在。 | 只有 API contract/metadata。沒有 storage path permission、mount-plan lookup 或 object/PVC dispatch。 | Route at `handler.go:89`; `startStorageImageBuild` only calls `createBuild` at `handler.go:521-523`; fixture optional `storage_path` at `image-registry-storage-build.json:22-40`。 | 只有 metadata queue。 |
-| archive build context | 有。Build flow 寫「upload context to object storage」。 | 沒有。沒有 image-context object upload、source digest、checksum、unpack。 | `docs/acceptance/image-build.md:31-33`; handler stores no source fields at `handler.go:665-686`。 | 文件超前實作。 |
+| archive build context | 有。Build flow 寫「upload context to object storage」。 | （2026-07-01 更新）archive 結構驗證與 SHA-256 content digest 已實作並保存為 `source_digest`，但沒有 object-storage upload 或實際 unpack/extract 供 build 使用。 | `docs/acceptance/image-build.md:31-33`; `imageregistry/buildcontext.go`; `handler.go` 保存 `source_digest`。 | digest/驗證已實作；object-storage upload 與 unpack 仍未實作。 |
 | image build pipeline | 有。Build flow 描述 quota, upload/mount, Tekton, BuildKit, Harbor, SBOM, scan, sign, allow-list。 | 沒有 pipeline executor。只建立 `queued` row 和 `ImageBuildStarted` event。 | `docs/acceptance/image-build.md:24-41`; `handler.go:691-697` emits event and returns 202。 | 只有 metadata queue，不是 pipeline。 |
 | BuildKit | 有。Acceptance IMG-010 指 rootless BuildKit through Tekton。 | 沒有 BuildKit Job/PipelineRun dispatch。 | `docs/acceptance/image-build.md:67-68`; code search shows no product BuildKit executor in imageregistry。 | 文件/AC 超前實作。 |
 | Tekton | 有。Build flow 寫 Tekton PipelineRun。 | 沒有 PipelineRun manifest/controller。 | `docs/acceptance/image-build.md:31-34`; no Tekton dispatch in `imageregistry` handler/service。 | 文件/AC 超前實作。 |
@@ -48,15 +64,15 @@ implementation.
 | signing / attestation | 有。Build flow 和 IMG-018 要 signature/attestation。 | 沒有 Cosign/sign/attestation executor。queued record 只設 signature pending。 | `docs/acceptance/image-build.md:38,76`; `handler.go:678-681`。 | 只有 metadata/status placeholder。 |
 | allow-list enforcement | 有。IMG-019/020/021 要 digest allow-list。 | 部分實作，但不屬於 build completion pipeline。catalog publish guard 和 scheduler submit allow-list guard 是 local/static/in-code evidence。 | `docs/acceptance/gap-analysis.md:546-574`; `handler.go:96-98` owner-read allow-list contract; scheduler admission tests exist。 | 部分 admission guard；build 成功後自動 allow-list workflow 未完成。 |
 | multipart upload | 文件對 tar.gz/zip imply upload。 | image build 沒有。multipart 只出現在 media upload tests，不在 imageregistry build。 | `handler.go:623` JSON decode；no `ParseMultipartForm`/`FormFile` in image build path。 | 沒實作。 |
-| Dockerfile content handling | fixture optional `dockerfile`。 | handler 不讀、不驗證、不保存、不 hash。 | `image-registry-dockerfile-build.json:22-47`; `handler.go:618-697`。 | 只有 contract 欄位。 |
-| build context handling | fixture optional `context`。 | handler 不解析、不上傳、不 hash。 | `image-registry-context-build.json:22-45`; `handler.go:665-686`。 | 只有 contract 欄位。 |
+| Dockerfile content handling | fixture optional `dockerfile`。 | （2026-07-01 更新）handler 讀取並 SHA-256 hash Dockerfile 內容、納入 idempotency fingerprint；不做 Dockerfile 語法驗證，不保存原始內容。 | `image-registry-dockerfile-build.json:22-47`; `imageregistry/handler.go` `imageBuildSourceFingerprint`。 | 內容已 hash/納入 fingerprint；語法驗證與內容持久化仍未實作。 |
+| build context handling | fixture optional `context`。 | （2026-07-01 更新）`context` 參照本身只作為 fingerprint 欄位；若透過 `context_archive`（base64 JSON）提供實際 archive，則會被解析、驗證、hash。 | `image-registry-context-build.json:22-45`; `imageregistry/buildcontext.go`; `imageregistry/handler.go`。 | archive 內容路徑已實作；不上傳 object storage。 |
 | object storage upload | Build flow 宣稱 upload context to object storage。 | image build 沒有 object-store call。 | `docs/acceptance/image-build.md:31-33`; image build code only store record。 | 沒實作。 |
-| source digest / checksum | IMG-025 事件要 source type/resources/image digest/scan/allow-list decision；from-storage fixture有 source path。 | build idempotency/hash 不含 source checksum，record 初始 `image_digest=""`。 | `handler.go:647-656`, `handler.go:768-777`。 | 缺 source provenance。 |
+| source digest / checksum | IMG-025 事件要 source type/resources/image digest/scan/allow-list decision；from-storage fixture有 source path。 | （2026-07-01 更新）build idempotency fingerprint 現在含 source checksum（Dockerfile SHA-256、context archive digest），並保存為 `source_digest`；`image_digest`（最終 build 出的 image digest，非 source digest）初始仍是 `""`，因為尚無 build 執行器產出真正的 image。 | `imageregistry/handler.go` `imageBuildIdempotencyFingerprint`、`source_digest`。 | source content digest 已實作；最終 image digest 待 build 執行器落地。 |
 | unpack / extract | archive build implies extraction。 | 沒有。 | no tar/zip extractor in product image build path。 | 沒實作。 |
-| path traversal 防護 | archive extraction 必須具備。 | 沒有，因為沒有 archive extraction pipeline。 | no canonical archive entry validation in imageregistry。 | 啟用 archive 前的 P0/P1 安全缺口。 |
-| symlink / hardlink 防護 | archive extraction 必須具備。 | 沒有。 | no tar header link policy in imageregistry。 | 沒實作。 |
-| zip bomb 防護 | zip upload 必須具備。 | 沒有。 | no compressed/uncompressed ratio, max files, max entry size checks。 | 沒實作。 |
-| max archive size / max file count | archive upload 必須具備。 | 沒有。 | no image-build upload limiter or archive counter。 | 沒實作。 |
+| path traversal 防護 | archive extraction 必須具備。 | （2026-07-01 更新）已實作：拒絕絕對路徑與 `../` escape（`normalizeBuildContextPath`）。 | `imageregistry/buildcontext.go`。 | 已完成（結構驗證層；尚無 extraction pipeline 可套用）。 |
+| symlink / hardlink 防護 | archive extraction 必須具備。 | （2026-07-01 更新）已實作：tar symlink/hardlink 與 zip symlink 一律拒絕。 | `imageregistry/buildcontext.go`。 | 已完成。 |
+| zip bomb 防護 | zip upload 必須具備。 | （2026-07-01 更新）已實作：compressed 與 running uncompressed total 皆有上限（streaming 檢查，非信任 header）。 | `imageregistry/buildcontext.go`。 | 已完成。 |
+| max archive size / max file count | archive upload 必須具備。 | （2026-07-01 更新）已實作：max archive bytes、max file count、max path depth、max path length 皆有限制。 | `imageregistry/buildcontext.go`。 | 已完成。 |
 | build logs | 有 IMG-011。 | 部分。GET logs returns stored string with redaction; no live executor streaming/tailing。 | `handler.go:543-558`; redaction at `handler.go:561-583`; gap says no live logs at `gap-tracker.md:641-646`。 | local/static log response only。 |
 | cancel build | 有 IMG-012。 | 部分。DELETE sets metadata status `cancelled`; no executor/K8s termination。 | `handler.go:586-615`; gap says no live executor cancellation at `gap-tracker.md:591-600`。 | metadata cancellation only。 |
 | build status update/result digest | 有 IMG-015/017/018/019/025。 | queued create only; no completion controller writing digest or final scan/sign/SBOM states。 | `handler.go:675-681`。 | 只有 pending metadata。 |
@@ -65,11 +81,11 @@ implementation.
 
 | 偏離項目 | 文件說法 | 程式碼實際狀況 | 風險 | 建議 |
 |---|---|---|---|---|
-| Supported Build Sources 用詞暗示已支援 | `image-build.md` 列出 local Dockerfile+context、tar.gz/zip、user/group/project storage。 | 只有三個 REST route + fixtures；handler 不處理 source content。 | 使用者會以為可上傳 archive 或從 storage build，實際只得到 queued metadata。 | 把「Supported」改成「Target/Planned」或在同段加 Current implementation status。 |
+| Supported Build Sources 用詞暗示已支援 | `image-build.md` 列出 local Dockerfile+context、tar.gz/zip、user/group/project storage。 | （2026-07-01 更新）三個 REST route 存在；handler 現在會 hash/驗證 Dockerfile/context archive 內容（見 §A.4），但仍不會實際執行 build，只建立 queued metadata。 | 使用者會以為可上傳 archive 或從 storage build 並得到真正的 image，實際只得到已驗證的 queued metadata。 | 把「Supported」改成「Target/Planned」或在同段加 Current implementation status。 |
 | Build Flow 描述完整 pipeline | 文件列 Tekton/BuildKit/Harbor/SBOM/scan/sign/allow-list。 | 沒有 executor；`createBuild` 只建 record/event。 | production readiness 誤導；queued build 永遠不會產出 image digest。 | 在文件中標明 flow 是 GA target；新增 live executor 前不要宣稱完成。 |
-| Dockerfile fixture 讓人以為 handler 使用 Dockerfile | fixture request example 有 `dockerfile`、`context`、`build_args`。 | handler 忽略這些欄位。 | retry/provenance 和重現性錯誤；不同 Dockerfile 可被同一 idempotency key 視為同一 request。 | 實作前先在 create API 拒絕 source 欄位或保存/hash source metadata。 |
+| Dockerfile fixture 讓人以為 handler 使用 Dockerfile | fixture request example 有 `dockerfile`、`context`、`build_args`。 | （2026-07-01 更新）handler 現在會 hash 這些欄位並納入 idempotency fingerprint；不同 Dockerfile/context/build_args 換同一 key 會回傳 `409 Conflict`，不會回放舊 build。 | 已解決：retry/provenance 錯誤已修正（見 `imageBuildIdempotencyFingerprint`）；build 執行本身仍未實作。 | 已完成 fingerprint 修正；下一步是實作 build 執行器。 |
 | from-storage fixture 讓人以為有 storage permission | fixture optional `storage_path`。 | handler 不驗證 storage path、Project storage permission 或 mount-plan。 | 越權/錯誤語意風險，一旦 executor 補上容易漏做 trust-boundary。 | from-storage 必須接 storage service mount-plan/permission owner-read。 |
-| idempotency fingerprint 缺 build source | 文件/fixtures允許 dockerfile/context/storage_path/build_args。 | fingerprint 只含 request id/user/build type/project/image ref/resources/time。 | 同一 Idempotency-Key 重送不同 Dockerfile/context 可能回放舊 build；provenance 不可靠。 | fingerprint 加 source type、Dockerfile hash、archive/context hash、storage object/path/id、build args、revision、checksum。 |
+| idempotency fingerprint 缺 build source | 文件/fixtures允許 dockerfile/context/storage_path/build_args。 | （2026-07-01 更新）已解決：fingerprint 現在含 Dockerfile SHA-256、context archive digest、context reference、storage path、build args。 | 已解決；仍缺 from-storage 參照物件的 content checksum（只有 path 字串）與獨立 source revision 欄位。 | 補 from-storage content checksum 與 source revision 欄位。 |
 | logs/cancel 看似 build lifecycle | AC 要 logs/cancel release quota。 | logs 是 stored string；cancel 改 metadata `cancelled`。 | 使用者以為 live executor 被終止，實際資源不會被釋放，因為沒有 executor。 | 實作 executor controller 後再關閉 IMG-011/012/013。 |
 | SBOM/scan/sign 狀態 | 文件列為 acceptance criteria。 | 只有 `pending` 欄位和 publish presence guard；沒有生成/掃描/簽章。 | supply-chain policy 可能被當作完成。 | 以 Syft/Trivy/Cosign 或等價工具補 runtime transition。 |
 | Harbor evidence | gap/README 有 Harbor foundation 和 synthetic scan/sync evidence。 | build API 不 push Harbor；catalog sync 是 artifact read/sync，不是 build output。 | Harbor exists 被誤解為 image build pipeline ready。 | 把 Harbor foundation/sync 和 build push 分開標示。 |
@@ -125,14 +141,18 @@ feedback loop。
 - Image build API 如果被 production 暴露，會接受 build request 但只建立
   queued metadata，沒有真正 build/push/scan/sign。應立刻在文件/API response/UI
   標記為 metadata-only，或在 production 關閉 build capability。
-- Image build idempotency fingerprint 不含 source content。相同
-  `Idempotency-Key` 可對不同 Dockerfile/context/storage source 回放舊 request，
-  造成 retry semantic、reproducibility、source provenance 錯誤。
+- （2026-07-01 已解決）Image build idempotency fingerprint 現在含 source
+  content（Dockerfile SHA-256、context archive digest、context reference、
+  storage path、build args）。同一 `Idempotency-Key` 換不同 source 會回傳
+  `409 Conflict`，不再回放舊 request。
 
 ### P1
 
-- Archive upload 安全控制完全未實作。啟用 tar.gz/zip 前必須補 path
-  traversal、symlink/hardlink、zip bomb、max size、max file count、checksum。
+- （2026-07-01 已解決）Archive 結構安全控制已實作（path traversal、
+  symlink/hardlink/device/fifo/socket 拒絕、zip bomb 防護、max
+  size/file-count/depth/length 限制、deterministic digest，見
+  `imageregistry/buildcontext.go`）。仍缺：streamed multipart upload（目前是
+  base64-in-JSON）、object-storage staging、實際 unpack/extract 供 build 使用。
 - from-storage build 沒有 storage permission/mount-plan trust-boundary；實作
   executor 前必須先接 storage-service owner-read/permission model。
 - HPC mover 不是 HPC optimized；對大量小檔、大檔、跨節點或 object store
@@ -153,16 +173,20 @@ feedback loop。
 - 文件：把 `image-build.md` 的「Supported Build Sources」改成
  「GA Target Build Sources」或加一欄 Current implementation；README 不要讓
   Harbor foundation 被理解成 image build pipeline 已完成。
-- Archive upload pipeline：新增 multipart endpoint 或明確要求 JSON
-  object-storage reference；先計算 upload SHA-256，再用 streaming tar/zip
-  reader 做 canonical extraction；限制 compressed/uncompressed bytes、entry
-  count、entry path、file mode、symlink/hardlink policy。
-- Source provenance：build record 應保存 source type、Dockerfile digest、
-  context archive digest、storage object ID/path/version、build args digest、
-  source revision/checksum；event payload 也要帶 source digest。
-- Idempotency fingerprint：至少加入 source type、Dockerfile content hash、
-  context archive hash、storage path/object ID、build args、image reference、
-  project ID、requested user、CPU/memory/timeout、source revision/checksum。
+- （2026-07-01 部分已完成）Archive upload pipeline：canonical 結構驗證、
+  compressed/uncompressed bytes、entry count/path/depth/length、
+  symlink/hardlink policy、SHA-256 digest 已實作
+  （`imageregistry/buildcontext.go`）。仍待：新增 multipart endpoint（目前是
+  base64-in-JSON）、streaming tar/zip reader 做實際 extraction 供 build 使用。
+- （2026-07-01 部分已完成）Source provenance：build record 已保存 Dockerfile
+  digest、context archive digest、`source_digest`；event payload（`rec.Data`）
+  已透傳這些欄位。仍待：storage object ID/path/version 的 content checksum
+  （目前只有 path 字串）、獨立 source revision 欄位。
+- （2026-07-01 已完成）Idempotency fingerprint：已加入 Dockerfile content
+  hash、context archive hash、storage path、build args、image reference、
+  project ID、requested user、CPU/memory/timeout（見
+  `imageBuildIdempotencyFingerprint`）。仍待：from-storage object 的 content
+  checksum、source revision 欄位。
 - BuildKit/Tekton：新增 build dispatcher/controller，建立 PipelineRun/Job，
   綁定 resource quota、timeout、cancel、log streaming、final image digest、
   Harbor push result、failure reason。

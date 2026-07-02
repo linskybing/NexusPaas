@@ -6,6 +6,11 @@ parity re-confirmed against `references/CSCC_AI_Platform_Backend`, trace-matrix
 verify script green). Local-only — no live external GA evidence added. Bar:
 **Full GA** (`docs/acceptance/ga-checklist.md`), not just the v1 launch bar._
 
+_Updated: 2026-07-01 — archive-validation/idempotency-fingerprint entries
+corrected against merged code, and a repeatable CI/local ephemeral Harbor
+catalog-sync + health smoke lane landed and was executed live once. See the
+dated bullets below. No new external GA evidence added this pass._
+
 ## First Version (V1) Status — single source of truth
 
 - **V1 functional / Release-Candidate scope: PASSED (local).** `GATE-*`,
@@ -22,8 +27,11 @@ verify script green). Local-only — no live external GA evidence added. Bar:
   references in source/render only. Remote PR #33 evidence
   now shows external SonarCloud Code Analysis and Backend Quality Gate passing;
   that evidence does not close live P0.2-P0.5 or V1 external production launch.
-  It also does not close archive/source build handling, source-aware image-build
-  idempotency, or HPC storage data-plane optimization.
+  It also does not close full archive/source build handling (transport is still
+  base64-in-JSON and build dispatch/execution is unimplemented) or HPC storage
+  data-plane optimization; source-aware image-build idempotency and archive
+  parsing/validation security controls are now implemented (2026-07-01 update
+  below).
 - **Web UI (`WEB-*`) is out of V1 scope** (API/CLI-first). The first-party
   `frontend/` GUI was **removed in the backend-only phase (#36)** and is no
   longer in-repo, so every `WEB-*` / `frontend/`-referenced item below is
@@ -81,6 +89,32 @@ verify script green). Local-only — no live external GA evidence added. Bar:
   provenance/rotation, off-cluster DR, schema down-migration/restore, and the
   product image-build dispatch feature remain OPEN, so **V1 external production
   launch stays OPEN**.
+- 2026-07-01 IMG archive-validation + idempotency-fingerprint hardening
+  update: the image-build idempotency fingerprint now includes Dockerfile
+  SHA-256, context-archive digest, context reference, storage path, and build
+  args; a tar.gz/zip archive validator now enforces path-traversal,
+  symlink/hardlink, zip-bomb, and file-count/depth/length controls with a
+  deterministic content digest persisted as `source_digest`
+  (`imageregistry/buildcontext.go`, `imageregistry/handler.go`). This closes
+  the two code-level problems tracked in `blocker-ledger.md`. It does not
+  close streamed/multipart archive transport, from-storage permission checks,
+  or build dispatch/execution; V1 external production launch stays OPEN.
+- 2026-07-01 Harbor CI/local smoke lane update: a repeatable, one-command
+  Harbor install/seed/live-e2e lane (`backend/scripts/harbor-up.sh`,
+  `harbor-seed.sh`, `internal/e2e/live_harbor_catalog_sync_e2e_test.go`, and a
+  matching `integration-e2e` CI job step) now exercises the real Harbor
+  catalog-sync and health-check code paths against a real Harbor v2.15.1
+  instance, executed live once locally
+  (`docs/acceptance/evidence/2026-07-01-harbor-ci-local-smoke-report.md`).
+  This is additive to the prior one-off 2026-06-21 live RKE2 Harbor evidence
+  below, not a replacement of it, and is CI/local-ephemeral, not external. It
+  does not close external registry promotion/rollback, build execution, or
+  SBOM/signing/scan enforcement; V1 external production launch stays OPEN. A
+  real latent bug was also found and fixed during this pass: the catalog-sync
+  query sent `page_size` where Harbor's real API expects `pageSize`
+  (verified against `goharbor/harbor`'s swagger.yaml and confirmed live), which
+  silently truncated pagination to page 1 for any project with more artifacts
+  than Harbor's default page size.
 
 This is the live status tracker. The verbose narrative analysis lives in
 [`docs/acceptance/gap-analysis.md`](docs/acceptance/gap-analysis.md). Code-level
@@ -204,13 +238,18 @@ Reference: evidence id `2026-06-20-v1-launch-gap-gate`.
 2026-06-30 archive/image-build/HPC audit sync:
 `docs/acceptance/archive-image-build-hpc-storage-audit.md` is now the source of
 truth for the archive build and HPC storage maturity caveats. Current image-build
-routes and fixtures are **API-contract / metadata-only** evidence: they queue
-JSON build metadata but do not parse multipart tar.gz/zip, extract archives,
-persist or hash Dockerfile/context content, validate from-storage permissions,
-upload build contexts to object storage, dispatch Tekton/BuildKit, push build
-outputs to Harbor, or complete SBOM/scan/sign/attestation transitions. Archive
-security controls remain open: path traversal, symlink/hardlink policy, zip bomb
-controls, max archive size, max file count, and checksum validation. Current HPC
+routes now parse, validate, and hash the build context: a tar.gz/zip archive
+validator rejects path traversal, symlink/hardlink/device/fifo/socket entries,
+and zip bombs, and enforces file-count/path-depth/path-length limits with a
+deterministic content digest (`imageregistry/buildcontext.go`); Dockerfile
+content and context/storage references are hashed/persisted into the
+idempotency fingerprint and a `source_digest` field
+(`imageregistry/handler.go`). Still API-contract/metadata-only for everything
+downstream of validation: the archive is transported as base64 inside the JSON
+body (not multipart/streamed to object storage), from-storage permissions are
+not validated, and there is still no Tekton/BuildKit dispatch, no push of
+build outputs to Harbor, and no SBOM/scan/sign/attestation transitions.
+Current HPC
 storage maturity is **HPC storage planning layer** plus basic data-plane evidence:
 storage profiles, DataPlanePlan, CacheBinding, BenchmarkRecord, and FastTransfer
 records exist, but stage-in is `cp -a`, the mover is single-worker
@@ -624,10 +663,14 @@ contract evidence only. This is local image-build-create evidence only; it does
 not claim idempotency for deploy or all DATA-014
 commands, live Harbor/Tekton/BuildKit execution, SBOM/signing/scan enforcement,
 DATA GA, IMG GA, V1 external launch, or Full GA.
-Audit caveat: the current image-build idempotency fingerprint does not include
-source type, Dockerfile content hash, context/archive hash, storage path/object
-identity, build args, source revision, or checksum, so it must not be treated as
-source-provenance or reproducibility evidence.
+Audit caveat: the current image-build idempotency fingerprint now includes
+build type, Dockerfile content SHA-256, build-context-archive content digest,
+context reference, storage path, and build args
+(`imageBuildIdempotencyFingerprint`, `imageregistry/handler.go`), so a replayed
+`Idempotency-Key` against a different source now returns `409 Conflict`. It
+still does not include a content checksum of a referenced from-storage object
+(only its path string) or a distinct source-revision field, so it must not be
+treated as full source-provenance evidence for from-storage builds.
 
 2026-06-24 DATA-014 image build cancel idempotency local update:
 image-registry build cancel routes now have local deterministic optional
@@ -1017,6 +1060,12 @@ evidence, and bounded Harbor-to-catalog synchronization plus explicit per-tag
 delete-resync lifecycle are locally proven.
 Harbor is still not yet the external GA registry and has not been used for
 external image promotion, rollback, or 8-unit release evidence.
+A repeatable CI/local ephemeral Harbor catalog-sync + health smoke lane also
+now exists (`backend/scripts/harbor-up.sh`,
+`internal/e2e/live_harbor_catalog_sync_e2e_test.go`, evidence id
+`docs/acceptance/evidence/2026-07-01-harbor-ci-local-smoke-report.md`); it is
+likewise not external and does not prove promotion, rollback, or 8-unit
+release evidence.
 
 ## 5. Deferred (acknowledged, not GA-blocking by decision)
 

@@ -6,7 +6,7 @@ CI_GATE := ./scripts/ci-security-gate.sh
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build fmt-check vet lint test coverage check ci-local ci-quick ci-docker ci-security ci-sonar ci-all beta-rc perf-k6-core-read perf-k6-stream-credentials dra-up dra-down dra-e2e clean
+.PHONY: help build fmt-check vet lint test coverage check ci-local ci-quick ci-docker ci-security ci-sonar ci-all beta-rc perf-k6-core-read perf-k6-stream-credentials dra-up dra-down dra-e2e harbor-up harbor-seed harbor-down e2e-harbor clean
 
 help:
 	@printf '%s\n' 'Backend developer targets:'
@@ -29,6 +29,10 @@ help:
 	@printf '%s\n' '  make dra-up       Bring up a GPU-less kind cluster with dra-example-driver'
 	@printf '%s\n' '  make dra-e2e      Run the live DRA E2E against the fake-GPU cluster'
 	@printf '%s\n' '  make dra-down     Delete the dra-example-driver kind cluster'
+	@printf '%s\n' '  make harbor-up    Install a pinned local Harbor for live e2e testing'
+	@printf '%s\n' '  make harbor-seed  Seed Harbor with one project + pushed test image'
+	@printf '%s\n' '  make e2e-harbor   Run the live Harbor health + catalog-sync E2E'
+	@printf '%s\n' '  make harbor-down  Tear down the local Harbor instance'
 	@printf '%s\n' '  make clean        Remove local coverage output'
 
 build:
@@ -88,6 +92,31 @@ dra-down:
 
 dra-e2e:
 	TEST_LIVE_K8S_CONFIGFILE_DRA=1 $(GO) test -tags e2e ./internal/e2e -run '$(DRA_E2E_TEST)' -count=1 -v
+
+HARBOR_HTTP_PORT ?= 18080
+HARBOR_ADMIN_PASSWORD ?= Harbor12345
+HARBOR_SEED_PROJECT ?= nexuspaas-e2e
+HARBOR_SEED_REPOSITORY ?= smoke
+HARBOR_SEED_TAG ?= v1
+HARBOR_E2E_TEST ?= ^TestLiveHarborImageBuildE2E$$|^TestLiveHarborCatalogSyncE2E$$
+
+harbor-up:
+	$(BASH) scripts/harbor-up.sh
+
+harbor-seed:
+	$(BASH) scripts/harbor-seed.sh
+
+harbor-down:
+	$(BASH) scripts/harbor-down.sh
+
+e2e-harbor:
+	TEST_LIVE_HARBOR_IMAGE_BUILD=1 \
+	HARBOR_URL=http://127.0.0.1:$(HARBOR_HTTP_PORT) \
+	HARBOR_ADMIN_PASSWORD=$(HARBOR_ADMIN_PASSWORD) \
+	HARBOR_SEED_PROJECT=$(HARBOR_SEED_PROJECT) \
+	HARBOR_SEED_REPOSITORY=$(HARBOR_SEED_REPOSITORY) \
+	HARBOR_SEED_TAG=$(HARBOR_SEED_TAG) \
+	$(GO) test -tags e2e ./internal/e2e -run '$(HARBOR_E2E_TEST)' -count=1 -v
 
 clean:
 	rm -f $(COVERAGE_FILE)
