@@ -112,6 +112,9 @@ func TestIsolatedRuntimeRegistrationE2E(t *testing.T) {
 			"cluster-resource-collector",
 			"event-outbox-relay",
 			"gpu-usage-telemetry-collector",
+			"projection-reconcile:usage-observability-service:cluster_projection",
+			"projection-reconcile:usage-observability-service:dashboard_projection",
+			"projection-reconcile:usage-observability-service:gpu_usage_projection",
 			"resource-hours-collector",
 		},
 		[]string{
@@ -124,7 +127,10 @@ func TestIsolatedRuntimeRegistrationE2E(t *testing.T) {
 		},
 	)
 	assertRuntimeRegistration(t, authorizationPolicy,
-		[]string{"policy-data-sync"},
+		[]string{
+			"policy-data-sync",
+			"projection-reconcile:authorization-policy-service:identity_projection+authorization-policy-service:policy_data_projection",
+		},
 		[]string{http.MethodPost + " /api/v1/permissions/enforce"},
 		[]string{
 			http.MethodPost + " /api/v1/jobs",
@@ -147,6 +153,13 @@ func TestIsolatedRuntimeRegistrationE2E(t *testing.T) {
 			"plan-window-reaper",
 			"policy-data-sync",
 			"priority-class-sync",
+			"projection-reconcile:authorization-policy-service:identity_projection+authorization-policy-service:policy_data_projection",
+			"projection-reconcile:ide-service:ide_projection",
+			"projection-reconcile:image-registry-service:access_projection",
+			"projection-reconcile:request-notification-service:project_access_projection",
+			"projection-reconcile:usage-observability-service:cluster_projection",
+			"projection-reconcile:usage-observability-service:dashboard_projection",
+			"projection-reconcile:usage-observability-service:gpu_usage_projection",
 			"reservation-drift-detector",
 			"resource-hours-collector",
 			"resource-quota-reconciler",
