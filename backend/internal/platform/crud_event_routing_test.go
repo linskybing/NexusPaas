@@ -19,7 +19,7 @@ type fakeTxStore struct {
 	committed       []contracts.Event
 }
 
-// RunInTx makes fakeTxStore a transactionalScopedStore: it buffers Emit-ed events
+// RunInTx makes fakeTxStore a txRunner: it buffers Emit-ed events
 // and only "commits" them (records them) when the callback succeeds, mirroring the
 // Postgres adapter's commit-or-rollback of the outbox inserts.
 func (f *fakeTxStore) RunInTx(ctx context.Context, fn func(tx StoreTx) error) error {

@@ -183,14 +183,7 @@ func newFakeVolcanoDynamicClient(objects ...kruntime.Object) *dynamicfake.FakeDy
 	)
 }
 
-func volcanoStatusObject(
-	apiVersion string,
-	kind string,
-	namespace string,
-	name string,
-	jobID string,
-	phase string,
-) *unstructured.Unstructured {
+func volcanoStatusObject(apiVersion, kind, namespace, name, jobID, phase string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": apiVersion,
 		"kind":       kind,

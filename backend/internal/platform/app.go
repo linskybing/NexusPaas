@@ -19,7 +19,7 @@ type App struct {
 	Leases             contracts.WorkerLease
 	ObjectStore        ObjectStore
 	Revocations        RevocationStore
-	PDP                contracts.PolicyDecisionPoint
+	PDP                contracts.PolicyEnforcer
 	BackingChecker     BackingChecker
 	Cluster            *cluster.Client
 	Services           map[string]ServiceSpec
@@ -130,8 +130,8 @@ func withServiceRuntimeDefaults(cfg Config) Config {
 	return cfg
 }
 
-func defaultPDP(cfg Config) contracts.PolicyDecisionPoint {
-	pdp := contracts.PolicyDecisionPoint(AllowAllPDP{})
+func defaultPDP(cfg Config) contracts.PolicyEnforcer {
+	pdp := contracts.PolicyEnforcer(AllowAllPDP{})
 	if cfg.RequireAuth && strings.TrimSpace(cfg.AuthorizationPolicyURL) != "" {
 		pdp = NewRemotePDP(cfg.AuthorizationPolicyURL, cfg.AuthorizationPolicyAPIKey, cfg.AdapterTimeout, cfg)
 	}

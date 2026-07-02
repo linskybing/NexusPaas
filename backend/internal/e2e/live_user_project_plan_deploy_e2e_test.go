@@ -131,7 +131,7 @@ func TestLiveLDAPUserProjectPlanConfigDeployE2E(t *testing.T) {
 	memberResult := h.doJSON(orgProjectService, http.MethodPost, "/api/v1/projects/"+projectID+"/members", map[string]any{
 		"members": []map[string]any{{"user_id": created.ID, "role": "user"}},
 	}, h.apiKey, http.StatusOK).dataMap(t)
-	if got := fmt.Sprint(memberResult["succeeded"]); got != "1" {
+	if fmt.Sprint(memberResult["succeeded"]) != "1" {
 		t.Fatalf("project member assignment result = %#v, want succeeded=1", memberResult)
 	}
 

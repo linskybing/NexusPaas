@@ -18,3 +18,7 @@ ENV DISPLAY_SIZEW=1920 \
     SELKIES_METRICS_HTTP_PORT=9090
 
 EXPOSE 8080 9090
+
+# Restate the base image's non-root default user (ubuntu, uid 1000) so the
+# non-root contract is explicit in this Dockerfile rather than inherited.
+USER 1000

@@ -668,7 +668,7 @@ func (f *fakePostgresDB) Query(_ context.Context, query string, args ...any) (po
 	return rows, nil
 }
 
-func (f *fakePostgresDB) QueryRow(_ context.Context, query string, args ...any) postgresRow {
+func (f *fakePostgresDB) QueryRow(_ context.Context, query string, args ...any) postgresRowScanner {
 	f.recordQuery(query, args...)
 	if len(f.queryRows) == 0 {
 		return &fakePostgresRow{err: errors.New("unexpected QueryRow")}
@@ -749,7 +749,7 @@ func (r *fakePostgresRows) Scan(dest ...any) error {
 	return scanFakePostgresValues(dest, r.rows[r.index-1])
 }
 
-func scanFakePostgresValues(dest []any, values []any) error {
+func scanFakePostgresValues(dest, values []any) error {
 	if len(dest) != len(values) {
 		return fmt.Errorf("scan dest count=%d values=%d", len(dest), len(values))
 	}

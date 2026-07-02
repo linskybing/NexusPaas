@@ -157,7 +157,9 @@ func runMicroservice(ctx context.Context, deps microserviceDeps) int {
 	case <-ctx.Done():
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+	// WithoutCancel: shutdown must get its full drain window even when we got
+	// here because ctx itself was cancelled.
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cfg.ShutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("graceful shutdown failed", "error", err)

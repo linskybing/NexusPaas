@@ -228,7 +228,7 @@ func TestIdentityRequireAuthSelfServiceFallbackForPlatformAuthenticatedUser(t *t
 	platformReq.SetPathValue("id", "REMOTE")
 	code, data, _ = updateUserSettings(app, platformReq, platform.RouteSpec{})
 	assertIdentityStatus(t, code, data, http.StatusNotFound)
-	if got := data.(map[string]any)["message"]; got != msgUserNotFound {
+	if data.(map[string]any)["message"] != msgUserNotFound {
 		t.Fatalf("fallback response = %#v, want user-not-found after platform auth", data)
 	}
 }

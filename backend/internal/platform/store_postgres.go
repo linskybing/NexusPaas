@@ -523,7 +523,7 @@ func saveIDHighWater(ctx context.Context, tx postgresStoreTx, key string, maxN i
 type postgresStoreExecutor interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (postgresRows, error)
-	QueryRow(ctx context.Context, sql string, args ...any) postgresRow
+	QueryRow(ctx context.Context, sql string, args ...any) postgresRowScanner
 }
 
 type postgresStoreDB interface {
@@ -537,7 +537,7 @@ type postgresStoreTx interface {
 	Rollback(ctx context.Context) error
 }
 
-type postgresRow interface {
+type postgresRowScanner interface {
 	Scan(dest ...any) error
 }
 
@@ -560,7 +560,7 @@ func (d pgxPoolStoreDB) Query(ctx context.Context, sql string, args ...any) (pos
 	return d.pool.Query(ctx, sql, args...)
 }
 
-func (d pgxPoolStoreDB) QueryRow(ctx context.Context, sql string, args ...any) postgresRow {
+func (d pgxPoolStoreDB) QueryRow(ctx context.Context, sql string, args ...any) postgresRowScanner {
 	return d.pool.QueryRow(ctx, sql, args...)
 }
 
@@ -584,7 +584,7 @@ func (t pgxStoreTx) Query(ctx context.Context, sql string, args ...any) (postgre
 	return t.tx.Query(ctx, sql, args...)
 }
 
-func (t pgxStoreTx) QueryRow(ctx context.Context, sql string, args ...any) postgresRow {
+func (t pgxStoreTx) QueryRow(ctx context.Context, sql string, args ...any) postgresRowScanner {
 	return t.tx.QueryRow(ctx, sql, args...)
 }
 

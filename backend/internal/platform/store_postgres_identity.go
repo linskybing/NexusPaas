@@ -358,7 +358,7 @@ func nextAvailableIdentityID(
 	return id, maxN, nil
 }
 
-func scanIdentityRecord(row postgresRow) (contracts.Record[map[string]any], error) {
+func scanIdentityRecord(row postgresRowScanner) (contracts.Record[map[string]any], error) {
 	var record contracts.Record[map[string]any]
 	var raw []byte
 	if err := row.Scan(&record.ID, &raw, &record.Version, &record.CreatedAt, &record.UpdatedAt); err != nil {

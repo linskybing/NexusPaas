@@ -398,10 +398,10 @@ func transactionalStoreFor(store RecordStore) (transactionalRecordStore, bool) {
 	return txStore, ok
 }
 
-func transactionalUpsertStoreFor(store RecordStore) (transactionalUpsertRecordStore, bool) {
+func transactionalUpsertStoreFor(store RecordStore) (transactionalUpserter, bool) {
 	if wrapped, ok := store.(*crossServiceStore); ok {
 		return transactionalUpsertStoreFor(wrapped.local)
 	}
-	txStore, ok := store.(transactionalUpsertRecordStore)
+	txStore, ok := store.(transactionalUpserter)
 	return txStore, ok
 }

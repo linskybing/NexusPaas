@@ -51,7 +51,7 @@ FOCUSED_E2E_PASS_PATTERN='^--- PASS: Test(ServiceRouteIsolationContract|ServiceI
 FOCUSED_E2E_SKIP_PATTERN='^[[:space:]]*--- SKIP:|^SKIP[[:space:]]'
 
 mkdir -p "${ARTIFACT_DIR}" "${TOOLS_BIN}" "${DOCKER_CONFIG_DIR}" "${TRIVY_CACHE_DIR}"
-if [ ! -f "${DOCKER_CONFIG_DIR}/config.json" ]; then
+if [[ ! -f "${DOCKER_CONFIG_DIR}/config.json" ]]; then
   printf '{}\n' >"${DOCKER_CONFIG_DIR}/config.json"
 fi
 
@@ -65,7 +65,8 @@ die() {
 }
 
 need_cmd() {
-  command -v "$1" >/dev/null 2>&1 || die "$1 is required"
+  local cmd="$1"
+  command -v "${cmd}" >/dev/null 2>&1 || die "${cmd} is required"
 }
 
 run_backend() {
@@ -85,7 +86,7 @@ docker_compose() {
 }
 
 cleanup_runtime() {
-  if [ -n "${RUNTIME_PID}" ] && kill -0 "${RUNTIME_PID}" >/dev/null 2>&1; then
+  if [[ -n "${RUNTIME_PID}" ]] && kill -0 "${RUNTIME_PID}" >/dev/null 2>&1; then
     kill "${RUNTIME_PID}" >/dev/null 2>&1 || true
     wait "${RUNTIME_PID}" >/dev/null 2>&1 || true
   fi
@@ -93,7 +94,7 @@ cleanup_runtime() {
 }
 
 cleanup_containers() {
-  if [ "${CI_GATE_CLEANUP}" != "1" ]; then
+  if [[ "${CI_GATE_CLEANUP}" != "1" ]]; then
     log "Leaving Docker containers for inspection: ${POSTGRES_CONTAINER} ${REDIS_CONTAINER} ${MINIO_CONTAINER}"
     return
   fi
@@ -101,10 +102,10 @@ cleanup_containers() {
 }
 
 cleanup_collaboration_compose() {
-  if [ ! -f "${COLLAB_COMPOSE_FILE}" ]; then
+  if [[ ! -f "${COLLAB_COMPOSE_FILE}" ]]; then
     return
   fi
-  if [ "${CI_GATE_CLEANUP}" != "1" ]; then
+  if [[ "${CI_GATE_CLEANUP}" != "1" ]]; then
     log "Leaving collaboration compose project for inspection: ${COLLAB_COMPOSE_PROJECT}"
     return
   fi
@@ -143,7 +144,7 @@ run_quick() {
   log "Checking gofmt from backend/"
   local unformatted
   unformatted="$(cd "${BACKEND_DIR}" && find . -name '*.go' -type f -print0 | xargs -0 gofmt -l)"
-  if [ -n "${unformatted}" ]; then
+  if [[ -n "${unformatted}" ]]; then
     printf '%s\n' "${unformatted}" >&2
     die "gofmt check failed"
   fi
@@ -259,7 +260,7 @@ enforce_coverage_threshold() {
   local coverage_file="$1"
   local total
   total="$(run_backend go tool cover -func="${coverage_file}" | awk '/^total:/ {gsub("%", "", $3); print $3}')"
-  [ -n "${total}" ] || die "could not read total coverage from ${coverage_file}"
+  [[ -n "${total}" ]] || die "could not read total coverage from ${coverage_file}"
   log "Integration coverage total: ${total}% (threshold ${CI_GATE_COVERAGE_THRESHOLD}%)"
   awk -v got="${total}" -v want="${CI_GATE_COVERAGE_THRESHOLD}" 'BEGIN { exit (got + 0 >= want + 0) ? 0 : 1 }' \
     || die "coverage ${total}% is below threshold ${CI_GATE_COVERAGE_THRESHOLD}%"
@@ -307,7 +308,7 @@ wait_for_runtime() {
   local runtime_log="$2"
   local attempt
   for attempt in $(seq 1 90); do
-    if [ -n "${RUNTIME_PID}" ] && ! kill -0 "${RUNTIME_PID}" >/dev/null 2>&1; then
+    if [[ -n "${RUNTIME_PID}" ]] && ! kill -0 "${RUNTIME_PID}" >/dev/null 2>&1; then
       cat "${runtime_log}" >&2 || true
       die "runtime exited before becoming healthy"
     fi
@@ -358,18 +359,18 @@ run_runtime_smoke() {
   for endpoint in /healthz /readyz /metrics /openapi.json /service-registry; do
     code="$(http_status_code "${runtime_url}${endpoint}")"
     printf '%s %s\n' "${code}" "${endpoint}" | tee -a "${smoke_log}"
-    [ "${code}" = "200" ] || die "${endpoint} returned ${code}, want 200"
+    [[ "${code}" = "200" ]] || die "${endpoint} returned ${code}, want 200"
   done
 
   curl -fsS "${runtime_url}/service-registry" >"${registry_file}"
   local service_count
   service_count="$(grep -o '"name":"' "${registry_file}" | wc -l | tr -d '[:space:]')"
   printf 'service-registry services: %s\n' "${service_count}" | tee -a "${smoke_log}"
-  [ "${service_count}" = "15" ] || die "service-registry contains ${service_count} services, want 15"
+  [[ "${service_count}" = "15" ]] || die "service-registry contains ${service_count} services, want 15"
 
   log "Checking read-only smoke endpoint for each service"
   while IFS='|' read -r service path; do
-    [ -n "${service}" ] || continue
+    [[ -n "${service}" ]] || continue
     code="$(
       http_status_code \
         -H 'X-User-ID: smoke-admin' \
@@ -382,6 +383,7 @@ run_runtime_smoke() {
     printf '%s %-34s %s\n' "${code}" "${service}" "${path}" | tee -a "${smoke_log}"
     case "${code}" in
       000|5*) die "${service} smoke endpoint returned ${code}" ;;
+      *) : ;; # non-5xx statuses are acceptable for read-only smoke probes
     esac
   done < <(smoke_endpoint_map)
   cleanup_runtime
@@ -410,7 +412,7 @@ EOF
 collaboration_service_names() {
   local unit services service
   while IFS='|' read -r unit services; do
-    [ -n "${unit}" ] || continue
+    [[ -n "${unit}" ]] || continue
     for service in ${services}; do
       printf '%s\n' "${service}"
     done
@@ -418,9 +420,9 @@ collaboration_service_names() {
 }
 
 collaboration_unit_names() {
-  local unit services
-  while IFS='|' read -r unit services; do
-    [ -n "${unit}" ] && printf '%s\n' "${unit}"
+  local unit
+  while IFS='|' read -r unit _; do
+    [[ -n "${unit}" ]] && printf '%s\n' "${unit}"
   done < <(deployable_unit_services)
 }
 
@@ -428,9 +430,9 @@ unit_for_logical_service() {
   local want="$1"
   local unit services service
   while IFS='|' read -r unit services; do
-    [ -n "${unit}" ] || continue
+    [[ -n "${unit}" ]] || continue
     for service in ${services}; do
-      if [ "${service}" = "${want}" ]; then
+      if [[ "${service}" = "${want}" ]]; then
         printf '%s\n' "${unit}"
         return 0
       fi
@@ -451,9 +453,9 @@ collaboration_service_urls_json() {
   local first=1 service unit
   printf '{'
   while IFS= read -r service; do
-    [ -n "${service}" ] || continue
+    [[ -n "${service}" ]] || continue
     unit="$(unit_for_logical_service "${service}")" || die "missing deployable unit for ${service}"
-    if [ "${first}" = "0" ]; then
+    if [[ "${first}" = "0" ]]; then
       printf ','
     fi
     first=0
@@ -485,9 +487,9 @@ compose_host_port() {
   local target="$2"
   local endpoint port
   endpoint="$(docker_compose -p "${COLLAB_COMPOSE_PROJECT}" -f "${COLLAB_COMPOSE_FILE}" port "${service}" "${target}" | tail -n 1)"
-  [ -n "${endpoint}" ] || die "compose service ${service} does not expose ${target}"
+  [[ -n "${endpoint}" ]] || die "compose service ${service} does not expose ${target}"
   port="${endpoint##*:}"
-  [ -n "${port}" ] || die "could not parse host port from ${endpoint}"
+  [[ -n "${port}" ]] || die "could not parse host port from ${endpoint}"
   printf '%s\n' "${port}"
 }
 
@@ -495,10 +497,10 @@ collaboration_host_service_urls_json() {
   local first=1 service unit port
   printf '{'
   while IFS= read -r service; do
-    [ -n "${service}" ] || continue
+    [[ -n "${service}" ]] || continue
     unit="$(unit_for_logical_service "${service}")" || die "missing deployable unit for ${service}"
     port="$(compose_host_port "${unit}" 8080)"
-    if [ "${first}" = "0" ]; then
+    if [[ "${first}" = "0" ]]; then
       printf ','
     fi
     first=0
@@ -527,7 +529,7 @@ wait_for_compose_http() {
 wait_for_collaboration_services() {
   local service port url
   while IFS= read -r service; do
-    [ -n "${service}" ] || continue
+    [[ -n "${service}" ]] || continue
     port="$(compose_host_port "${service}" 8080)"
     url="http://127.0.0.1:${port}"
     wait_for_compose_http "${service}" "${url}"
@@ -547,20 +549,20 @@ run_collaboration_missing_service_urls_check() {
   )"
   for attempt in $(seq 1 20); do
     status="$(docker_cli inspect -f '{{.State.Status}}' "${container}" 2>/dev/null || true)"
-    if [ "${status}" = "exited" ]; then
+    if [[ "${status}" = "exited" ]]; then
       break
     fi
     sleep 1
   done
   docker_cli logs "${container}" >"${log_file}" 2>&1 || true
   status="$(docker_cli inspect -f '{{.State.Status}}' "${container}" 2>/dev/null || true)"
-  if [ "${status}" != "exited" ]; then
+  if [[ "${status}" != "exited" ]]; then
     docker_cli rm -f "${container}" >/dev/null 2>&1 || true
     die "compute-control-plane started without required SERVICE_URLS"
   fi
   exit_code="$(docker_cli inspect -f '{{.State.ExitCode}}' "${container}" 2>/dev/null || printf '0')"
   docker_cli rm -f "${container}" >/dev/null 2>&1 || true
-  if [ "${exit_code}" = "0" ]; then
+  if [[ "${exit_code}" = "0" ]]; then
     die "compute-control-plane exited successfully without required SERVICE_URLS"
   fi
   grep -Eiq 'service isolation|SERVICE_URLS|owner-read|scheduler-quota-service' "${log_file}" \
@@ -571,7 +573,7 @@ run_compose_collaboration_smoke() {
   need_cmd docker
   need_cmd go
   need_cmd curl
-  [ -f "${COLLAB_COMPOSE_FILE}" ] || die "missing collaboration compose file: ${COLLAB_COMPOSE_FILE}"
+  [[ -f "${COLLAB_COMPOSE_FILE}" ]] || die "missing collaboration compose file: ${COLLAB_COMPOSE_FILE}"
 
   local service_urls principals host_urls
   local postgres_port redis_port minio_port
@@ -585,7 +587,7 @@ run_compose_collaboration_smoke() {
   local test_status
 
   while IFS= read -r service; do
-    [ -n "${service}" ] && service_array+=("${service}")
+    [[ -n "${service}" ]] && service_array+=("${service}")
   done < <(collaboration_unit_names)
 
   service_urls="$(collaboration_service_urls_json)"
@@ -654,7 +656,7 @@ run_compose_collaboration_smoke() {
   set -e
 
   docker_compose -p "${COLLAB_COMPOSE_PROJECT}" -f "${COLLAB_COMPOSE_FILE}" logs --no-color >"${compose_log}" 2>&1 || true
-  if [ "${test_status}" -ne 0 ]; then
+  if [[ "${test_status}" -ne 0 ]]; then
     die "8-unit collaboration smoke failed; see ${log_file} and ${summary_md}"
   fi
 }
@@ -671,9 +673,9 @@ run_docker_gate() {
 }
 
 service_manifest_names() {
-  local unit services
-  while IFS='|' read -r unit services; do
-    [ -n "${unit}" ] && printf '%s\n' "${unit}"
+  local unit
+  while IFS='|' read -r unit _; do
+    [[ -n "${unit}" ]] && printf '%s\n' "${unit}"
   done < <(deployable_unit_services)
 }
 
@@ -694,7 +696,7 @@ smoke_endpoint_for_service() {
   local want="$1"
   local service path
   while IFS='|' read -r service path; do
-    if [ "${service}" = "${want}" ]; then
+    if [[ "${service}" = "${want}" ]]; then
       printf '%s\n' "${path}"
       return 0
     fi
@@ -719,7 +721,7 @@ write_deployable_unit_evidence() {
     printf '| Deployable Unit | Logical Services And Smoke | Evidence |\n'
     printf '| --- | --- | --- |\n'
     while IFS='|' read -r unit services; do
-      [ -n "${unit}" ] || continue
+      [[ -n "${unit}" ]] || continue
       unit_count=$((unit_count + 1))
       grep -Fxq "${unit}" "${service_list}" \
         || die "production-beta deployment list is missing ${unit}"
@@ -742,10 +744,10 @@ write_deployable_unit_evidence() {
     printf -- '- Rollback command plan: `%s`\n' "${rollback_plan}"
   } >"${report}"
 
-  [ "${unit_count}" = "8" ] || die "deployable unit count = ${unit_count}, want 8"
-  [ "${unit_count}" = "${physical_count}" ] \
+  [[ "${unit_count}" = "8" ]] || die "deployable unit count = ${unit_count}, want 8"
+  [[ "${unit_count}" = "${physical_count}" ]] \
     || die "deployment list contains ${physical_count} units, want ${unit_count}"
-  [ "${mapped_count}" = "15" ] \
+  [[ "${mapped_count}" = "15" ]] \
     || die "8-unit map covers ${mapped_count} logical services, want 15"
 }
 
@@ -802,7 +804,7 @@ run_production_beta_manifest_rehearsal() {
   service_manifest_names >"${service_list}"
   local service_count
   service_count="$(wc -l <"${service_list}" | tr -d '[:space:]')"
-  if [ "${service_count}" != "8" ]; then
+  if [[ "${service_count}" != "8" ]]; then
     die "production-beta backend unit count = ${service_count}, want 8"
   fi
 
@@ -811,7 +813,7 @@ run_production_beta_manifest_rehearsal() {
 
   local service
   while IFS= read -r service; do
-    [ -n "${service}" ] || continue
+    [[ -n "${service}" ]] || continue
     rendered_has_deployment "${render_file}" "${service}" \
       || die "production-beta render is missing Deployment ${service}"
   done <"${service_list}"
@@ -831,7 +833,7 @@ run_production_beta_manifest_rehearsal() {
     printf '#!/usr/bin/env bash\n'
     printf 'set -Eeuo pipefail\n\n'
     while IFS= read -r service; do
-      [ -n "${service}" ] || continue
+      [[ -n "${service}" ]] || continue
       printf 'kubectl -n nexuspaas rollout undo deployment/%s\n' "${service}"
     done <"${service_list}"
   } >"${rollback_plan}"
@@ -862,7 +864,7 @@ install_go_tool() {
   local module="$2"
   local version="$3"
   local target="${TOOLS_BIN}/${binary}-${version}"
-  if [ ! -x "${target}" ]; then
+  if [[ ! -x "${target}" ]]; then
     local attempt
     log "Installing ${binary} ${version}"
     for attempt in 1 2 3; do
@@ -910,7 +912,7 @@ install_trivy() {
   platform="$(trivy_asset_platform)"
   target_dir="${TOOLS_DIR}/trivy-${TRIVY_VERSION}-${platform}"
   target="${target_dir}/trivy"
-  if [ ! -x "${target}" ]; then
+  if [[ ! -x "${target}" ]]; then
     log "Installing Trivy ${TRIVY_VERSION}"
     rm -rf "${target_dir}"
     mkdir -p "${target_dir}"
@@ -922,7 +924,7 @@ install_trivy() {
       || die "failed to extract Trivy ${TRIVY_VERSION}"
     chmod +x "${target}" \
       || die "failed to mark Trivy executable"
-    [ -x "${target}" ] || die "Trivy archive did not contain expected binary"
+    [[ -x "${target}" ]] || die "Trivy archive did not contain expected binary"
   fi
   printf '%s\n' "${target}"
 }
@@ -988,12 +990,12 @@ sonar_required() {
   case "${CI_GATE_SONAR_REQUIRED:-}" in
     1|true|TRUE|yes|YES) return 0 ;;
     0|false|FALSE|no|NO) return 1 ;;
+    *) [[ -n "${CI:-}" ]] ;;
   esac
-  [ -n "${CI:-}" ]
 }
 
 run_sonar_gate() {
-  if [ -z "${SONAR_TOKEN:-}" ] || [ -z "${SONAR_HOST_URL:-}" ]; then
+  if [[ -z "${SONAR_TOKEN:-}" ]] || [[ -z "${SONAR_HOST_URL:-}" ]]; then
     if sonar_required; then
       die "SONAR_TOKEN and SONAR_HOST_URL are required for this CI event"
     fi
@@ -1015,7 +1017,7 @@ write_beta_rc_report() {
   local report="${ARTIFACT_DIR}/beta-rc-report.md"
   local revision sonar_status
   revision="$(run_repo git rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
-  if [ -f "${ARTIFACT_DIR}/sonar-skipped.txt" ]; then
+  if [[ -f "${ARTIFACT_DIR}/sonar-skipped.txt" ]]; then
     sonar_status="skipped: missing SONAR_TOKEN or SONAR_HOST_URL under current policy"
   else
     sonar_status="passed"

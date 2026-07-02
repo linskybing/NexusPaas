@@ -127,7 +127,7 @@ func logout(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any,
 		if session, ok := repo.RevokeSession(r.Context(), token, time.Now().UTC()); ok {
 			userID := session.UserID
 			if userID != "" {
-				if ok := repo.SetUserStatus(r.Context(), userID, "offline"); !ok {
+				if !repo.SetUserStatus(r.Context(), userID, "offline") {
 					slog.Warn("user status update skipped", "user_id", userID, "status", "offline")
 				}
 			}
@@ -209,7 +209,7 @@ func issueSession(app *platform.App, r *http.Request, user map[string]any) (map[
 	if err != nil {
 		return nil, err
 	}
-	if ok := authRepository(app).SetUserStatus(r.Context(), userID, "online"); !ok {
+	if !authRepository(app).SetUserStatus(r.Context(), userID, "online") {
 		slog.Warn("user status update skipped", "user_id", userID, "status", "online")
 	}
 	user["status"] = "online"

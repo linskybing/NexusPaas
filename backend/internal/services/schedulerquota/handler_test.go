@@ -321,7 +321,7 @@ func newSchedulerQuotaTestApp() *platform.App {
 
 func assertSchedulerTxEvents(t *testing.T, app *platform.App, store *schedulerTxStore, name, action string, want int) {
 	t.Helper()
-	if got := len(app.Events.Outbox()); got != 0 {
+	if len(app.Events.Outbox()) != 0 {
 		t.Fatalf("direct events = %#v, want none", app.Events.Outbox())
 	}
 	if len(store.txEvents) != want {

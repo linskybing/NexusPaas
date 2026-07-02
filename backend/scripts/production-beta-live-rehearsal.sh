@@ -35,11 +35,12 @@ die() {
 }
 
 need_cmd() {
-  command -v "$1" >/dev/null 2>&1 || die "$1 is required"
+  local cmd="$1"
+  command -v "${cmd}" >/dev/null 2>&1 || die "${cmd} is required"
 }
 
 cleanup_port_forward() {
-  if [ -n "${PORT_FORWARD_PID}" ] && kill -0 "${PORT_FORWARD_PID}" >/dev/null 2>&1; then
+  if [[ -n "${PORT_FORWARD_PID}" ]] && kill -0 "${PORT_FORWARD_PID}" >/dev/null 2>&1; then
     kill "${PORT_FORWARD_PID}" >/dev/null 2>&1 || true
     wait "${PORT_FORWARD_PID}" >/dev/null 2>&1 || true
   fi
@@ -52,14 +53,14 @@ cleanup() {
 trap cleanup EXIT
 
 require_live_opt_in() {
-  if [ "${LIVE_STAGING_REHEARSAL:-}" != "1" ]; then
+  if [[ "${LIVE_STAGING_REHEARSAL:-}" != "1" ]]; then
     die "LIVE_STAGING_REHEARSAL=1 is required before any live staging mutation"
   fi
 }
 
 require_env() {
   local name="$1"
-  if [ -z "${!name:-}" ]; then
+  if [[ -z "${!name:-}" ]]; then
     die "${name} is required"
   fi
 }
@@ -72,6 +73,7 @@ reject_local_context() {
     docker-desktop|*docker-desktop*|*docker\ desktop*|kind|kind-*|*kind-*|minikube|*minikube*|local|*local*|localhost|*localhost*|*127.0.0.1*|*::1*|*loopback*)
       die "refusing local-style kube context ${context}"
       ;;
+    *) : ;; # context does not look local; accepted
   esac
 }
 
@@ -91,6 +93,7 @@ reject_local_image_ref() {
     localhost|localhost:*|127.*|0.0.0.0|0.0.0.0:*|::1|::1:*|[[]::1[]]*|host.docker.internal|*.local|local|local:*|*loopback*|kind*|minikube*)
       die "refusing local registry image ${image}"
       ;;
+    *) : ;; # host does not look local; the next check enforces an external registry
   esac
   case "${host}" in
     *.*|*:*) ;;
@@ -102,7 +105,7 @@ require_candidate_image() {
   require_env CANDIDATE_IMAGE
   local digest
   digest="${CANDIDATE_IMAGE##*@sha256:}"
-  [ "${digest}" != "${CANDIDATE_IMAGE}" ] \
+  [[ "${digest}" != "${CANDIDATE_IMAGE}" ]] \
     || die "CANDIDATE_IMAGE must be digest-pinned with @sha256:<64 lowercase hex digest>"
   printf '%s' "${digest}" | grep -Eq '^[a-f0-9]{64}$' \
     || die "CANDIDATE_IMAGE must be digest-pinned with @sha256:<64 lowercase hex digest>"
@@ -110,7 +113,7 @@ require_candidate_image() {
 }
 
 require_registry_evidence() {
-  if [ -n "${SOURCE_IMAGE:-}" ] || [ -n "${PROMOTED_IMAGE_TAG:-}" ]; then
+  if [[ -n "${SOURCE_IMAGE:-}" ]] || [[ -n "${PROMOTED_IMAGE_TAG:-}" ]]; then
     require_env SOURCE_IMAGE
     require_env PROMOTED_IMAGE_TAG
     reject_local_image_ref "${PROMOTED_IMAGE_TAG}"
@@ -123,7 +126,7 @@ require_registry_evidence() {
 }
 
 require_scan_evidence() {
-  if [ -z "${REGISTRY_SCAN_STATUS:-}" ] && [ -z "${REGISTRY_SCAN_EVIDENCE:-}" ]; then
+  if [[ -z "${REGISTRY_SCAN_STATUS:-}" ]] && [[ -z "${REGISTRY_SCAN_EVIDENCE:-}" ]]; then
     die "REGISTRY_SCAN_STATUS or REGISTRY_SCAN_EVIDENCE is required"
   fi
 }
@@ -291,13 +294,13 @@ validate_render() {
   backend_units >"${SERVICE_LIST_FILE}"
   local expected_count rendered_count unit
   expected_count="$(wc -l <"${SERVICE_LIST_FILE}" | tr -d '[:space:]')"
-  [ "${expected_count}" = "8" ] || die "backend unit list contains ${expected_count}, want 8"
+  [[ "${expected_count}" = "8" ]] || die "backend unit list contains ${expected_count}, want 8"
 
   rendered_count="$(rendered_deployment_names "${RENDER_FILE}" | grep -Fxf "${SERVICE_LIST_FILE}" | wc -l | tr -d '[:space:]')"
-  [ "${rendered_count}" = "8" ] || die "production-beta render contains ${rendered_count} expected backend units, want 8"
+  [[ "${rendered_count}" = "8" ]] || die "production-beta render contains ${rendered_count} expected backend units, want 8"
 
   while IFS= read -r unit; do
-    [ -n "${unit}" ] || continue
+    [[ -n "${unit}" ]] || continue
     rendered_has_deployment "${RENDER_FILE}" "${unit}" \
       || die "production-beta render is missing Deployment ${unit}"
   done <"${SERVICE_LIST_FILE}"
@@ -313,13 +316,13 @@ verify_kube_context() {
   require_env KUBE_CONTEXT
   local current_context
   current_context="$(kubectl config current-context)"
-  [ "${current_context}" = "${KUBE_CONTEXT}" ] \
+  [[ "${current_context}" = "${KUBE_CONTEXT}" ]] \
     || die "kubectl current-context ${current_context} does not match KUBE_CONTEXT ${KUBE_CONTEXT}"
   reject_local_context "${KUBE_CONTEXT}"
 }
 
 copy_promoted_image_if_requested() {
-  if [ "${PROMOTION_MODE}" = "crane copy" ]; then
+  if [[ "${PROMOTION_MODE}" = "crane copy" ]]; then
     log "Promoting image with crane copy"
     crane copy "${SOURCE_IMAGE}" "${PROMOTED_IMAGE_TAG}"
   fi
@@ -330,7 +333,7 @@ record_secret_presence() {
   printf 'secret\tpresent\n' >"${SECRET_PRESENCE_FILE}"
   local secret present missing=0
   while IFS= read -r secret; do
-    [ -n "${secret}" ] || continue
+    [[ -n "${secret}" ]] || continue
     if kctl get secret "${secret}" -o name >/dev/null 2>&1; then
       present="yes"
     else
@@ -339,7 +342,7 @@ record_secret_presence() {
     fi
     printf '%s\t%s\n' "${secret}" "${present}" >>"${SECRET_PRESENCE_FILE}"
   done < <(required_secret_names)
-  [ "${missing}" = "0" ] || die "${missing} required Secret names are absent; see ${SECRET_PRESENCE_FILE}"
+  [[ "${missing}" = "0" ]] || die "${missing} required Secret names are absent; see ${SECRET_PRESENCE_FILE}"
 }
 
 record_previous_images() {
@@ -347,9 +350,9 @@ record_previous_images() {
   printf 'unit\tprevious_image\n' >"${PREVIOUS_IMAGES_FILE}"
   local unit image
   while IFS= read -r unit; do
-    [ -n "${unit}" ] || continue
+    [[ -n "${unit}" ]] || continue
     image="$(kctl get deployment "${unit}" -o jsonpath='{.spec.template.spec.containers[?(@.name=="app")].image}')"
-    [ -n "${image}" ] || die "deployment/${unit} does not have an app container image"
+    [[ -n "${image}" ]] || die "deployment/${unit} does not have an app container image"
     printf '%s\t%s\n' "${unit}" "${image}" >>"${PREVIOUS_IMAGES_FILE}"
   done <"${SERVICE_LIST_FILE}"
 }
@@ -443,7 +446,7 @@ apply_candidate_manifests() {
   kctl apply -f "${RENDER_FILE}"
   local unit
   while IFS= read -r unit; do
-    [ -n "${unit}" ] || continue
+    [[ -n "${unit}" ]] || continue
     kctl set image "deployment/${unit}" "app=${CANDIDATE_IMAGE}"
   done <"${SERVICE_LIST_FILE}"
 }
@@ -453,7 +456,7 @@ wait_for_rollouts() {
   printf 'unit\tstatus\n' >"${ROLLOUT_FILE}"
   local unit
   while IFS= read -r unit; do
-    [ -n "${unit}" ] || continue
+    [[ -n "${unit}" ]] || continue
     kctl rollout status "deployment/${unit}" --timeout="${ROLLOUT_TIMEOUT}"
     printf '%s\tcomplete\n' "${unit}" >>"${ROLLOUT_FILE}"
   done <"${SERVICE_LIST_FILE}"
@@ -471,7 +474,7 @@ start_port_forward() {
 wait_for_smoke_endpoint() {
   local url="$1"
   local deadline=$((SECONDS + SMOKE_TIMEOUT_SECONDS))
-  while [ "${SECONDS}" -lt "${deadline}" ]; do
+  while [[ "${SECONDS}" -lt "${deadline}" ]]; do
     if smoke_curl "${url}" >/dev/null 2>&1; then
       return 0
     fi
@@ -493,10 +496,10 @@ smoke_endpoint() {
 smoke_curl() {
   local url="$1"
   local args=(-fsS)
-  if [ -n "${SMOKE_API_KEY:-}" ]; then
+  if [[ -n "${SMOKE_API_KEY:-}" ]]; then
     args+=(-H "X-API-Key: ${SMOKE_API_KEY}")
   fi
-  if [ -n "${SMOKE_SERVICE_KEY:-}" ]; then
+  if [[ -n "${SMOKE_SERVICE_KEY:-}" ]]; then
     args+=(-H "X-Service-Key: ${SMOKE_SERVICE_KEY}")
   fi
   args+=(-H "X-User-ID: live-rehearsal")
@@ -532,9 +535,9 @@ smoke_gateway_registry() {
 
   local count service
   count="$(grep -Eo '"name"[[:space:]]*:' "${registry_file}" | wc -l | tr -d '[:space:]')"
-  [ "${count}" = "15" ] || die "service-registry contains ${count} services, want 15"
+  [[ "${count}" = "15" ]] || die "service-registry contains ${count} services, want 15"
   while IFS= read -r service; do
-    [ -n "${service}" ] || continue
+    [[ -n "${service}" ]] || continue
     grep -Fq "\"${service}\"" "${registry_file}" \
       || die "service-registry is missing ${service}"
   done < <(logical_services)
@@ -545,7 +548,7 @@ smoke_all_units() {
   local phase="$1"
   local index=0 unit
   while IFS= read -r unit; do
-    [ -n "${unit}" ] || continue
+    [[ -n "${unit}" ]] || continue
     smoke_unit "${unit}" "${phase}" "${index}"
     index=$((index + 1))
   done <"${SERVICE_LIST_FILE}"
@@ -557,9 +560,9 @@ rollback_and_redeploy_each_unit() {
   printf 'unit\tphase\timage\tstatus\n' >"${ROLLBACK_FILE}"
   local index=0 unit previous_image
   while IFS= read -r unit; do
-    [ -n "${unit}" ] || continue
+    [[ -n "${unit}" ]] || continue
     previous_image="$(previous_image_for_unit "${unit}")"
-    [ -n "${previous_image}" ] || die "missing recorded previous image for ${unit}"
+    [[ -n "${previous_image}" ]] || die "missing recorded previous image for ${unit}"
 
     kctl set image "deployment/${unit}" "app=${previous_image}"
     kctl rollout status "deployment/${unit}" --timeout="${ROLLOUT_TIMEOUT}"
@@ -584,17 +587,17 @@ write_report() {
     printf -- '- Candidate image: `%s`\n' "${CANDIDATE_IMAGE}"
     printf -- '- Candidate digest: `%s`\n' "${digest}"
     printf -- '- Promotion mode: `%s`\n' "${PROMOTION_MODE}"
-    if [ -n "${PROMOTION_EVIDENCE:-}" ]; then
+    if [[ -n "${PROMOTION_EVIDENCE:-}" ]]; then
       printf -- '- Promotion evidence: `%s`\n' "${PROMOTION_EVIDENCE}"
     fi
-    if [ -n "${SOURCE_IMAGE:-}" ]; then
+    if [[ -n "${SOURCE_IMAGE:-}" ]]; then
       printf -- '- Source image: `%s`\n' "${SOURCE_IMAGE}"
       printf -- '- Promoted image tag: `%s`\n' "${PROMOTED_IMAGE_TAG}"
     fi
-    if [ -n "${REGISTRY_SCAN_STATUS:-}" ]; then
+    if [[ -n "${REGISTRY_SCAN_STATUS:-}" ]]; then
       printf -- '- Registry scan status: `%s`\n' "${REGISTRY_SCAN_STATUS}"
     fi
-    if [ -n "${REGISTRY_SCAN_EVIDENCE:-}" ]; then
+    if [[ -n "${REGISTRY_SCAN_EVIDENCE:-}" ]]; then
       printf -- '- Registry scan evidence: `%s`\n' "${REGISTRY_SCAN_EVIDENCE}"
     fi
     printf -- '- Render artifact: `%s`\n' "${RENDER_FILE}"

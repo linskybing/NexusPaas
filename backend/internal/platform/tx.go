@@ -30,11 +30,11 @@ func (a *App) WithTx(ctx context.Context, fn func(tx StoreTx) error) error {
 	return nil
 }
 
-func scopedStoreFor(store RecordStore) (transactionalScopedStore, bool) {
+func scopedStoreFor(store RecordStore) (txRunner, bool) {
 	if wrapped, ok := store.(*crossServiceStore); ok {
 		return scopedStoreFor(wrapped.local)
 	}
-	scoped, ok := store.(transactionalScopedStore)
+	scoped, ok := store.(txRunner)
 	return scoped, ok
 }
 

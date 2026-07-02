@@ -141,7 +141,7 @@ func verifyInternalAPIToken(app *platform.App, r *http.Request, token string) (m
 	if internalCredentialRevoked(app, r, "api_token", apiToken.ID) {
 		return nil, "", false
 	}
-	if ok := repo.TouchAPITokenLastUsed(r.Context(), apiToken.ID, time.Now().UTC()); !ok {
+	if !repo.TouchAPITokenLastUsed(r.Context(), apiToken.ID, time.Now().UTC()) {
 		slog.Warn("internal api token last_used_at update skipped", "token_id", apiToken.ID)
 	}
 	return user.Data, apiToken.ID, true

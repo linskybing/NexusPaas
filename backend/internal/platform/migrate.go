@@ -3,7 +3,7 @@ package platform
 import (
 	"context"
 	"crypto/sha256"
-	_ "embed"
+	_ "embed" // for the go:embed schema.sql directive below
 	"encoding/hex"
 	"errors"
 	"fmt"

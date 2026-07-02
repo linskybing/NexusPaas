@@ -123,7 +123,7 @@ func dexRequestBody(r *http.Request) (io.Reader, int, any) {
 	return bytes.NewReader(raw), 0, nil
 }
 
-func copyDexHeaders(src http.Header, dst http.Header) {
+func copyDexHeaders(src, dst http.Header) {
 	for _, header := range []string{"Authorization", headerContentType, "Accept", "Cookie"} {
 		if value := src.Get(header); value != "" {
 			dst.Set(header, value)
