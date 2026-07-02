@@ -140,7 +140,11 @@ func WithEventRelay(relay eventRelayer, batchSize int) Option {
 		if relay == nil {
 			return
 		}
-		a.RegisterMaintenanceTaskForService("all", "event-outbox-relay", func(ctx context.Context) error {
+		// Process-local infrastructure, not a service-owned worker: every
+		// process that writes events through the Postgres outbox must relay
+		// them, or an isolated unit's events never reach the Redis stream.
+		// The maintenance lease keeps concurrent relayers from double-acting.
+		a.registerMaintenanceTask("event-outbox-relay", func(ctx context.Context) error {
 			_, err := relay.RelayPending(ctx, batchSize)
 			return err
 		})

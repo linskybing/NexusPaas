@@ -188,8 +188,20 @@ def verify_live_launch_row(rows: list[dict[str, str]]) -> None:
     if not matches:
         fail("missing V1 external production launch / live P0.2-P0.5 row")
     for row in matches:
-        if row[CLASSIFICATION] != "Open":
-            fail("V1 external production launch / live P0.2-P0.5 row must be Open")
+        if row[CLASSIFICATION] == "Open":
+            continue
+        # ADR 0008 owner-decision exception: the launch row may close only via
+        # the recorded owner decision, and the row itself must disclose the
+        # non-external evidence tier instead of claiming external proof.
+        text = " ".join(row.values()).lower()
+        if row[CLASSIFICATION] != "Done":
+            fail("V1 external production launch / live P0.2-P0.5 row must be Open or Done")
+        if "adr 0008" not in text:
+            fail("closed V1 launch row must cite ADR 0008 (owner launch decision)")
+        if "owner-accepted" not in text:
+            fail("closed V1 launch row must state the owner-accepted evidence tier")
+        if "external staging cluster" not in text:
+            fail("closed V1 launch row must keep the external-staging follow-up visible")
 
 
 def verify_deferred_gpu_guardrail(rows: list[dict[str, str]]) -> None:

@@ -80,7 +80,10 @@ func NewFromEnv(nsPrefix string) (*Client, error) {
 func restConfig() (*rest.Config, error) {
 	if cfg, err := rest.InClusterConfig(); err == nil {
 		return cfg, nil
-	} else if err != rest.ErrNotInCluster {
+	} else if err != rest.ErrNotInCluster && !os.IsNotExist(err) {
+		// A pod with automountServiceAccountToken=false has the in-cluster env
+		// vars but no token file; that is "no ambient credentials" (degraded
+		// mode), not a hard failure.
 		return nil, fmt.Errorf("in-cluster config: %w", err)
 	}
 	kubeconfig := strings.TrimSpace(os.Getenv("KUBECONFIG"))

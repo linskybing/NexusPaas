@@ -212,7 +212,8 @@ spec:
     metadata:
       labels: {app: iam-unit}
     spec:
-      automountServiceAccountToken: false
+      serviceAccountName: iam-unit
+      automountServiceAccountToken: true
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -358,7 +359,8 @@ spec:
     metadata:
       labels: {app: platform-io-unit}
     spec:
-      automountServiceAccountToken: false
+      serviceAccountName: platform-io-unit
+      automountServiceAccountToken: true
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -399,7 +401,8 @@ spec:
     metadata:
       labels: {app: usage-observability}
     spec:
-      automountServiceAccountToken: false
+      serviceAccountName: usage-observability
+      automountServiceAccountToken: true
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -440,7 +443,8 @@ spec:
     metadata:
       labels: {app: compute-api}
     spec:
-      automountServiceAccountToken: false
+      serviceAccountName: compute-api
+      automountServiceAccountToken: true
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -757,7 +761,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: [namespaces]
-    verbs: [get, create]
+    verbs: [get, list, create]
   - apiGroups: [""]
     resources: [pods]
     verbs: [get, list, create, delete]
@@ -816,4 +820,108 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: compute-control-plane
+    namespace: nexuspaas
+---
+# Cluster-requiring units (authorization-policy, storage, resourcehours,
+# workload/ide) fail /readyz closed without cluster access. Readiness pings the
+# API server with a namespace list (cluster/health.go), so each such unit gets a
+# dedicated identity bound to this single-rule role. Verbs beyond readiness stay
+# unit-specific (compute-control-plane) or deliberately ungranted — runtime
+# workers degrade per-operation instead of holding broad rights.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nexuspaas-cluster-readiness
+  labels: {app.kubernetes.io/name: nexuspaas}
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [list]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: iam-unit
+  namespace: nexuspaas
+  labels: {app: iam-unit}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: iam-unit-cluster-readiness
+  labels: {app: iam-unit}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nexuspaas-cluster-readiness
+subjects:
+  - kind: ServiceAccount
+    name: iam-unit
+    namespace: nexuspaas
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: platform-io-unit
+  namespace: nexuspaas
+  labels: {app: platform-io-unit}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: platform-io-unit-cluster-readiness
+  labels: {app: platform-io-unit}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nexuspaas-cluster-readiness
+subjects:
+  - kind: ServiceAccount
+    name: platform-io-unit
+    namespace: nexuspaas
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: usage-observability
+  namespace: nexuspaas
+  labels: {app: usage-observability}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: usage-observability-cluster-readiness
+  labels: {app: usage-observability}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nexuspaas-cluster-readiness
+subjects:
+  - kind: ServiceAccount
+    name: usage-observability
+    namespace: nexuspaas
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: compute-api
+  namespace: nexuspaas
+  labels: {app: compute-api}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: compute-api-cluster-readiness
+  labels: {app: compute-api}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nexuspaas-cluster-readiness
+subjects:
+  - kind: ServiceAccount
+    name: compute-api
     namespace: nexuspaas

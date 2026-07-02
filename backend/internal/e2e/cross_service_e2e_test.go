@@ -78,7 +78,7 @@ func TestIsolatedRuntimeRegistrationE2E(t *testing.T) {
 	services.RegisterAll(authorizationPolicy)
 
 	assertRuntimeRegistration(t, h.services[identityService].app,
-		[]string{"identity-auth-cleanup", "ldap-mirror-sync"},
+		[]string{"event-outbox-relay", "identity-auth-cleanup", "ldap-mirror-sync"},
 		[]string{http.MethodPost + " /api/v1/login"},
 		[]string{
 			http.MethodPost + " /api/v1/jobs",
@@ -87,6 +87,7 @@ func TestIsolatedRuntimeRegistrationE2E(t *testing.T) {
 	)
 	assertRuntimeRegistration(t, h.services[workloadService].app,
 		[]string{
+			"event-outbox-relay",
 			"idle-reaper",
 			"workload-dispatcher",
 			"workload-runtime-reaper",
@@ -99,7 +100,7 @@ func TestIsolatedRuntimeRegistrationE2E(t *testing.T) {
 		},
 	)
 	assertRuntimeRegistration(t, h.services[storageService].app,
-		[]string{"longhorn-rwx-health"},
+		[]string{"event-outbox-relay", "longhorn-rwx-health"},
 		[]string{http.MethodGet + " /api/v1/storage/options"},
 		[]string{
 			http.MethodPost + " /api/v1/jobs",
@@ -109,6 +110,7 @@ func TestIsolatedRuntimeRegistrationE2E(t *testing.T) {
 	assertRuntimeRegistration(t, h.services[usageObservabilityService].app,
 		[]string{
 			"cluster-resource-collector",
+			"event-outbox-relay",
 			"gpu-usage-telemetry-collector",
 			"resource-hours-collector",
 		},

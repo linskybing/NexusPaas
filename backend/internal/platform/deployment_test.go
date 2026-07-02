@@ -66,20 +66,27 @@ func TestProductionBetaKustomizationIncludesEightBackendUnits(t *testing.T) {
 	}
 }
 
-// P0-4: only compute-control-plane gets a Kubernetes API identity, via a dedicated
-// ServiceAccount + wildcard-free least-privilege ClusterRole.
+// P0-4: every unit hosting a RequiresCluster service (readiness pings the API
+// server, cluster/health.go) gets a Kubernetes API identity — compute-control-plane
+// keeps its wildcard-free least-privilege ClusterRole, the other cluster-requiring
+// units are bound only to the shared single-rule readiness role. Gateway-only
+// units stay tokenless.
 func TestProductionBetaComputeControlPlaneRBAC(t *testing.T) {
 	path := "../../deploy/k3s/production-beta/backend-units.yaml"
 	body := readTextFile(t, path)
 
-	if got := strings.Count(body, "automountServiceAccountToken: true"); got != 1 {
-		t.Fatalf("automountServiceAccountToken: true count = %d, want exactly 1 (compute-control-plane only)", got)
+	clusterUnits := []string{"compute-control-plane", "iam-unit", "platform-io-unit", "usage-observability", "compute-api"}
+	if got := strings.Count(body, "automountServiceAccountToken: true"); got != len(clusterUnits) {
+		t.Fatalf("automountServiceAccountToken: true count = %d, want exactly %d (cluster-requiring units)", got, len(clusterUnits))
+	}
+	for _, unit := range clusterUnits {
+		requireContains(t, path, body, "serviceAccountName: "+unit)
 	}
 	for _, want := range []string{
-		"serviceAccountName: compute-control-plane",
 		"kind: ServiceAccount",
 		"kind: ClusterRole",
 		"kind: ClusterRoleBinding",
+		"name: nexuspaas-cluster-readiness",
 	} {
 		requireContains(t, path, body, want)
 	}
@@ -549,7 +556,10 @@ func TestProductionBetaLiveRehearsalHarnessIsGuarded(t *testing.T) {
 	requireContains(t, scriptPath, script, "/metrics")
 	requireContains(t, scriptPath, script, "/openapi.json")
 	requireContains(t, scriptPath, script, "/service-registry")
-	requireContains(t, scriptPath, script, "service-registry contains ${count} services, want 15")
+	// Each unit lists only its hosted services; the 15-service contract is the
+	// union across the 8 units.
+	requireContains(t, scriptPath, script, "verify_registry_union")
+	requireContains(t, scriptPath, script, "service-registry union covers ${count} services, want 15")
 	requireContains(t, scriptPath, script, "previous_image_for_unit")
 	requireContains(t, scriptPath, script, "rollback_and_redeploy_each_unit")
 	requireContains(t, scriptPath, script, "app=${previous_image}")

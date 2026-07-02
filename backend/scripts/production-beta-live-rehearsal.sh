@@ -226,33 +226,29 @@ rendered_has_deployment() {
 rendered_service_name_for_unit() {
   local render_file="$1"
   local unit="$2"
+  # kustomize sorts document keys alphabetically, so a ConfigMap's data block
+  # (holding SERVICE_NAME) precedes its kind line; collect fields per document
+  # and evaluate at each --- boundary instead of gating on kind first.
   awk -v config_name="${unit}-config" '
-    $0 == "kind: ConfigMap" {
-      in_configmap = 1
+    function flush() {
+      if (is_configmap && name == config_name) {
+        print service_name
+      }
+      is_configmap = 0
       name = ""
       service_name = ""
     }
-    in_configmap && $0 ~ /^  name: / {
+    $0 == "---" { flush(); next }
+    $0 == "kind: ConfigMap" { is_configmap = 1 }
+    $0 ~ /^  name: / && name == "" {
       name = $2
       gsub(/"/, "", name)
     }
-    in_configmap && $0 ~ /^  SERVICE_NAME: / {
+    $0 ~ /^  SERVICE_NAME: / {
       service_name = $2
       gsub(/"/, "", service_name)
     }
-    in_configmap && $0 == "---" {
-      if (name == config_name) {
-        print service_name
-      }
-      in_configmap = 0
-      name = ""
-      service_name = ""
-    }
-    END {
-      if (in_configmap && name == config_name) {
-        print service_name
-      }
-    }
+    END { flush() }
   ' "${render_file}"
 }
 
@@ -447,7 +443,10 @@ apply_candidate_manifests() {
   local unit
   while IFS= read -r unit; do
     [[ -n "${unit}" ]] || continue
-    kctl set image "deployment/${unit}" "app=${CANDIDATE_IMAGE}"
+    # '*' covers init containers too (the render's placeholder tag is not
+    # pullable from a real cluster); the rollback drill below still swaps only
+    # the app container, which is the traffic-serving previous-image contract.
+    kctl set image "deployment/${unit}" "*=${CANDIDATE_IMAGE}"
   done <"${SERVICE_LIST_FILE}"
 }
 
@@ -513,35 +512,49 @@ smoke_unit() {
   local phase="$2"
   local index="$3"
   local port=$((SMOKE_PORT_BASE + index))
+  local registry_file="${ARTIFACT_DIR}/service-registry-${phase}-${unit}.json"
   start_port_forward "${unit}" "${port}"
   wait_for_smoke_endpoint "http://127.0.0.1:${port}/healthz" \
     || die "deployment/${unit} /healthz did not become reachable"
   smoke_endpoint "${unit}" "${port}" "/healthz" "${phase}"
   smoke_endpoint "${unit}" "${port}" "/readyz" "${phase}"
   smoke_endpoint "${unit}" "${port}" "/metrics" "${phase}"
+  # Each unit's /service-registry lists only the services it hosts; the
+  # 15-service contract is verified as the union across units below.
+  smoke_curl "http://127.0.0.1:${port}/service-registry" >"${registry_file}"
+  printf '%s\t%s\t%s\tpass\n' "${phase}" "${unit}" "/service-registry" >>"${SMOKE_FILE}"
   cleanup_port_forward
 }
 
-smoke_gateway_registry() {
+smoke_gateway_openapi() {
   local phase="$1"
   local port=$((SMOKE_PORT_BASE + 80))
-  local registry_file="${ARTIFACT_DIR}/service-registry-${phase}.json"
   start_port_forward "platform-gateway" "${port}"
   wait_for_smoke_endpoint "http://127.0.0.1:${port}/healthz" \
     || die "platform-gateway /healthz did not become reachable"
   smoke_endpoint "platform-gateway" "${port}" "/openapi.json" "${phase}"
-  smoke_curl "http://127.0.0.1:${port}/service-registry" >"${registry_file}"
-  printf '%s\t%s\t%s\tpass\n' "${phase}" "platform-gateway" "/service-registry" >>"${SMOKE_FILE}"
+  cleanup_port_forward
+}
 
-  local count service
-  count="$(grep -Eo '"name"[[:space:]]*:' "${registry_file}" | wc -l | tr -d '[:space:]')"
-  [[ "${count}" = "15" ]] || die "service-registry contains ${count} services, want 15"
+verify_registry_union() {
+  local phase="$1"
+  local union_file="${ARTIFACT_DIR}/service-registry-union-${phase}.txt"
+  grep -hEo '"name"[[:space:]]*:[[:space:]]*"[^"]+"' \
+    "${ARTIFACT_DIR}/service-registry-${phase}-"*.json 2>/dev/null \
+    | sed -E 's/.*:[[:space:]]*"([^"]+)"/\1/' | sort -u >"${union_file}"
+  local count service missing=0
+  count=0
   while IFS= read -r service; do
     [[ -n "${service}" ]] || continue
-    grep -Fq "\"${service}\"" "${registry_file}" \
-      || die "service-registry is missing ${service}"
+    if grep -Fxq "${service}" "${union_file}"; then
+      count=$((count + 1))
+    else
+      log "registry union is missing ${service} in ${phase}"
+      missing=$((missing + 1))
+    fi
   done < <(logical_services)
-  cleanup_port_forward
+  printf '%s\tALL-8-UNITS\t/service-registry (union)\t%s-of-15\n' "${phase}" "${count}" >>"${SMOKE_FILE}"
+  [[ "${missing}" = "0" ]] || die "service-registry union covers ${count} services, want 15"
 }
 
 smoke_all_units() {
@@ -552,7 +565,8 @@ smoke_all_units() {
     smoke_unit "${unit}" "${phase}" "${index}"
     index=$((index + 1))
   done <"${SERVICE_LIST_FILE}"
-  smoke_gateway_registry "${phase}"
+  smoke_gateway_openapi "${phase}"
+  verify_registry_union "${phase}"
 }
 
 rollback_and_redeploy_each_unit() {

@@ -13,6 +13,21 @@ x-backend-env: &backend-env
   API_KEYS: "${TEST_RUNTIME_API_KEY},${TEST_RUNTIME_SERVICE_KEY}"
   API_KEY_PRINCIPALS: "${COLLAB_API_KEY_PRINCIPALS}"
   SERVICE_API_KEY: "${TEST_RUNTIME_SERVICE_KEY}"
+  # Scoped internal service identity, required in production (fail-closed).
+  # The smoke exercises real unit-to-unit calls (scheduler -> org-project
+  # owner-read, workload -> storage mount-plan), so every unit is a trusted
+  # caller with the shared smoke key; the full-mesh audience list is a smoke
+  # simplification — production narrows this per caller.
+  SERVICE_IDENTITY_KEY: "${TEST_RUNTIME_SERVICE_KEY}"
+  SERVICE_TRUSTED_IDENTITIES: >-
+    {"platform-gateway":{"key":"${TEST_RUNTIME_SERVICE_KEY}","audiences":["platform-gateway","iam-unit","tenant-unit","collaboration-unit","platform-io-unit","usage-observability","compute-api","compute-control-plane"]},
+     "iam-unit":{"key":"${TEST_RUNTIME_SERVICE_KEY}","audiences":["platform-gateway","iam-unit","tenant-unit","collaboration-unit","platform-io-unit","usage-observability","compute-api","compute-control-plane"]},
+     "tenant-unit":{"key":"${TEST_RUNTIME_SERVICE_KEY}","audiences":["platform-gateway","iam-unit","tenant-unit","collaboration-unit","platform-io-unit","usage-observability","compute-api","compute-control-plane"]},
+     "collaboration-unit":{"key":"${TEST_RUNTIME_SERVICE_KEY}","audiences":["platform-gateway","iam-unit","tenant-unit","collaboration-unit","platform-io-unit","usage-observability","compute-api","compute-control-plane"]},
+     "platform-io-unit":{"key":"${TEST_RUNTIME_SERVICE_KEY}","audiences":["platform-gateway","iam-unit","tenant-unit","collaboration-unit","platform-io-unit","usage-observability","compute-api","compute-control-plane"]},
+     "usage-observability":{"key":"${TEST_RUNTIME_SERVICE_KEY}","audiences":["platform-gateway","iam-unit","tenant-unit","collaboration-unit","platform-io-unit","usage-observability","compute-api","compute-control-plane"]},
+     "compute-api":{"key":"${TEST_RUNTIME_SERVICE_KEY}","audiences":["platform-gateway","iam-unit","tenant-unit","collaboration-unit","platform-io-unit","usage-observability","compute-api","compute-control-plane"]},
+     "compute-control-plane":{"key":"${TEST_RUNTIME_SERVICE_KEY}","audiences":["platform-gateway","iam-unit","tenant-unit","collaboration-unit","platform-io-unit","usage-observability","compute-api","compute-control-plane"]}}
   SERVICE_URLS: "${COLLAB_SERVICE_URLS}"
   DATABASE_URL: "postgres://nexuspaas:${TEST_POSTGRES_PASSWORD}@postgres:5432/nexuspaas?sslmode=disable"
   REDIS_URL: "redis://redis:6379/0"
@@ -23,10 +38,18 @@ x-backend-env: &backend-env
   OBJECT_STORE_BUCKET: "${TEST_OBJECT_STORE_BUCKET}"
   AUTHORIZATION_POLICY_URL: "http://iam-unit:8080"
   AUTHORIZATION_POLICY_API_KEY: "${TEST_RUNTIME_SERVICE_KEY}"
-  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  # PRODUCTION=true fail-closed config (validateProductionSupplyChain) requires
+  # these three; mirror production-beta runtime-config so the smoke topology
+  # boots. The OTLP endpoint is unreachable in compose — exports fail soft.
+  K8S_IMAGE_CHECK_ENABLED: "true"
+  IMAGE_PUBLISH_REQUIRE_PROVENANCE: "true"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318"
   OTEL_TRACES_SAMPLER: "parentbased_traceratio"
   OTEL_TRACES_SAMPLER_ARG: "0.1"
   OTEL_RESOURCE_ATTRIBUTES: "service.namespace=nexuspaas,deployment.environment=collaboration-smoke"
+  # Events flow through the Postgres outbox and reach Redis via the maintenance
+  # relay task; the default 15m interval outlives the smoke's 10s event waits.
+  MAINTENANCE_INTERVAL: "2s"
 
 x-backend-service: &backend-service
   image: "${BACKEND_IMAGE}"
@@ -102,7 +125,9 @@ services:
     profiles: ["tasks"]
     environment:
       <<: *backend-env
-      SERVICE_NAME: "all"
+      # Explicit unit (production forbids SERVICE_NAME=all); mirrors the live
+      # rehearsal migration Job, which runs under platform-gateway-config.
+      SERVICE_NAME: "platform-gateway"
       ADMIN_TASK: "apply-migrations"
     ports: []
 

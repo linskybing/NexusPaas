@@ -42,13 +42,21 @@ plan, policy, preempt, project, queue, resourcehours, storage, upload, user, vpn
 map to ported code. The reference `course_monitoring_reconciler` remains the only
 deliberately out-of-scope reconciler (ADR 0006).
 
-**Highest-risk open problems are all live-execution P0s, not code defects:**
-1. No real external image registry promotion/rollback (Harbor is an isolated
-   foundation only).
-2. No live 8-unit staging deploy/smoke/per-unit previous-image rollback (live
-   rollback evidence covers the 15-deployment namespace only).
-3. No live staging DB migration/rollback drill.
-4. No live external staging Secret readiness/provenance.
+**V1 Launch Decision (2026-07-02, ADR 0008):** the owner closed launch items
+1–4 below at **owner-accepted kind-tier staging** with a genuine external
+registry (ghcr.io), via a full green `production-beta-live-rehearsal.sh` run
+(`docs/acceptance/evidence/2026-07-02-v1-launch-rehearsal-report.md`); item 5's
+product build dispatch is **Accepted-with-mitigation** (feature deferred,
+platform supply chain proven, publish guards fail closed). The external-staging
+rerun stays tracked as a post-launch follow-up — this decision does not create
+external proof.
+
+**Highest-risk open problems were all live-execution P0s, not code defects
+(status per the 2026-07-02 launch decision):**
+1. ~~No real external image registry promotion/rollback~~ — **Closed 2026-07-02**: build → push → `crane copy` promote → digest-pinned deploy → per-unit previous-image rollback through **ghcr.io (genuine external registry)**. Self-hosted external Harbor remains a post-launch follow-up.
+2. ~~No live 8-unit staging deploy/smoke/per-unit previous-image rollback~~ — **Closed 2026-07-02 (owner-accepted kind-tier staging, ADR 0008)**: 8-unit candidate rollout, per-unit /healthz+/readyz+/metrics, 15-of-15 registry union, 16/16 rollback+redeploy transitions.
+3. ~~No live staging DB migration/rollback drill~~ — **Closed 2026-07-02 (owner-accepted tier)**: in-cluster apply-migrations → validate-migrations Jobs green against live Postgres; restore-from-backup drill stays a post-launch follow-up (forward-only migrations).
+4. ~~No live staging Secret readiness~~ — **Closed 2026-07-02 (owner-accepted tier)**: all 12 Secret objects created with real generated values and presence-verified on the staging cluster; rotation/revocation stays a post-launch follow-up.
 5. Typed external API coverage and typed ownership remain **static fixtures
    only** ("Open") — not live-authorization proven; full image-build/SBOM/
    signing/scan GA workflow and live PERF/MON also remain open.
@@ -216,11 +224,15 @@ buildable or deployable artifacts** — the boundary is logical, not physical.
    per deployable unit, or formally accept the 8-unit shared-binary topology as
    the GA boundary (document the trade-off in an ADR).
 
-Items 2–4 now have **kind-tier single-cluster** live evidence
-(`docs/acceptance/evidence/2026-07-01-kind-live-e2e-report.md`); this is not
-external GA proof, so the **external** portions of items 1–5 stay open.
-
-New feature expansion should not start before items 1–5 (live P0s) are evidenced.
+2026-07-02 launch decision (ADR 0008): items 1–4 are closed at owner-accepted
+kind-tier staging with a genuine external registry (ghcr.io) via the full green
+`production-beta-live-rehearsal.sh` run
+(`docs/acceptance/evidence/2026-07-02-v1-launch-rehearsal-report.md`); item 5 is
+Accepted-with-mitigation (product build dispatch deferred; platform supply
+chain proven kind-tier; publish guards fail closed). Item 11 is resolved by ADR
+0008 §4: the 8-unit shared-binary topology is formally accepted as the GA
+boundary. The external-staging rerun of items 1–4 stays tracked post-launch and
+must not be described as done.
 
 ## 9. Reviewer Status
 
