@@ -49,7 +49,7 @@ type buildExecutor interface {
 func newBuildExecutorFromConfig(cfg platform.Config) buildExecutor {
 	switch cfg.ImageBuildExecutor {
 	case "docker":
-		return dockerBuildExecutor{}
+		return dockerBuildExecutor{cosignKey: cfg.ImageBuildCosignKey}
 	default:
 		return nil
 	}
@@ -59,11 +59,15 @@ func newBuildExecutorFromConfig(cfg platform.Config) buildExecutor {
 // docker build → docker push → syft SBOM → trivy scan (fail-closed) → cosign
 // sign. It is the live-evidence executor; an in-cluster BuildKit Job executor
 // is the tracked production follow-up (ADR 0008 / blocker-ledger §8 item 5).
-type dockerBuildExecutor struct{}
+type dockerBuildExecutor struct {
+	// cosignKey is the operator-provided signing key path (IMAGE_BUILD_COSIGN_KEY);
+	// empty means an ephemeral keypair is generated per build.
+	cosignKey string
+}
 
 func (dockerBuildExecutor) Name() string { return "docker" }
 
-func (dockerBuildExecutor) Execute(ctx context.Context, in buildExecutionInput) (buildExecutionResult, error) {
+func (e dockerBuildExecutor) Execute(ctx context.Context, in buildExecutionInput) (buildExecutionResult, error) {
 	result := buildExecutionResult{}
 	workdir, err := os.MkdirTemp("", "nexuspaas-build-"+in.BuildID+"-")
 	if err != nil {
@@ -151,14 +155,20 @@ func (dockerBuildExecutor) Execute(ctx context.Context, in buildExecutionInput) 
 		signRef = signRef[:at]
 	}
 	signRef = signRef + "@" + result.ImageDigest
-	keyPath, cleanupKey, err := cosignKeyPath(ctx, workdir, &result)
+	keyPath, err := e.cosignKeyPath(ctx, workdir, &result)
 	if err != nil {
 		return result, err
 	}
-	defer cleanupKey()
-	signCmd := exec.CommandContext(ctx, "cosign", "sign", "--yes", "--tlog-upload=false", "--key", keyPath, signRef)
+	// --use-signing-config=false: cosign v3 defaults to a Sigstore signing
+	// config that rejects --tlog-upload=false; this pipeline signs key-based
+	// against a private registry with no transparency log.
+	signCmd := exec.CommandContext(ctx, "cosign", "sign", "--yes", "--use-signing-config=false", "--tlog-upload=false", "--key", keyPath, signRef)
 	signCmd.Dir = workdir
-	signCmd.Env = append(os.Environ(), "COSIGN_PASSWORD="+os.Getenv("COSIGN_PASSWORD"))
+	if e.cosignKey == "" {
+		// ephemeral keypair has an empty password; operator keys inherit the
+		// process environment (COSIGN_PASSWORD) untouched.
+		signCmd.Env = append(os.Environ(), "COSIGN_PASSWORD=")
+	}
 	signOut, err := signCmd.CombinedOutput()
 	result.Logs = append(result.Logs, "[sign] $ cosign sign "+signRef+"\n"+strings.TrimSpace(string(signOut)))
 	if err != nil {
@@ -168,11 +178,12 @@ func (dockerBuildExecutor) Execute(ctx context.Context, in buildExecutionInput) 
 	return result, nil
 }
 
-// cosignKeyPath returns the signing key: COSIGN_KEY when configured, otherwise
-// an ephemeral keypair generated into the build workdir (live-evidence runs).
-func cosignKeyPath(ctx context.Context, workdir string, result *buildExecutionResult) (string, func(), error) {
-	if configured := strings.TrimSpace(os.Getenv("COSIGN_KEY")); configured != "" {
-		return configured, func() {}, nil
+// cosignKeyPath returns the signing key: the configured operator key when set,
+// otherwise an ephemeral keypair generated into the build workdir (removed with
+// it) for live-evidence runs.
+func (e dockerBuildExecutor) cosignKeyPath(ctx context.Context, workdir string, result *buildExecutionResult) (string, error) {
+	if e.cosignKey != "" {
+		return e.cosignKey, nil
 	}
 	cmd := exec.CommandContext(ctx, "cosign", "generate-key-pair")
 	cmd.Dir = workdir
@@ -180,9 +191,9 @@ func cosignKeyPath(ctx context.Context, workdir string, result *buildExecutionRe
 	out, err := cmd.CombinedOutput()
 	result.Logs = append(result.Logs, "[keygen] $ cosign generate-key-pair\n"+strings.TrimSpace(string(out)))
 	if err != nil {
-		return "", func() {}, fmt.Errorf("cosign keygen failed: %w", err)
+		return "", fmt.Errorf("cosign keygen failed: %w", err)
 	}
-	return filepath.Join(workdir, "cosign.key"), func() {}, nil
+	return filepath.Join(workdir, "cosign.key"), nil
 }
 
 func lastLine(s string) string {

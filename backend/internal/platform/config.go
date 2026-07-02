@@ -72,6 +72,7 @@ type Config struct {
 	ImageCheckEnabled           bool
 	ImageProvenanceRequired     bool
 	ImageBuildExecutor          string
+	ImageBuildCosignKey         string
 	DockerCleanupEnabled        bool
 	DockerCleanupNamespace      string
 	DockerCleanupImage          string
@@ -192,6 +193,7 @@ const (
 	envAdapterConfig               = "ADAPTER_CONFIG"
 	envImageCheckEnabled           = "K8S_IMAGE_CHECK_ENABLED"
 	envImageBuildExecutor          = "IMAGE_BUILD_EXECUTOR"
+	envImageBuildCosignKey         = "IMAGE_BUILD_COSIGN_KEY"
 	envImageProvenanceRequired     = "IMAGE_PUBLISH_REQUIRE_PROVENANCE"
 	envDockerCleanupEnabled        = "DOCKER_CLEANUP_ENABLED"
 	envDockerCleanupNamespace      = "DOCKER_CLEANUP_NAMESPACE"
@@ -341,6 +343,7 @@ func ConfigFromEnv() Config {
 		K8sNamespacePrefix:          env("K8S_PROJECT_NAMESPACE_PREFIX", "proj"),
 		ImageCheckEnabled:           parser.envBool(envImageCheckEnabled, false),
 		ImageBuildExecutor:          strings.ToLower(strings.TrimSpace(env(envImageBuildExecutor, ""))),
+		ImageBuildCosignKey:         strings.TrimSpace(env(envImageBuildCosignKey, "")),
 		ImageProvenanceRequired:     parser.envBool(envImageProvenanceRequired, false),
 		DockerCleanupEnabled:        parser.envBool(envDockerCleanupEnabled, false),
 		DockerCleanupNamespace:      strings.TrimSpace(env(envDockerCleanupNamespace, "default")),
