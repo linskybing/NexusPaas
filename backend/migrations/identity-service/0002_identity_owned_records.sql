@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS identity_roles (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Whole-table backfills by design: each WHERE below restates the full scope
+-- explicitly (id is the primary key, so it is never NULL).
 UPDATE users
 SET payload = payload || jsonb_strip_nulls(jsonb_build_object(
         'id', id,
@@ -50,7 +52,8 @@ SET payload = payload || jsonb_strip_nulls(jsonb_build_object(
         'system_role', system_role,
         'type', type,
         'status', status
-    ));
+    ))
+WHERE id IS NOT NULL;
 
 UPDATE sessions
 SET payload = payload || jsonb_strip_nulls(jsonb_build_object(
@@ -59,7 +62,8 @@ SET payload = payload || jsonb_strip_nulls(jsonb_build_object(
         'user_id', user_id,
         'expires_at', expires_at,
         'created_at', created_at
-    ));
+    ))
+WHERE id IS NOT NULL;
 
 UPDATE refresh_tokens
 SET payload = payload || jsonb_strip_nulls(jsonb_build_object(
@@ -68,7 +72,8 @@ SET payload = payload || jsonb_strip_nulls(jsonb_build_object(
         'user_id', user_id,
         'expires_at', expires_at,
         'created_at', created_at
-    ));
+    ))
+WHERE id IS NOT NULL;
 
 UPDATE user_api_tokens
 SET payload = payload || jsonb_strip_nulls(jsonb_build_object(
@@ -82,7 +87,8 @@ SET payload = payload || jsonb_strip_nulls(jsonb_build_object(
         'revoked', revoked,
         'revoked_at', revoked_at,
         'created_at', created_at
-    ));
+    ))
+WHERE id IS NOT NULL;
 
 UPDATE captchas
 SET payload = payload || jsonb_strip_nulls(jsonb_build_object(
@@ -90,7 +96,8 @@ SET payload = payload || jsonb_strip_nulls(jsonb_build_object(
         'answer_hash', answer_hash,
         'expires_at', expires_at,
         'created_at', created_at
-    ));
+    ))
+WHERE id IS NOT NULL;
 
 UPDATE login_failures
 SET payload = payload || jsonb_strip_nulls(jsonb_build_object(
@@ -100,7 +107,8 @@ SET payload = payload || jsonb_strip_nulls(jsonb_build_object(
         'failures', failures,
         'locked_until', locked_until,
         'updated_at', updated_at
-    ));
+    ))
+WHERE id IS NOT NULL;
 
 INSERT INTO users (
     id, username, email, full_name, password_hash, role, role_id, system_role,

@@ -99,7 +99,7 @@ func statusReconcileUpdate(record contracts.Record[map[string]any], lifecycle cl
 	return removeNoopStatusUpdate(record.Data, update)
 }
 
-func removeNoopStatusUpdate(data map[string]any, update map[string]any) map[string]any {
+func removeNoopStatusUpdate(data, update map[string]any) map[string]any {
 	for key, value := range update {
 		if sameStatusValue(data[key], value) {
 			delete(update, key)

@@ -154,7 +154,7 @@ type Record[T any] struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-type PolicyDecisionPoint interface {
+type PolicyEnforcer interface {
 	Enforce(ctx context.Context, subject, domain, object, action string) (Decision, error)
 }
 

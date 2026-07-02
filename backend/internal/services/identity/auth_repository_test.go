@@ -91,7 +91,7 @@ func assertAPITokenActiveFilteringAndVerification(t *testing.T, fixture authRepo
 	if !ok || token.ID != fixture.created.ID || user.ID != "US1" {
 		t.Fatalf("verify active token = token:%#v user:%#v ok:%v, want created token/user", token, user, ok)
 	}
-	if ok := fixture.repo.TouchAPITokenLastUsed(fixture.ctx, token.ID, fixture.now.Add(time.Minute)); !ok {
+	if !fixture.repo.TouchAPITokenLastUsed(fixture.ctx, token.ID, fixture.now.Add(time.Minute)) {
 		t.Fatal("touch last_used_at failed")
 	}
 	touched, _ := fixture.store.Get(fixture.ctx, apiTokensResource, token.ID)
@@ -197,7 +197,7 @@ func TestIdentityAuthRepositorySessionRefreshLifecycle(t *testing.T) {
 	if _, ok := repo.FindValidSession(ctx, pair.AccessToken, now); ok {
 		t.Fatal("revoked/deleted session is still valid")
 	}
-	if ok := repo.SetUserStatus(ctx, "US1", "online"); !ok {
+	if !repo.SetUserStatus(ctx, "US1", "online") {
 		t.Fatal("set user status failed")
 	}
 	user, _ := store.Get(ctx, usersResource, "US1")

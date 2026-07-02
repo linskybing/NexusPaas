@@ -12,7 +12,8 @@ RUN apk add --no-cache --upgrade ca-certificates libcrypto3 libssl3 \
     && adduser -S -D -H -u 10001 -G app app
 COPY --from=build /out/microservice /usr/local/bin/microservice
 WORKDIR /app
-COPY --chown=app:app backend/migrations ./migrations
+# root-owned on purpose: the runtime user only reads migrations (0644/0755).
+COPY backend/migrations ./migrations
 USER app:app
 ENV HTTP_ADDR=:8080
 EXPOSE 8080

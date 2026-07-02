@@ -40,10 +40,10 @@ type transactionalRecordStore interface {
 	DeleteWithEvent(ctx context.Context, resource, id string, buildEvent deleteEventBuilder) (bool, error)
 }
 
-// transactionalUpsertRecordStore is a separate optional extension so stores that
+// transactionalUpserter is a separate optional extension so stores that
 // support create/update/delete transactional event coupling are not forced to add
 // upsert unless they can implement it atomically.
-type transactionalUpsertRecordStore interface {
+type transactionalUpserter interface {
 	UpsertWithEvent(ctx context.Context, resource, id string, data map[string]any, buildEvent recordEventBuilder) (contracts.Record[map[string]any], error)
 }
 
@@ -58,10 +58,10 @@ type StoreTx interface {
 	Emit(event contracts.Event)
 }
 
-// transactionalScopedStore is the optional capability behind App.WithTx. Kept
+// txRunner is the optional capability behind App.WithTx. Kept
 // separate from transactionalRecordStore (Interface Segregation) so the
 // single-record fast path and in-memory/decorated stores are unaffected.
-type transactionalScopedStore interface {
+type txRunner interface {
 	RunInTx(ctx context.Context, fn func(tx StoreTx) error) error
 }
 
@@ -88,7 +88,7 @@ type eventRelayResult struct {
 	DeadLetter int
 }
 
-type eventRelay interface {
+type eventRelayer interface {
 	RelayPending(ctx context.Context, limit int) (eventRelayResult, error)
 }
 
@@ -135,7 +135,7 @@ func WithEventBus(events EventStream) Option {
 	}
 }
 
-func WithEventRelay(relay eventRelay, batchSize int) Option {
+func WithEventRelay(relay eventRelayer, batchSize int) Option {
 	return func(a *App) {
 		if relay == nil {
 			return
@@ -178,7 +178,7 @@ func WithObjectStore(store ObjectStore) Option {
 }
 
 // WithPDP injects the policy decision point.
-func WithPDP(pdp contracts.PolicyDecisionPoint) Option {
+func WithPDP(pdp contracts.PolicyEnforcer) Option {
 	return func(a *App) {
 		if pdp != nil {
 			a.PDP = pdp

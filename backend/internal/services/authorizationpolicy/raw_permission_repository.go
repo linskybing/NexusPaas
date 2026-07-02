@@ -26,7 +26,7 @@ type rawPermissionPolicyUpdateResult struct {
 	Updated  bool
 }
 
-type rawPermissionLookup interface {
+type rawPermissionChecker interface {
 	RawPermissionAllowed(context.Context, string, string, string, string) (bool, error)
 }
 

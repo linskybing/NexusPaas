@@ -83,7 +83,7 @@ func Register(app *platform.App) {
 }
 
 type RawPolicyPDP struct {
-	Policies rawPermissionLookup
+	Policies rawPermissionChecker
 }
 
 func (p RawPolicyPDP) Enforce(ctx context.Context, subject, domain, object, action string) (contracts.Decision, error) {

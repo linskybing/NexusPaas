@@ -412,7 +412,7 @@ func assertCORSOrigin(t *testing.T, rec *httptest.ResponseRecorder, want string)
 	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "" {
 		t.Fatalf("Access-Control-Allow-Credentials = %q, want omitted", got)
 	}
-	if got := rec.Header().Get("Access-Control-Allow-Origin"); got == "*" {
+	if rec.Header().Get("Access-Control-Allow-Origin") == "*" {
 		t.Fatal("Access-Control-Allow-Origin must not be wildcard")
 	}
 }

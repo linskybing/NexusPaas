@@ -251,7 +251,7 @@ type outboxRelayRow struct {
 	attempts int
 }
 
-func scanOutboxRelayRow(row postgresRow) (outboxRelayRow, error) {
+func scanOutboxRelayRow(row postgresRowScanner) (outboxRelayRow, error) {
 	event, attempts, err := scanOutboxEvent(row, true)
 	return outboxRelayRow{event: event, attempts: attempts}, err
 }
@@ -271,7 +271,7 @@ func scanOutboxEvents(rows postgresRows) ([]contracts.Event, error) {
 	return events, nil
 }
 
-func scanOutboxEvent(row postgresRow, includeAttempts bool) (contracts.Event, int, error) {
+func scanOutboxEvent(row postgresRowScanner, includeAttempts bool) (contracts.Event, int, error) {
 	var event contracts.Event
 	var raw []byte
 	attempts := 0
