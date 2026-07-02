@@ -26,6 +26,7 @@ KIND_CONTEXT="kind-${CLUSTER_NAME}"
 NAMESPACE="${NAMESPACE:-nexuspaas}"
 SCENARIOS="${SCENARIOS:-db k8s-api node-agent prometheus}"
 K8S_OUTAGE_SECONDS="${K8S_OUTAGE_SECONDS:-45}"
+API_KEY="${API_KEY:-nexuspaas-kind-admin-key}"
 RUN_ID="$(date -u '+%Y%m%d%H%M%S')"
 ARTIFACT_DIR="${ARTIFACT_DIR:-${TMPDIR:-/tmp}/nexuspaas-failure-injection/${RUN_ID}}"
 RESULT_TSV="${ARTIFACT_DIR}/results.tsv"
@@ -51,7 +52,7 @@ probe() {
     sleep 0.25
   done
   if [[ -z "${port}" ]]; then echo "000"; kill "${pf}" 2>/dev/null || true; wait "${pf}" 2>/dev/null || true; return; fi
-  code="$(curl -s -o "${ARTIFACT_DIR}/last-body.json" -w '%{http_code}' --max-time 10 "http://127.0.0.1:${port}${path}" || echo "000")"
+  code="$(curl -s -o "${ARTIFACT_DIR}/last-body.json" -w '%{http_code}' --max-time 10 -H "X-API-Key: ${API_KEY}" "http://127.0.0.1:${port}${path}" || echo "000")"
   kill "${pf}" 2>/dev/null || true; wait "${pf}" 2>/dev/null || true
   echo "${code}"
 }
