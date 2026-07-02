@@ -62,6 +62,7 @@ func Register(app *platform.App) {
 		panic(err)
 	}
 	registerBuildDispatcher(app)
+	registerImageProjectionReconciler(app)
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/image-acceleration-profiles", createImageAccelerationProfile)
 	app.RegisterCustomHandler(http.MethodPut, "/api/v1/image-acceleration-profiles/{id}", updateImageAccelerationProfile)
 	app.RegisterCustomHandler(http.MethodDelete, "/api/v1/image-acceleration-profiles/{id}", deleteImageAccelerationProfile)

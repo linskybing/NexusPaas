@@ -984,3 +984,20 @@ func mergeRows(resource string, source, local []map[string]any) []map[string]any
 	}
 	return out
 }
+
+// registerImageProjectionReconciler wires the image-registry access read
+// models into the periodic drift→replay reconcile job (DATA-016/DATA-018).
+func registerImageProjectionReconciler(app *platform.App) {
+	app.RegisterProjectionReconciler(platform.ProjectionReconcilerSpec{
+		Owner:     serviceName,
+		Consumers: []string{imageProjectionConsumer},
+		Drift: func(ctx context.Context) (int, error) {
+			report, err := imageProjectionDrift(ctx, app)
+			if err != nil {
+				return 0, err
+			}
+			return len(report.Missing) + len(report.Orphan) + len(report.Stale), nil
+		},
+		Sync: func(ctx context.Context) { syncImageReadModels(app, shared.MaintenanceRequest(ctx)) },
+	})
+}

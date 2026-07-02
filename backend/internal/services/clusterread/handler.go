@@ -1,6 +1,7 @@
 package clusterread
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -115,6 +116,7 @@ func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/projects/gpu-usage/by-user", getProjectsGPUUsageByUser)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/projects/{id}/gpu-usage", getProjectGPUUsage)
 	registerClusterResourceCollector(app)
+	registerClusterProjectionReconciler(app)
 }
 
 func getClusterSummary(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
@@ -849,4 +851,21 @@ func anySlice(data map[string]any, keys ...string) []any {
 		}
 	}
 	return nil
+}
+
+// registerClusterProjectionReconciler wires the clusterread read models into
+// the periodic drift→replay reconcile job (DATA-016/DATA-018).
+func registerClusterProjectionReconciler(app *platform.App) {
+	app.RegisterProjectionReconciler(platform.ProjectionReconcilerSpec{
+		Owner:     serviceName,
+		Consumers: []string{clusterProjectionConsumer},
+		Drift: func(ctx context.Context) (int, error) {
+			report, err := projectionDrift(app, shared.MaintenanceRequest(ctx))
+			if err != nil {
+				return 0, err
+			}
+			return len(report.Missing) + len(report.Orphan) + len(report.Stale), nil
+		},
+		Sync: func(ctx context.Context) { syncClusterReadModels(app, shared.MaintenanceRequest(ctx)) },
+	})
 }

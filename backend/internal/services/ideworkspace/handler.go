@@ -65,6 +65,7 @@ func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/ide/start", startIDE)
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/ide/stop", stopIDE)
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/ide/delete", deleteIDE)
+	registerIDEProjectionReconciler(app)
 }
 
 func listImages(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {

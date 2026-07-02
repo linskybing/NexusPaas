@@ -1,6 +1,8 @@
 package authorizationpolicy
 
 import (
+	"context"
+	"github.com/linskybing/nexuspaas/backend/internal/services/shared"
 	"maps"
 	"net/http"
 	"strings"
@@ -96,4 +98,26 @@ func policyIdentityRecords(app *platform.App, r *http.Request, localResource, _ 
 	default:
 		return nil
 	}
+}
+
+// registerAuthorizationPolicyProjectionReconciler wires the authorization-
+// policy read models (identity + policy-data consumers) into the periodic
+// drift→replay reconcile job (DATA-016/DATA-018). The drift report spans both
+// consumers' pairs, so a rebuild resets and replays both.
+func registerAuthorizationPolicyProjectionReconciler(app *platform.App) {
+	app.RegisterProjectionReconciler(platform.ProjectionReconcilerSpec{
+		Owner:     serviceName,
+		Consumers: []string{identityProjectionConsumer, policyDataProjectionConsumer},
+		Drift: func(ctx context.Context) (int, error) {
+			report, err := authorizationPolicyProjectionRepo(app).projectionDrift(ctx)
+			if err != nil {
+				return 0, err
+			}
+			return len(report.Missing) + len(report.Orphan) + len(report.Stale), nil
+		},
+		Sync: func(ctx context.Context) {
+			syncPolicyIdentityReadModels(app, shared.MaintenanceRequest(ctx))
+			syncPolicyDataReadModels(ctx, app)
+		},
+	})
 }

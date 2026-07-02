@@ -147,8 +147,12 @@ func TestPolicyDataSyncMaintenanceWritesConfigMaps(t *testing.T) {
 	}, platform.WithCluster(clusterClient))
 	Register(app)
 
-	if !slices.Equal(app.MaintenanceTaskNames(), []string{policyDataTaskName}) {
-		t.Fatalf("maintenance tasks = %v, want only %s", app.MaintenanceTaskNames(), policyDataTaskName)
+	wantTasks := []string{
+		policyDataTaskName,
+		"projection-reconcile:" + identityProjectionConsumer + "+" + policyDataProjectionConsumer,
+	}
+	if !slices.Equal(app.MaintenanceTaskNames(), wantTasks) {
+		t.Fatalf("maintenance tasks = %v, want %v", app.MaintenanceTaskNames(), wantTasks)
 	}
 	createPolicyRecords(t, app, policyDataProjectsResource, []map[string]any{{
 		"id":                      projectID,

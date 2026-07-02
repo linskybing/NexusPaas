@@ -334,3 +334,20 @@ func valueFrom(data map[string]any, keys ...string) string {
 	}
 	return ""
 }
+
+// registerProjectAccessProjectionReconciler wires the project-access read
+// models into the periodic drift→replay reconcile job (DATA-016/DATA-018).
+func registerProjectAccessProjectionReconciler(app *platform.App) {
+	app.RegisterProjectionReconciler(platform.ProjectionReconcilerSpec{
+		Owner:     serviceName,
+		Consumers: []string{projectAccessConsumer},
+		Drift: func(ctx context.Context) (int, error) {
+			report, err := projectAccessRepo(app).projectionDrift(ctx)
+			if err != nil {
+				return 0, err
+			}
+			return len(report.Missing) + len(report.Orphan) + len(report.Stale), nil
+		},
+		Sync: func(ctx context.Context) { syncProjectAccessReadModels(app, shared.MaintenanceRequest(ctx)) },
+	})
+}
