@@ -438,7 +438,14 @@ func (a *App) scopedServiceRequestAuthorized(r *http.Request, audience string) b
 	if !ok || strings.TrimSpace(trusted.Key) == "" {
 		return false
 	}
-	if subtle.ConstantTimeCompare([]byte(r.Header.Get(serviceKeyHeader)), []byte(trusted.Key)) != 1 {
+	presented := []byte(r.Header.Get(serviceKeyHeader))
+	match := subtle.ConstantTimeCompare(presented, []byte(trusted.Key))
+	if trusted.PreviousKey != "" {
+		// dual-key rotation window: the outgoing key stays valid until every
+		// sender has rolled onto the new one
+		match |= subtle.ConstantTimeCompare(presented, []byte(trusted.PreviousKey))
+	}
+	if match != 1 {
 		return false
 	}
 	if strings.TrimSpace(audience) == "" {
