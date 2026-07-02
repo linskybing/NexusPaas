@@ -226,6 +226,19 @@ func publishImageCatalogForProvenanceTest(t *testing.T, requireProvenance bool, 
 	app := newImageRegistryTestApp(t)
 	app.Config.ImageProvenanceRequired = requireProvenance
 	createImageRecords(t, app, imageCatalogResource, []map[string]any{row})
+	// Verified provenance now also requires a build record whose pipeline
+	// succeeded for the digest; seed one when the catalog row carries a
+	// signature (i.e. the "full provenance" cases).
+	if _, ok := row["signature"]; ok {
+		createImageRecords(t, app, imageBuildsResource, []map[string]any{{
+			"id":               "prov-build-" + fmt.Sprint(row["id"]),
+			"image_digest":     fmt.Sprint(row["digest"]),
+			"status":           "succeeded",
+			"sbom_status":      "succeeded",
+			"scan_status":      "passed",
+			"signature_status": "signed",
+		}})
+	}
 	req := imageRequest(http.MethodPost, "/api/v1/image-catalog/publish", fmt.Sprintf(`{"tag_id":%q,"project_id":"P1"}`, row["id"]), "ADMIN")
 	code, data, _ := publishCatalog(app, req, platform.RouteSpec{})
 	return code, data, app

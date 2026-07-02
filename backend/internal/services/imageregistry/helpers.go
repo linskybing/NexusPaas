@@ -340,9 +340,10 @@ func catalogAllowListRejection(tag map[string]any, requireProvenance bool) strin
 		return "catalog image scan must pass before publish"
 	}
 	// Supply-chain enforcement is opt-in (IMAGE_PUBLISH_REQUIRE_PROVENANCE): when on,
-	// the catalog image must already carry an SBOM digest and a signature ref before
-	// it can be allow-listed. This guards the presence of provenance metadata; live
-	// SBOM generation / signature execution (Syft/Cosign) remains a separate gap.
+	// the catalog image must carry SBOM + signature metadata (presence), and the
+	// caller (publishCatalog) additionally requires a verified build-pipeline
+	// record for the digest via buildProvenanceRejection — provenance fields are
+	// only trusted when the dispatcher pipeline wrote them.
 	if requireProvenance {
 		if shared.TextValue(tag, "sbom_digest", "sbomDigest", "sbom_ref", "sbom") == "" {
 			return "catalog image SBOM is required before publish"
@@ -352,6 +353,26 @@ func catalogAllowListRejection(tag map[string]any, requireProvenance bool) strin
 		}
 	}
 	return ""
+}
+
+// buildProvenanceRejection is the verified half of the provenance gate: the
+// catalog digest must correspond to a build record whose pipeline actually
+// succeeded (SBOM generated, scan passed, image signed). Catalog metadata alone
+// is not proof — only the dispatcher pipeline writes these terminal statuses.
+func buildProvenanceRejection(app *platform.App, r *http.Request, tag map[string]any) string {
+	digest := shared.TextValue(tag, "digest", "image_digest", "imageDigest")
+	for _, record := range app.Store.List(r.Context(), imageBuildsResource) {
+		if shared.TextValue(record.Data, "image_digest") != digest {
+			continue
+		}
+		if shared.TextValue(record.Data, "status") == "succeeded" &&
+			shared.TextValue(record.Data, "sbom_status") == "succeeded" &&
+			shared.TextValue(record.Data, "scan_status") == "passed" &&
+			shared.TextValue(record.Data, "signature_status") == "signed" {
+			return ""
+		}
+	}
+	return "no verified build provenance for catalog image digest"
 }
 
 func catalogScanPassed(status string) bool {
