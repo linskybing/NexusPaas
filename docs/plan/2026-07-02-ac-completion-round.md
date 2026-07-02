@@ -32,3 +32,25 @@ and frontend (E) classes remain out of scope. No release/tag is created.
 - Round close: `ci-security-gate.sh beta-rc` exit 0;
   `verify_ga_acceptance_trace_matrix.py` green; `go test -race ./...` green.
 - Post-merge: SonarCloud Quality Gate stays OK with 0 open issues.
+
+## Execution record (2026-07-02)
+
+All six phases executed on branch `ac-completion-round`; every live claim is
+kind/local-tier and labeled as such in the evidence reports:
+
+| Phase | Outcome | Evidence |
+|---|---|---|
+| 1 | Done — PutStream, multipart context upload, context_key fail-closed staging, from-storage permission gate | unit suites; commit `41e4e17` |
+| 2 | Done — dispatcher + docker executor + verified provenance gate; live pipeline E2E PASS against real Harbor (build→push→SBOM→scan→sign→pull→publish 409/200) | `evidence/2026-07-02-live-image-build-pipeline-report.md` |
+| 3 | Done — destructive restore drill PASS (78 tables), dual-key rotation live drill PASS (0 auth failures), OPS-019 matrix PASS (db/k8s-api/node-agent/prometheus) | `evidence/2026-07-02-db-backup-restore-drill-report.md`, `evidence/2026-07-02-ops-resilience-drills-report.md` |
+| 4 | Done — drift→replay reconcile job (7 families) with live kind injected-drift auto-repair, org-project typed migration 0002, live 66-family authz sweep | `evidence/2026-07-02-data-layer-report.md` |
+| 5 | Done — Prometheus + kube-state-metrics on kind, alert fire+resolve drill, k6 PERF-003/004/006/008 all green | `evidence/2026-07-02-live-perf-mon-report.md` |
+| 6 | Verifier 38 rows green; `go test -race ./...` green (23 pkgs); beta-rc gate + reviewer pass + PR recorded below | this doc, PR description |
+
+Deviations from plan: the in-cluster BuildKit Job executor (Phase 2 second
+executor) was NOT implemented — the docker executor carries the live evidence
+as the plan's pre-approved fallback, and the BuildKit executor is recorded in
+the ledgers as the tracked production follow-up. storage-service has drift
+checks but no local projection consumer, so it is documented rather than wired
+into the reconcile job. Codex was unavailable this round; Claude Code executed
+all three agent roles (fallback recorded per AGENTS.md).
