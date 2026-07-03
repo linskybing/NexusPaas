@@ -102,3 +102,55 @@ func registerServiceAuthRoute(app *App) {
 		return http.StatusOK, map[string]any{"ok": true}, nil
 	})
 }
+
+func TestServiceAuthDualKeyRotationWindow(t *testing.T) {
+	app := NewApp(Config{
+		ServiceName: "all",
+		HTTPAddr:    ":0",
+		ServiceTrustedIdentities: map[string]ServiceTrustedIdentity{
+			"caller-service": {Key: "new-key", PreviousKey: "old-key", Audiences: []string{"test-service"}},
+			"fresh-service":  {Key: "only-key", Audiences: []string{"test-service"}},
+		},
+	})
+	registerServiceAuthRoute(app)
+
+	cases := []struct {
+		name   string
+		caller string
+		key    string
+		want   int
+	}{
+		{name: "new key accepted", caller: "caller-service", key: "new-key", want: http.StatusOK},
+		{name: "previous key accepted during rotation", caller: "caller-service", key: "old-key", want: http.StatusOK},
+		{name: "wrong key rejected", caller: "caller-service", key: "stale-key", want: http.StatusUnauthorized},
+		{name: "empty key rejected when no previous key", caller: "fresh-service", key: "", want: http.StatusUnauthorized},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/internal/owner/o-1", nil)
+			req.Header.Set(serviceNameHeader, tc.caller)
+			if tc.key != "" {
+				req.Header.Set(serviceKeyHeader, tc.key)
+			}
+			rec := httptest.NewRecorder()
+			app.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.want, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestApplyServiceIdentityHeadersPresentsFirstKeyOfRotationPair(t *testing.T) {
+	cfg := Config{ServiceIdentityName: "caller-service", ServiceIdentityKey: " new-key , old-key "}
+	headers := http.Header{}
+	if !cfg.applyServiceIdentityHeaders(headers) {
+		t.Fatal("applyServiceIdentityHeaders = false, want true")
+	}
+	if got := headers.Get(serviceKeyHeader); got != "new-key" {
+		t.Fatalf("presented key = %q, want first key of the rotation pair", got)
+	}
+	if got := headers.Get(serviceNameHeader); got != "caller-service" {
+		t.Fatalf("presented name = %q, want caller-service", got)
+	}
+}

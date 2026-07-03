@@ -23,6 +23,7 @@ func Spec() platform.ServiceSpec {
 		Events:          []string{"PVCProvisioned", "StorageBound", "ProjectStorageBindingChanged", "ProjectStoragePermissionChanged", "StoragePermissionChanged", "StorageProfileChanged", "StorageMountPlanResolved", "DataPlanePlanBuilt", "CacheBindingChanged", "StorageBenchmarkRecorded", "FastTransferChanged", "FastTransferQueued", "FastTransferProgressed", "FastTransferCompleted", "FastTransferFailed", "LonghornRWXHealthChecked"},
 		Routes: []platform.RouteSpec{
 			route(http.MethodPost, "/internal/storage/projects/{project_id}/mount-plan", "mount_plans", "resolve", id("project_id"), serviceInternal()),
+			route(http.MethodPost, "/internal/storage/projects/{project_id}/build-source-access", "build_source_access", "resolve", id("project_id"), serviceInternal()),
 			route(http.MethodPost, "/internal/storage/projects/{project_id}/data-plane-plan", "data_plane_plans", "resolve", id("project_id"), serviceInternal()),
 			route(http.MethodPost, "/internal/storage/projects/{project_id}/transfers/{targetNamespace}/{name}/progress", "fast_transfers", "progress", id("name"), serviceInternal()),
 			route(http.MethodGet, "/api/v1/storage-profiles", "storage_profiles", "list", admin()),

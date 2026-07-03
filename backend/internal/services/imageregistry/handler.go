@@ -1,6 +1,7 @@
 package imageregistry
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -60,6 +61,8 @@ func Register(app *platform.App) {
 	if err := seedDefaultImageAccelerationProfiles(app); err != nil {
 		panic(err)
 	}
+	registerBuildDispatcher(app)
+	registerImageProjectionReconciler(app)
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/image-acceleration-profiles", createImageAccelerationProfile)
 	app.RegisterCustomHandler(http.MethodPut, "/api/v1/image-acceleration-profiles/{id}", updateImageAccelerationProfile)
 	app.RegisterCustomHandler(http.MethodDelete, "/api/v1/image-acceleration-profiles/{id}", deleteImageAccelerationProfile)
@@ -87,6 +90,7 @@ func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodPut, "/api/v1/image-requests/{id}/approve", approveImageRequest)
 	app.RegisterCustomHandler(http.MethodPut, "/api/v1/image-requests/{id}/reject", rejectImageRequest)
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/images/build", startImageBuild)
+	app.RegisterCustomHandler(http.MethodPost, pathImageBuildContextUpload, uploadBuildContext)
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/images/build/from-storage", startStorageImageBuild)
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/images/build/dockerfile", startDockerfileImageBuild)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/images/build/{buildId}/logs", getBuildLogs)
@@ -189,8 +193,14 @@ func publishCatalog(app *platform.App, r *http.Request, _ platform.RouteSpec) (i
 	if tagID == "" {
 		return http.StatusBadRequest, shared.ErrorData("tag_id is required"), nil
 	}
-	if rejection := catalogAllowListRejection(catalogByID(app, r, tagID), app.Config.ImageProvenanceRequired); rejection != "" {
+	tag := catalogByID(app, r, tagID)
+	if rejection := catalogAllowListRejection(tag, app.Config.ImageProvenanceRequired); rejection != "" {
 		return http.StatusConflict, shared.ErrorData(rejection), nil
+	}
+	if app.Config.ImageProvenanceRequired {
+		if rejection := buildProvenanceRejection(app, r, tag); rejection != "" {
+			return http.StatusConflict, shared.ErrorData(rejection), nil
+		}
 	}
 	projectIDs := firstStringSlice(payload, "project_ids", "projectIds")
 	if projectID := shared.TextValue(payload, "project_id", "projectId"); projectID != "" {
@@ -645,11 +655,14 @@ func createBuild(app *platform.App, r *http.Request, route platform.RouteSpec, b
 		return status, data, nil
 	}
 	requestedID := imageBuildRequestedID(payload)
-	contextArchiveDigest, status, data := imageBuildContextArchiveDigest(payload)
+	contextKey, contextArchiveDigest, status, data := resolveImageBuildContext(app, r, payload)
 	if status != 0 {
 		return status, data, nil
 	}
 	dockerfileSHA256, contextRef, storagePath, buildArgs := imageBuildSourceFingerprint(payload)
+	if status, data, ok := authorizeImageBuildSource(app, r, buildType, projectID, userID, storagePath); !ok {
+		return status, data, nil
+	}
 	keyHash, fingerprintHash := imageBuildIdempotencyHashes(r, imageBuildIdempotencyFingerprint{
 		RequestedID:          requestedID,
 		UserID:               userID,
@@ -661,6 +674,7 @@ func createBuild(app *platform.App, r *http.Request, route platform.RouteSpec, b
 		MaxBuildTimeSeconds:  resources.maxBuildTimeSeconds,
 		DockerfileSHA256:     dockerfileSHA256,
 		ContextRef:           contextRef,
+		ContextKey:           contextKey,
 		ContextArchiveDigest: contextArchiveDigest,
 		StoragePath:          storagePath,
 		BuildArgs:            buildArgs,
@@ -672,8 +686,93 @@ func createBuild(app *platform.App, r *http.Request, route platform.RouteSpec, b
 		return status, data, nil
 	}
 	id := shared.FirstNonBlank(requestedID, app.Store.NextID(imageBuildsResource, "build-", 1, 6))
+	build := newImageBuildRecord(id, projectID, imageRef, buildType, userID, resources)
+	decorateImageBuildRecord(build, contextKey, contextArchiveDigest, shared.TextValue(payload, "dockerfile"), keyHash, fingerprintHash)
+	record, err := app.CreateRecordWithEvent(r.Context(), imageBuildsResource, build, func(rec contracts.Record[map[string]any]) contracts.Event {
+		return registryEvent(r, "ImageBuildStarted", rec.Data)
+	})
+	if err != nil {
+		return http.StatusInternalServerError, shared.ErrorData("image build could not be created"), nil
+	}
+	return http.StatusAccepted, publicImageBuildData(record.Data), harborDegraded(app, r, route, "createBuild")
+}
+
+// resolveImageBuildContext validates the build's context references (inline
+// archive and/or staged context_key) and stages inline archives
+// content-addressed into the object store; the returned key and digest feed
+// the build record and the idempotency fingerprint.
+func resolveImageBuildContext(app *platform.App, r *http.Request, payload map[string]any) (string, string, int, any) {
+	inlineArchive, contextDigest, status, data := imageBuildContextArchiveDigest(payload)
+	if status != 0 {
+		return "", "", status, data
+	}
+	contextKey, contextKeyDigest, status, data := imageBuildContextKeyDigest(app, r, payload)
+	if status != 0 {
+		return "", "", status, data
+	}
+	if contextKeyDigest != "" {
+		contextDigest = contextKeyDigest
+	}
+	if len(inlineArchive) == 0 || contextKey != "" {
+		return contextKey, contextDigest, 0, nil
+	}
+	// Inline archives are staged content-addressed into the object store so the
+	// dispatcher can rebuild from them; without an object store the build cannot
+	// carry its context, so reject at create instead of failing at dispatch.
+	if app.ObjectStore == nil {
+		return "", "", http.StatusServiceUnavailable, shared.ErrorData("object store is not configured")
+	}
+	stagedKey := buildContextObjectKeyPrefix + contextDigest
+	if err := app.ObjectStore.PutStream(r.Context(), stagedKey, bytes.NewReader(inlineArchive), int64(len(inlineArchive)), "application/octet-stream"); err != nil {
+		return "", "", http.StatusInternalServerError, shared.ErrorData("context archive could not be staged")
+	}
+	return stagedKey, contextDigest, 0, nil
+}
+
+// authorizeImageBuildSource gates from-storage builds behind storage-service's
+// build-source-access owner contract; other build types carry their source
+// inline and need no grant.
+func authorizeImageBuildSource(app *platform.App, r *http.Request, buildType, projectID, userID, storagePath string) (int, any, bool) {
+	if buildType != "storage" {
+		return 0, nil, true
+	}
+	if storagePath == "" {
+		return http.StatusBadRequest, shared.ErrorData("storage_path is required for from-storage builds"), false
+	}
+	decision, err := newBuildSourceAccessResolver(app)(r.Context(), projectID, buildSourceAccessRequest{UserID: userID, StoragePath: storagePath})
+	if err != nil {
+		// Fail closed: an unverifiable source grant must not start a build.
+		return http.StatusInternalServerError, shared.ErrorData("build source access check failed"), false
+	}
+	if !decision.Allowed {
+		return http.StatusForbidden, shared.ErrorData("storage source access denied"), false
+	}
+	return 0, nil, true
+}
+
+// decorateImageBuildRecord adds the optional source/idempotency fields a
+// build request may carry. The dockerfile body is the build source for
+// dockerfile builds; it is persisted so the dispatcher can execute from the
+// record alone.
+func decorateImageBuildRecord(build map[string]any, contextKey, contextDigest, dockerfile, keyHash, fingerprintHash string) {
+	if contextDigest != "" {
+		build["source_digest"] = contextDigest
+	}
+	if contextKey != "" {
+		build["context_key"] = contextKey
+	}
+	if dockerfile != "" {
+		build["dockerfile"] = dockerfile
+	}
+	if keyHash != "" {
+		build[internalImageBuildIdempotencyKeyHash] = keyHash
+		build[internalImageBuildIdempotencyFingerprintHash] = fingerprintHash
+	}
+}
+
+func newImageBuildRecord(id, projectID, imageRef, buildType, userID string, resources imageBuildResources) map[string]any {
 	now := time.Now().UTC()
-	build := map[string]any{
+	return map[string]any{
 		"id":                      id,
 		"job_name":                id,
 		"build_id":                id,
@@ -695,20 +794,6 @@ func createBuild(app *platform.App, r *http.Request, route platform.RouteSpec, b
 		"updated_at":              now,
 		"logs":                    "build queued\n",
 	}
-	if contextArchiveDigest != "" {
-		build["source_digest"] = contextArchiveDigest
-	}
-	if keyHash != "" {
-		build[internalImageBuildIdempotencyKeyHash] = keyHash
-		build[internalImageBuildIdempotencyFingerprintHash] = fingerprintHash
-	}
-	record, err := app.CreateRecordWithEvent(r.Context(), imageBuildsResource, build, func(rec contracts.Record[map[string]any]) contracts.Event {
-		return registryEvent(r, "ImageBuildStarted", rec.Data)
-	})
-	if err != nil {
-		return http.StatusInternalServerError, shared.ErrorData("image build could not be created"), nil
-	}
-	return http.StatusAccepted, publicImageBuildData(record.Data), harborDegraded(app, r, route, "createBuild")
 }
 
 func imageBuildIdempotencyResult(app *platform.App, r *http.Request, route platform.RouteSpec, keyHash, fingerprintHash string) (int, any, *platform.Degraded) {
@@ -795,31 +880,30 @@ type imageBuildIdempotencyFingerprint struct {
 	// deterministically. (P0-2)
 	DockerfileSHA256     string         `json:"dockerfile_sha256"`
 	ContextRef           string         `json:"context_ref"`
+	ContextKey           string         `json:"context_key"`
 	ContextArchiveDigest string         `json:"context_archive_digest"`
 	StoragePath          string         `json:"storage_path"`
 	BuildArgs            map[string]any `json:"build_args"`
 }
 
 // imageBuildContextArchiveDigest validates an optional inline build-context archive
-// and returns its deterministic content digest. The archive is carried as base64 in
-// the JSON body — an interim transport until the multipart + object-store staging
-// path lands.
-// ponytail: base64-in-JSON, bounded by maxBuildContextArchiveBytes; upgrade to a
-// streamed multipart upload + object-store staging when large contexts are needed.
-func imageBuildContextArchiveDigest(payload map[string]any) (string, int, any) {
+// and returns its bytes plus deterministic content digest. The base64-in-JSON
+// transport is retained for small contexts and backward compatibility; large
+// contexts use the multipart upload endpoint + context_key staging path instead.
+func imageBuildContextArchiveDigest(payload map[string]any) ([]byte, string, int, any) {
 	encoded := strings.TrimSpace(shared.TextValue(payload, "context_archive", "contextArchive"))
 	if encoded == "" {
-		return "", 0, nil
+		return nil, "", 0, nil
 	}
 	data, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return "", http.StatusBadRequest, shared.ErrorData("context_archive must be base64-encoded")
+		return nil, "", http.StatusBadRequest, shared.ErrorData("context_archive must be base64-encoded")
 	}
 	info, err := validateBuildContextArchive(data)
 	if err != nil {
-		return "", http.StatusBadRequest, shared.ErrorData(err.Error())
+		return nil, "", http.StatusBadRequest, shared.ErrorData(err.Error())
 	}
-	return info.Digest, 0, nil
+	return data, info.Digest, 0, nil
 }
 
 // imageBuildSourceFingerprint extracts the source-content identity fields from

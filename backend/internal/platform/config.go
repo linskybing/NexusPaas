@@ -71,6 +71,8 @@ type Config struct {
 	K8sNamespacePrefix          string
 	ImageCheckEnabled           bool
 	ImageProvenanceRequired     bool
+	ImageBuildExecutor          string
+	ImageBuildCosignKey         string
 	DockerCleanupEnabled        bool
 	DockerCleanupNamespace      string
 	DockerCleanupImage          string
@@ -124,8 +126,12 @@ type AdapterConfig struct {
 }
 
 type ServiceTrustedIdentity struct {
-	Key       string   `json:"key"`
-	Audiences []string `json:"audiences"`
+	Key string `json:"key"`
+	// PreviousKey is the optional outgoing key during a rotation window: the
+	// receiver accepts either key so senders can be re-keyed with rolling
+	// restarts and zero downtime (ADR 0003 dual-key rotation).
+	PreviousKey string   `json:"previous_key"`
+	Audiences   []string `json:"audiences"`
 }
 
 // AdapterAuthConfig describes the credential to inject toward an upstream. Type is
@@ -190,6 +196,8 @@ const (
 	envMaxConfigFileDocuments      = "MAX_CONFIGFILE_DOCUMENTS"
 	envAdapterConfig               = "ADAPTER_CONFIG"
 	envImageCheckEnabled           = "K8S_IMAGE_CHECK_ENABLED"
+	envImageBuildExecutor          = "IMAGE_BUILD_EXECUTOR"
+	envImageBuildCosignKey         = "IMAGE_BUILD_COSIGN_KEY"
 	envImageProvenanceRequired     = "IMAGE_PUBLISH_REQUIRE_PROVENANCE"
 	envDockerCleanupEnabled        = "DOCKER_CLEANUP_ENABLED"
 	envDockerCleanupNamespace      = "DOCKER_CLEANUP_NAMESPACE"
@@ -338,6 +346,8 @@ func ConfigFromEnv() Config {
 		MaxConfigFileDocuments:      parser.envInt(envMaxConfigFileDocuments, defaultMaxConfigFileDocuments),
 		K8sNamespacePrefix:          env("K8S_PROJECT_NAMESPACE_PREFIX", "proj"),
 		ImageCheckEnabled:           parser.envBool(envImageCheckEnabled, false),
+		ImageBuildExecutor:          strings.ToLower(strings.TrimSpace(env(envImageBuildExecutor, ""))),
+		ImageBuildCosignKey:         strings.TrimSpace(env(envImageBuildCosignKey, "")),
 		ImageProvenanceRequired:     parser.envBool(envImageProvenanceRequired, false),
 		DockerCleanupEnabled:        parser.envBool(envDockerCleanupEnabled, false),
 		DockerCleanupNamespace:      strings.TrimSpace(env(envDockerCleanupNamespace, "default")),
@@ -1113,9 +1123,22 @@ func defaultServiceIdentityName(serviceName, configured string) string {
 	return serviceName
 }
 
+// activeServiceIdentityKey returns the key this service presents outbound.
+// SERVICE_IDENTITY_KEY may hold "new,old" during a dual-key rotation window;
+// the first non-blank entry is the active key (the rest exist only so one
+// config value can be staged fleet-wide before receivers drop previous_key).
+func (c Config) activeServiceIdentityKey() string {
+	for _, part := range strings.Split(c.ServiceIdentityKey, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			return part
+		}
+	}
+	return ""
+}
+
 func (c Config) applyServiceIdentityHeaders(headers http.Header) bool {
 	name := strings.TrimSpace(c.ServiceIdentityName)
-	key := strings.TrimSpace(c.ServiceIdentityKey)
+	key := c.activeServiceIdentityKey()
 	if name != "" && key != "" {
 		headers.Set(serviceNameHeader, name)
 		headers.Set(serviceKeyHeader, key)
@@ -1139,7 +1162,7 @@ func (c Config) canSendServiceIdentity() bool {
 }
 
 func (c Config) canSendScopedServiceIdentity() bool {
-	return strings.TrimSpace(c.ServiceIdentityName) != "" && strings.TrimSpace(c.ServiceIdentityKey) != ""
+	return strings.TrimSpace(c.ServiceIdentityName) != "" && c.activeServiceIdentityKey() != ""
 }
 
 func (c Config) canUseRemoteServiceIdentity() bool {
@@ -1182,6 +1205,7 @@ func parseServiceTrustedIdentitiesWithDiagnostics(value string) (map[string]Serv
 
 func (i ServiceTrustedIdentity) normalized() ServiceTrustedIdentity {
 	i.Key = strings.TrimSpace(i.Key)
+	i.PreviousKey = strings.TrimSpace(i.PreviousKey)
 	audiences := []string{}
 	seen := map[string]bool{}
 	for _, audience := range i.Audiences {

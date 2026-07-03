@@ -147,6 +147,7 @@ func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/cluster/mps-mapping", listClusterMPSMapping)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/admin/mps-mapping", listAdminMPSMapping)
 	registerGPUUsageCollector(app)
+	registerGPUProjectionReconciler(app)
 }
 
 func getMyUsage(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {

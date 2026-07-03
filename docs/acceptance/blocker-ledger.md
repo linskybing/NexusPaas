@@ -234,6 +234,25 @@ chain proven kind-tier; publish guards fail closed). Item 11 is resolved by ADR
 boundary. The external-staging rerun of items 1–4 stays tracked post-launch and
 must not be described as done.
 
+2026-07-02 AC-completion round (branch `ac-completion-round`, local/kind tier —
+NOT external GA proof): item 6 is done (streamed multipart context upload +
+object-store staging with fail-closed context-key verification, from-storage
+storage-permission gate, dispatcher + docker build executor with Harbor push /
+syft SBOM / trivy fail-closed scan / cosign sign, live pipeline E2E PASS —
+`evidence/2026-07-02-live-image-build-pipeline-report.md`); item 5's mitigation
+is strengthened by the same run (verified-provenance publish gate now requires a
+succeeded+signed build record; in-cluster BuildKit Job executor remains the
+tracked follow-up); item 8 has kind/local evidence (org-project typed tables,
+drift→replay reconcile job with live injected-drift auto-repair, 66-family live
+authz sweep — `evidence/2026-07-02-data-layer-report.md`); item 9 has kind-tier
+evidence (Prometheus deploy/scrape/retention/alert fire+resolve, k6
+PERF-003/004/006/008 green — `evidence/2026-07-02-live-perf-mon-report.md`);
+item 10 is done (`go test -race ./...` green, 23 packages). OPS additions:
+destructive restore drill, dual-key identity rotation, full OPS-019 matrix
+(`evidence/2026-07-02-db-backup-restore-drill-report.md`,
+`evidence/2026-07-02-ops-resilience-drills-report.md`). External-tier reruns of
+all of the above remain tracked and are not claimed.
+
 ## 9. Reviewer Status
 
 All reference capabilities are present in code and the full local toolchain is

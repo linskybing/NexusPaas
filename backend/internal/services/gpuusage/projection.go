@@ -375,3 +375,20 @@ func sourceCoHosted(app *platform.App, sourceResource string) bool {
 	owner, _, ok := strings.Cut(sourceResource, ":")
 	return ok && app.Config.AllowsService(owner)
 }
+
+// registerGPUProjectionReconciler wires the GPU usage read models into the
+// periodic drift→replay reconcile job (DATA-016/DATA-018).
+func registerGPUProjectionReconciler(app *platform.App) {
+	app.RegisterProjectionReconciler(platform.ProjectionReconcilerSpec{
+		Owner:     serviceName,
+		Consumers: []string{gpuProjectionConsumer},
+		Drift: func(ctx context.Context) (int, error) {
+			report, err := projectionDrift(ctx, app)
+			if err != nil {
+				return 0, err
+			}
+			return len(report.Missing) + len(report.Orphan) + len(report.Stale), nil
+		},
+		Sync: func(ctx context.Context) { syncGPUReadModelsContext(app, ctx) },
+	})
+}

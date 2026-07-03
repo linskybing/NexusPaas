@@ -47,6 +47,7 @@ func Register(app *platform.App) {
 	}
 	registerLonghornRWXHealthWorker(app)
 	app.RegisterCustomHandler(http.MethodPost, pathInternalStorageMountPlan, resolveStorageMountPlanContract)
+	app.RegisterCustomHandler(http.MethodPost, pathInternalStorageBuildSourceAccess, resolveStorageBuildSourceAccessContract)
 	app.RegisterCustomHandler(http.MethodPost, pathInternalStorageDataPlanePlan, resolveStorageDataPlanePlanContract)
 	app.RegisterCustomHandler(http.MethodPost, pathInternalFastTransferProgress, updateFastTransferProgress)
 	app.RegisterCustomHandler(http.MethodPost, "/api/v1/storage-profiles", createStorageProfile)

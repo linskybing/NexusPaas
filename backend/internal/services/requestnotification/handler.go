@@ -128,6 +128,7 @@ func Register(app *platform.App) {
 	} {
 		app.RegisterCustomHandler(route.method, route.pattern, route.handler)
 	}
+	registerProjectAccessProjectionReconciler(app)
 }
 
 func NewService() *Service {

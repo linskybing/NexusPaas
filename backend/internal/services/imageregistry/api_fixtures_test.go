@@ -54,8 +54,10 @@ func TestImageBuildCreateExternalAPIFixturesMatchSpec(t *testing.T) {
 			contractName: "image-registry.storage_build",
 			path:         "/api/v1/images/build/from-storage",
 			buildType:    "storage",
+			// storage_path became required with the from-storage source
+			// permission gate (IMG-002).
+			requiredExtras: []string{"storage_path"},
 			optionalFields: []string{
-				"storage_path",
 				"tag",
 				"registry",
 				"repository",
@@ -138,6 +140,7 @@ func assertImageBuildCreateFixtureMetadata(t *testing.T, fixture imageBuildCreat
 		t.Fatalf("fixture path_parameters = %v, want none", fixture.PathParameters)
 	}
 	requiredFields := []string{"project_id", "image_reference", "cpu_cores", "memory_gib", "max_build_time_seconds"}
+	requiredFields = append(requiredFields, want.requiredExtras...)
 	if !reflect.DeepEqual(fixture.RequiredRequestFields, requiredFields) {
 		t.Fatalf("required_request_fields = %v, want %v", fixture.RequiredRequestFields, requiredFields)
 	}
@@ -193,6 +196,7 @@ type imageBuildCreateFixtureCase struct {
 	contractName   string
 	path           string
 	buildType      string
+	requiredExtras []string
 	optionalFields []string
 }
 

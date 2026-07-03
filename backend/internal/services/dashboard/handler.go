@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -78,6 +79,7 @@ var dashboardProjectionDriftPairs = []dashboardProjectionDriftPair{
 func Register(app *platform.App) {
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/dashboard/overview", getOverview)
 	app.RegisterCustomHandler(http.MethodGet, "/api/v1/admin/dashboard-summary", getAdminSummary)
+	registerDashboardProjectionReconciler(app)
 }
 
 func getOverview(app *platform.App, r *http.Request, _ platform.RouteSpec) (int, any, *platform.Degraded) {
@@ -488,4 +490,21 @@ func sourceCoHosted(app *platform.App, sourceResource string) bool {
 func isAdmin(r *http.Request) bool {
 	role := strings.ToLower(r.Header.Get("X-User-Role"))
 	return role == "admin" || role == "super-admin"
+}
+
+// registerDashboardProjectionReconciler wires the dashboard read models into
+// the periodic drift→replay reconcile job (DATA-016/DATA-018).
+func registerDashboardProjectionReconciler(app *platform.App) {
+	app.RegisterProjectionReconciler(platform.ProjectionReconcilerSpec{
+		Owner:     serviceName,
+		Consumers: []string{dashboardProjectionConsumer},
+		Drift: func(ctx context.Context) (int, error) {
+			report, err := projectionDrift(app, shared.MaintenanceRequest(ctx))
+			if err != nil {
+				return 0, err
+			}
+			return len(report.Missing) + len(report.Orphan) + len(report.Stale), nil
+		},
+		Sync: func(ctx context.Context) { syncDashboardReadModels(app, shared.MaintenanceRequest(ctx)) },
+	})
 }

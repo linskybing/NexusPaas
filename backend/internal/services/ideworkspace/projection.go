@@ -1,6 +1,7 @@
 package ideworkspace
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -160,4 +161,21 @@ func deleteIDEReadModel(repo *recordStoreIDEProjectionRepository, r *http.Reques
 	default:
 		return false
 	}
+}
+
+// registerIDEProjectionReconciler wires the IDE read models into the periodic
+// drift→replay reconcile job (DATA-016/DATA-018).
+func registerIDEProjectionReconciler(app *platform.App) {
+	app.RegisterProjectionReconciler(platform.ProjectionReconcilerSpec{
+		Owner:     serviceName,
+		Consumers: []string{ideProjectionConsumer},
+		Drift: func(ctx context.Context) (int, error) {
+			report, err := ideProjectionRepo(app).projectionDrift(ctx)
+			if err != nil {
+				return 0, err
+			}
+			return len(report.Missing) + len(report.Orphan) + len(report.Stale), nil
+		},
+		Sync: func(ctx context.Context) { syncIDEReadModels(app, shared.MaintenanceRequest(ctx)) },
+	})
 }

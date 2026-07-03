@@ -21,6 +21,8 @@
   ],
   "optional_request_fields": [
     "context",
+    "context_archive",
+    "context_key",
     "build_args",
     "tag",
     "registry",

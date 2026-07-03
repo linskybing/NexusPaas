@@ -826,7 +826,7 @@ func TestConfigBackingServiceEnvParsing(t *testing.T) {
 	t.Setenv(envServiceURLs, `{"identity-service":" http://identity-service/ ","":"http://ignored","empty":" "}`)
 	t.Setenv(envServiceAPIKey, " service-key ")
 	t.Setenv(envServiceIdentityKey, " scoped-key ")
-	t.Setenv(envServiceTrustedIdentities, `{"iam-unit":{"key":" iam-key ","audiences":[" compute-api ","compute-api",""]}}`)
+	t.Setenv(envServiceTrustedIdentities, `{"iam-unit":{"key":" iam-key ","previous_key":" iam-old ","audiences":[" compute-api ","compute-api",""]}}`)
 	t.Setenv(envDatabaseURL, " "+testDatabaseURL+" ")
 	t.Setenv(envRedisURL, " "+testRedisURL+" ")
 	t.Setenv(envEventBusURL, " "+testEventBusURL+" ")
@@ -851,8 +851,8 @@ func TestConfigBackingServiceEnvParsing(t *testing.T) {
 	if cfg.ServiceIdentityName != "compute-api" || cfg.ServiceIdentityKey != "scoped-key" {
 		t.Fatalf("service identity = %q/%q, want defaulted compute-api/scoped-key", cfg.ServiceIdentityName, cfg.ServiceIdentityKey)
 	}
-	if got := cfg.ServiceTrustedIdentities["iam-unit"]; got.Key != "iam-key" || len(got.Audiences) != 1 || got.Audiences[0] != "compute-api" {
-		t.Fatalf("ServiceTrustedIdentities[iam-unit] = %#v, want trimmed key and deduped audience", got)
+	if got := cfg.ServiceTrustedIdentities["iam-unit"]; got.Key != "iam-key" || got.PreviousKey != "iam-old" || len(got.Audiences) != 1 || got.Audiences[0] != "compute-api" {
+		t.Fatalf("ServiceTrustedIdentities[iam-unit] = %#v, want trimmed keys and deduped audience", got)
 	}
 	if cfg.DatabaseURL != testDatabaseURL {
 		t.Fatalf("DatabaseURL = %q, want trimmed postgres URL", cfg.DatabaseURL)

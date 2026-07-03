@@ -36,6 +36,7 @@ func Spec() platform.ServiceSpec {
 			route(http.MethodPatch, "/api/v1/image-requests/{id}", "image_requests", "update", id("id"), admin()),
 			route(http.MethodPatch, "/api/v1/image-requests/batch", "image_requests", "batch_update", admin()),
 			route(http.MethodPost, "/api/v1/images/build", "image_builds", "command", adapter("harbor")),
+			route(http.MethodPost, "/api/v1/images/build/context", "image_build_contexts", "command"),
 			route(http.MethodPost, "/api/v1/images/build/from-storage", "image_builds", "command", adapter("harbor")),
 			route(http.MethodPost, "/api/v1/images/build/dockerfile", "image_builds", "command", adapter("harbor")),
 			route(http.MethodGet, "/api/v1/images/build/{jobName}/logs", "image_build_logs", "list", id("jobName"), adapter("harbor")),

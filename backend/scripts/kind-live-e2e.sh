@@ -52,7 +52,15 @@ TURN_SECRET="nexuspaas-kind-turn-secret"
 DEX_HASH="dex-scaled-to-zero-unused-in-kind-run"
 DB_URL="postgres://nexuspaas:${PG_PW}@postgres:5432/nexuspaas?sslmode=disable"
 API_KEY_PRINCIPALS='{"'"${API_KEY}"'":{"id":"kind-admin","username":"kind-admin","role":"admin","admin":true}}'
-TRUSTED_IDENTITIES='{"platform-gateway":{"key":"'"${IDENTITY_KEY}"'","audiences":["iam-unit","tenant-unit","collaboration-unit","platform-io-unit","usage-observability","compute-api","compute-control-plane"]}}'
+# every unit is a trusted caller of every other unit: cross-unit read
+# contracts (projection drift measurement, identity auth) originate from all
+# units, not just the gateway.
+TRUSTED_IDENTITIES="$(python3 - "${IDENTITY_KEY}" <<'PYEOF'
+import json, sys
+units = ["platform-gateway","iam-unit","tenant-unit","collaboration-unit","platform-io-unit","usage-observability","compute-api","compute-control-plane"]
+print(json.dumps({u: {"key": sys.argv[1], "audiences": units} for u in units}, separators=(",", ":")))
+PYEOF
+)"
 
 UNITS=(platform-gateway iam-unit tenant-unit collaboration-unit platform-io-unit usage-observability compute-api compute-control-plane)
 LOGICAL_SERVICES=(platform-gateway identity-service authorization-policy-service org-project-service audit-compliance-service request-notification-service media-upload-service storage-service image-registry-service integration-proxy-service usage-observability-service workload-service ide-service scheduler-quota-service k8s-control-service)
@@ -131,9 +139,17 @@ create_ns_and_secrets() {
   printf 'secret\tpresent\n' >"${SECRET_TSV}"
   local u args
   for u in "${UNITS[@]}"; do
+    # iam-unit additionally accepts the authz policy key: every other unit
+    # calls its /api/v1/permissions/enforce with AUTHORIZATION_POLICY_API_KEY,
+    # which must therefore be a recognized API key WITH a principal on iam-unit.
+    local unit_api_keys="${API_KEY}" unit_principals="${API_KEY_PRINCIPALS}"
+    if [[ "${u}" = "iam-unit" ]]; then
+      unit_api_keys="${API_KEY},${AUTHZ_KEY}"
+      unit_principals='{"'"${API_KEY}"'":{"id":"kind-admin","username":"kind-admin","role":"admin","admin":true},"'"${AUTHZ_KEY}"'":{"id":"authz-policy-client","username":"authz-policy-client","role":"service"}}'
+    fi
     args=(--from-literal=DATABASE_URL="${DB_URL}"
-          --from-literal=API_KEYS="${API_KEY}"
-          --from-literal=API_KEY_PRINCIPALS="${API_KEY_PRINCIPALS}"
+          --from-literal=API_KEYS="${unit_api_keys}"
+          --from-literal=API_KEY_PRINCIPALS="${unit_principals}"
           --from-literal=SERVICE_IDENTITY_KEY="${IDENTITY_KEY}"
           --from-literal=SERVICE_TRUSTED_IDENTITIES="${TRUSTED_IDENTITIES}")
     if [[ "${u}" != "iam-unit" ]]; then

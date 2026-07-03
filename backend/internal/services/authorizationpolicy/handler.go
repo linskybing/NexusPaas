@@ -48,6 +48,7 @@ func Register(app *platform.App) {
 		app.PDP = RawPolicyPDP{Policies: rawPermissionRepo(app)}
 	}
 	reconcileAdminBootstrapPolicies(app)
+	registerAuthorizationPolicyProjectionReconciler(app)
 	app.RegisterCustomHandler(http.MethodGet, pathRawPermissionPolicy, listRawPermissionPolicies)
 	app.RegisterCustomHandler(http.MethodPost, pathRawPermissionPolicy, addRawPermissionPolicy)
 	app.RegisterCustomHandler(http.MethodPut, pathRawPermissionPolicy, updateRawPermissionPolicy)

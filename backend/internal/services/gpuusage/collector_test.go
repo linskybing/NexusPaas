@@ -240,8 +240,9 @@ func TestGPUUsageCollectorSkipsProjectPodCountRowsWithoutDeviceIdentity(t *testi
 func TestGPUUsageCollectorRegisteredMaintenanceTask(t *testing.T) {
 	app := newGPUCollectorTestApp()
 	Register(app)
-	if got := app.MaintenanceTaskNames(); len(got) != 1 || got[0] != gpuCollectorTaskName {
-		t.Fatalf("maintenance tasks = %v, want only %s", got, gpuCollectorTaskName)
+	wantTasks := []string{gpuCollectorTaskName, "projection-reconcile:" + gpuProjectionConsumer}
+	if got := app.MaintenanceTaskNames(); len(got) != 2 || got[0] != wantTasks[0] || got[1] != wantTasks[1] {
+		t.Fatalf("maintenance tasks = %v, want %v", got, wantTasks)
 	}
 	now := time.Now().UTC()
 	seedGPUCollectorReadModels(t, app, "succeeded")
