@@ -67,6 +67,10 @@ type dockerBuildExecutor struct {
 
 func (dockerBuildExecutor) Name() string { return "docker" }
 
+// buildStepRunner executes one pipeline step, appending its output to the
+// build logs; implemented as a closure over the run's workdir and result.
+type buildStepRunner func(step string, name string, args ...string) (string, error)
+
 func (e dockerBuildExecutor) Execute(ctx context.Context, in buildExecutionInput) (buildExecutionResult, error) {
 	result := buildExecutionResult{}
 	workdir, err := os.MkdirTemp("", "nexuspaas-build-"+in.BuildID+"-")
@@ -76,24 +80,11 @@ func (e dockerBuildExecutor) Execute(ctx context.Context, in buildExecutionInput
 	defer os.RemoveAll(workdir)
 
 	contextDir := filepath.Join(workdir, "context")
-	if err := os.Mkdir(contextDir, 0o755); err != nil {
-		return result, fmt.Errorf("create context dir: %w", err)
-	}
-	if len(in.ContextArchive) > 0 {
-		if err := extractBuildContext(in.ContextArchive, contextDir); err != nil {
-			return result, err
-		}
-	}
-	if in.Dockerfile != "" {
-		if err := os.WriteFile(filepath.Join(contextDir, "Dockerfile"), []byte(in.Dockerfile), 0o644); err != nil {
-			return result, fmt.Errorf("write dockerfile: %w", err)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(contextDir, "Dockerfile")); err != nil {
-		return result, fmt.Errorf("build context has no Dockerfile")
+	if err := stageBuildContextDir(contextDir, in); err != nil {
+		return result, err
 	}
 
-	run := func(step string, name string, args ...string) (string, error) {
+	run := buildStepRunner(func(step string, name string, args ...string) (string, error) {
 		cmd := exec.CommandContext(ctx, name, args...)
 		cmd.Dir = workdir
 		out, err := cmd.CombinedOutput()
@@ -106,39 +97,14 @@ func (e dockerBuildExecutor) Execute(ctx context.Context, in buildExecutionInput
 			return text, fmt.Errorf("%s failed: %w", step, err)
 		}
 		return text, nil
-	}
+	})
 
-	buildArgs := []string{"build", "-t", in.ImageReference}
-	for key, value := range in.BuildArgs {
-		buildArgs = append(buildArgs, "--build-arg", fmt.Sprintf("%s=%v", key, value))
-	}
-	buildArgs = append(buildArgs, contextDir)
-	if _, err := run("build", "docker", buildArgs...); err != nil {
+	if result.ImageDigest, err = dockerBuildPushDigest(run, in, contextDir); err != nil {
 		return result, err
 	}
-	if _, err := run("push", "docker", "push", in.ImageReference); err != nil {
+	if result.SBOMDigest, err = buildSBOMDigest(run, workdir, in); err != nil {
 		return result, err
 	}
-	digestOut, err := run("digest", "docker", "inspect", "--format", "{{index .RepoDigests 0}}", in.ImageReference)
-	if err != nil {
-		return result, err
-	}
-	if at := strings.LastIndex(digestOut, "@"); at >= 0 {
-		result.ImageDigest = strings.TrimSpace(digestOut[at+1:])
-	}
-	if result.ImageDigest == "" {
-		return result, fmt.Errorf("pushed image has no repo digest")
-	}
-
-	sbomPath := filepath.Join(workdir, "sbom.spdx.json")
-	if _, err := run("sbom", "syft", "docker:"+in.ImageReference, "-o", "spdx-json="+sbomPath); err != nil {
-		return result, err
-	}
-	sbomBytes, err := os.ReadFile(sbomPath)
-	if err != nil {
-		return result, fmt.Errorf("read sbom: %w", err)
-	}
-	result.SBOMDigest = imageBuildHash(string(sbomBytes))
 
 	scanOut, scanErr := run("scan", "trivy", "image", "--quiet", "--scanners", "vuln", "--severity", "HIGH,CRITICAL", "--exit-code", "1", in.ImageReference)
 	result.ScanSummary = lastLine(scanOut)
@@ -150,14 +116,80 @@ func (e dockerBuildExecutor) Execute(ctx context.Context, in buildExecutionInput
 	}
 	result.ScanPassed = true
 
+	return result, e.signImage(ctx, workdir, in, &result)
+}
+
+// stageBuildContextDir materializes the build context: extracted archive plus
+// inline Dockerfile; a context without a Dockerfile cannot build.
+func stageBuildContextDir(contextDir string, in buildExecutionInput) error {
+	if err := os.Mkdir(contextDir, 0o755); err != nil {
+		return fmt.Errorf("create context dir: %w", err)
+	}
+	if len(in.ContextArchive) > 0 {
+		if err := extractBuildContext(in.ContextArchive, contextDir); err != nil {
+			return err
+		}
+	}
+	if in.Dockerfile != "" {
+		if err := os.WriteFile(filepath.Join(contextDir, "Dockerfile"), []byte(in.Dockerfile), 0o644); err != nil {
+			return fmt.Errorf("write dockerfile: %w", err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(contextDir, "Dockerfile")); err != nil {
+		return fmt.Errorf("build context has no Dockerfile")
+	}
+	return nil
+}
+
+func dockerBuildPushDigest(run buildStepRunner, in buildExecutionInput, contextDir string) (string, error) {
+	buildArgs := []string{"build", "-t", in.ImageReference}
+	for key, value := range in.BuildArgs {
+		buildArgs = append(buildArgs, "--build-arg", fmt.Sprintf("%s=%v", key, value))
+	}
+	buildArgs = append(buildArgs, contextDir)
+	if _, err := run("build", "docker", buildArgs...); err != nil {
+		return "", err
+	}
+	if _, err := run("push", "docker", "push", in.ImageReference); err != nil {
+		return "", err
+	}
+	digestOut, err := run("digest", "docker", "inspect", "--format", "{{index .RepoDigests 0}}", in.ImageReference)
+	if err != nil {
+		return "", err
+	}
+	digest := ""
+	if at := strings.LastIndex(digestOut, "@"); at >= 0 {
+		digest = strings.TrimSpace(digestOut[at+1:])
+	}
+	if digest == "" {
+		return "", fmt.Errorf("pushed image has no repo digest")
+	}
+	return digest, nil
+}
+
+func buildSBOMDigest(run buildStepRunner, workdir string, in buildExecutionInput) (string, error) {
+	sbomPath := filepath.Join(workdir, "sbom.spdx.json")
+	if _, err := run("sbom", "syft", "docker:"+in.ImageReference, "-o", "spdx-json="+sbomPath); err != nil {
+		return "", err
+	}
+	sbomBytes, err := os.ReadFile(sbomPath)
+	if err != nil {
+		return "", fmt.Errorf("read sbom: %w", err)
+	}
+	return imageBuildHash(string(sbomBytes)), nil
+}
+
+// signImage cosign-signs the pushed digest reference (tag stripped so the
+// signature binds to content, not a movable tag).
+func (e dockerBuildExecutor) signImage(ctx context.Context, workdir string, in buildExecutionInput, result *buildExecutionResult) error {
 	signRef := in.ImageReference
 	if at := strings.LastIndex(signRef, ":"); at > strings.LastIndex(signRef, "/") {
 		signRef = signRef[:at]
 	}
 	signRef = signRef + "@" + result.ImageDigest
-	keyPath, err := e.cosignKeyPath(ctx, workdir, &result)
+	keyPath, err := e.cosignKeyPath(ctx, workdir, result)
 	if err != nil {
-		return result, err
+		return err
 	}
 	// --use-signing-config=false: cosign v3 defaults to a Sigstore signing
 	// config that rejects --tlog-upload=false; this pipeline signs key-based
@@ -172,10 +204,10 @@ func (e dockerBuildExecutor) Execute(ctx context.Context, in buildExecutionInput
 	signOut, err := signCmd.CombinedOutput()
 	result.Logs = append(result.Logs, "[sign] $ cosign sign "+signRef+"\n"+strings.TrimSpace(string(signOut)))
 	if err != nil {
-		return result, fmt.Errorf("sign failed: %w", err)
+		return fmt.Errorf("sign failed: %w", err)
 	}
 	result.SignatureRef = signRef
-	return result, nil
+	return nil
 }
 
 // cosignKeyPath returns the signing key: the configured operator key when set,

@@ -36,13 +36,15 @@ type ProjectionReconcilerSpec struct {
 // exposes it as the projection_drift gauge; when drift remains it publishes
 // ProjectionDriftDetected, resets the consumers, replays the stream, re-measures,
 // and publishes ProjectionRebuilt with the before/after counts. Residual drift
-// (rows the event stream cannot reproduce) is left for operators — the next
-// tick reports it again rather than looping a rebuild that cannot converge.
+// (rows the event stream cannot reproduce) is left for operators — while the
+// drift count stays at the residual left by the last rebuild, later ticks only
+// report it instead of looping a rebuild that cannot converge.
 func (a *App) RegisterProjectionReconciler(spec ProjectionReconcilerSpec) {
 	if len(spec.Consumers) == 0 || spec.Drift == nil || spec.Sync == nil {
 		return
 	}
 	label := strings.Join(spec.Consumers, "+")
+	residual := -1
 	a.RegisterMaintenanceTaskForService(spec.Owner, "projection-reconcile:"+label, func(ctx context.Context) error {
 		spec.Sync(ctx)
 		before, err := spec.Drift(ctx)
@@ -50,7 +52,8 @@ func (a *App) RegisterProjectionReconciler(spec ProjectionReconcilerSpec) {
 			return err
 		}
 		a.Metrics.SetGauge("projection_drift", map[string]string{"consumer": label}, int64(before))
-		if before == 0 {
+		if before == 0 || before == residual {
+			residual = before
 			return nil
 		}
 		slog.Warn("projection drift detected; rebuilding read model",
@@ -66,6 +69,7 @@ func (a *App) RegisterProjectionReconciler(spec ProjectionReconcilerSpec) {
 		if err != nil {
 			return err
 		}
+		residual = after
 		a.Metrics.SetGauge("projection_drift", map[string]string{"consumer": label}, int64(after))
 		a.publishProjectionEvent(ctx, spec, "ProjectionRebuilt", map[string]any{
 			"consumer": label, "drift_before": before, "drift_after": after,

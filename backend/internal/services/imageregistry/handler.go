@@ -655,40 +655,13 @@ func createBuild(app *platform.App, r *http.Request, route platform.RouteSpec, b
 		return status, data, nil
 	}
 	requestedID := imageBuildRequestedID(payload)
-	inlineArchive, contextArchiveDigest, status, data := imageBuildContextArchiveDigest(payload)
+	contextKey, contextArchiveDigest, status, data := resolveImageBuildContext(app, r, payload)
 	if status != 0 {
 		return status, data, nil
-	}
-	contextKey, contextKeyDigest, status, data := imageBuildContextKeyDigest(app, r, payload)
-	if status != 0 {
-		return status, data, nil
-	}
-	if contextKeyDigest != "" {
-		contextArchiveDigest = contextKeyDigest
-	}
-	// Inline archives are staged content-addressed into the object store so the
-	// dispatcher can rebuild from them; without an object store the record only
-	// carries the digest and dispatch of that build will fail closed.
-	if len(inlineArchive) > 0 && contextKey == "" && app.ObjectStore != nil {
-		stagedKey := buildContextObjectKeyPrefix + contextArchiveDigest
-		if err := app.ObjectStore.PutStream(r.Context(), stagedKey, bytes.NewReader(inlineArchive), int64(len(inlineArchive)), "application/octet-stream"); err != nil {
-			return http.StatusInternalServerError, shared.ErrorData("context archive could not be staged"), nil
-		}
-		contextKey = stagedKey
 	}
 	dockerfileSHA256, contextRef, storagePath, buildArgs := imageBuildSourceFingerprint(payload)
-	if buildType == "storage" {
-		if storagePath == "" {
-			return http.StatusBadRequest, shared.ErrorData("storage_path is required for from-storage builds"), nil
-		}
-		decision, err := newBuildSourceAccessResolver(app)(r.Context(), projectID, buildSourceAccessRequest{UserID: userID, StoragePath: storagePath})
-		if err != nil {
-			// Fail closed: an unverifiable source grant must not start a build.
-			return http.StatusInternalServerError, shared.ErrorData("build source access check failed"), nil
-		}
-		if !decision.Allowed {
-			return http.StatusForbidden, shared.ErrorData("storage source access denied"), nil
-		}
+	if status, data, ok := authorizeImageBuildSource(app, r, buildType, projectID, userID, storagePath); !ok {
+		return status, data, nil
 	}
 	keyHash, fingerprintHash := imageBuildIdempotencyHashes(r, imageBuildIdempotencyFingerprint{
 		RequestedID:          requestedID,
@@ -713,29 +686,7 @@ func createBuild(app *platform.App, r *http.Request, route platform.RouteSpec, b
 		return status, data, nil
 	}
 	id := shared.FirstNonBlank(requestedID, app.Store.NextID(imageBuildsResource, "build-", 1, 6))
-	now := time.Now().UTC()
-	build := map[string]any{
-		"id":                      id,
-		"job_name":                id,
-		"build_id":                id,
-		"project_id":              projectID,
-		"image_reference":         imageRef,
-		"build_type":              buildType,
-		"cpu_cores":               resources.cpuCores,
-		"memory_gib":              resources.memoryGiB,
-		"max_build_time_seconds":  resources.maxBuildTimeSeconds,
-		"status":                  "queued",
-		"image_digest":            "",
-		"allow_list_decision":     "pending",
-		"sbom_status":             "pending",
-		"signature_status":        "pending",
-		"scan_status":             "pending",
-		"supply_chain_checked_at": nil,
-		"requested_by":            userID,
-		"created_at":              now,
-		"updated_at":              now,
-		"logs":                    "build queued\n",
-	}
+	build := newImageBuildRecord(id, projectID, imageRef, buildType, userID, resources)
 	if contextArchiveDigest != "" {
 		build["source_digest"] = contextArchiveDigest
 	}
@@ -758,6 +709,85 @@ func createBuild(app *platform.App, r *http.Request, route platform.RouteSpec, b
 		return http.StatusInternalServerError, shared.ErrorData("image build could not be created"), nil
 	}
 	return http.StatusAccepted, publicImageBuildData(record.Data), harborDegraded(app, r, route, "createBuild")
+}
+
+// resolveImageBuildContext validates the build's context references (inline
+// archive and/or staged context_key) and stages inline archives
+// content-addressed into the object store; the returned key and digest feed
+// the build record and the idempotency fingerprint.
+func resolveImageBuildContext(app *platform.App, r *http.Request, payload map[string]any) (string, string, int, any) {
+	inlineArchive, contextDigest, status, data := imageBuildContextArchiveDigest(payload)
+	if status != 0 {
+		return "", "", status, data
+	}
+	contextKey, contextKeyDigest, status, data := imageBuildContextKeyDigest(app, r, payload)
+	if status != 0 {
+		return "", "", status, data
+	}
+	if contextKeyDigest != "" {
+		contextDigest = contextKeyDigest
+	}
+	if len(inlineArchive) == 0 || contextKey != "" {
+		return contextKey, contextDigest, 0, nil
+	}
+	// Inline archives are staged content-addressed into the object store so the
+	// dispatcher can rebuild from them; without an object store the build cannot
+	// carry its context, so reject at create instead of failing at dispatch.
+	if app.ObjectStore == nil {
+		return "", "", http.StatusServiceUnavailable, shared.ErrorData("object store is not configured")
+	}
+	stagedKey := buildContextObjectKeyPrefix + contextDigest
+	if err := app.ObjectStore.PutStream(r.Context(), stagedKey, bytes.NewReader(inlineArchive), int64(len(inlineArchive)), "application/octet-stream"); err != nil {
+		return "", "", http.StatusInternalServerError, shared.ErrorData("context archive could not be staged")
+	}
+	return stagedKey, contextDigest, 0, nil
+}
+
+// authorizeImageBuildSource gates from-storage builds behind storage-service's
+// build-source-access owner contract; other build types carry their source
+// inline and need no grant.
+func authorizeImageBuildSource(app *platform.App, r *http.Request, buildType, projectID, userID, storagePath string) (int, any, bool) {
+	if buildType != "storage" {
+		return 0, nil, true
+	}
+	if storagePath == "" {
+		return http.StatusBadRequest, shared.ErrorData("storage_path is required for from-storage builds"), false
+	}
+	decision, err := newBuildSourceAccessResolver(app)(r.Context(), projectID, buildSourceAccessRequest{UserID: userID, StoragePath: storagePath})
+	if err != nil {
+		// Fail closed: an unverifiable source grant must not start a build.
+		return http.StatusInternalServerError, shared.ErrorData("build source access check failed"), false
+	}
+	if !decision.Allowed {
+		return http.StatusForbidden, shared.ErrorData("storage source access denied"), false
+	}
+	return 0, nil, true
+}
+
+func newImageBuildRecord(id, projectID, imageRef, buildType, userID string, resources imageBuildResources) map[string]any {
+	now := time.Now().UTC()
+	return map[string]any{
+		"id":                      id,
+		"job_name":                id,
+		"build_id":                id,
+		"project_id":              projectID,
+		"image_reference":         imageRef,
+		"build_type":              buildType,
+		"cpu_cores":               resources.cpuCores,
+		"memory_gib":              resources.memoryGiB,
+		"max_build_time_seconds":  resources.maxBuildTimeSeconds,
+		"status":                  "queued",
+		"image_digest":            "",
+		"allow_list_decision":     "pending",
+		"sbom_status":             "pending",
+		"signature_status":        "pending",
+		"scan_status":             "pending",
+		"supply_chain_checked_at": nil,
+		"requested_by":            userID,
+		"created_at":              now,
+		"updated_at":              now,
+		"logs":                    "build queued\n",
+	}
 }
 
 func imageBuildIdempotencyResult(app *platform.App, r *http.Request, route platform.RouteSpec, keyHash, fingerprintHash string) (int, any, *platform.Degraded) {

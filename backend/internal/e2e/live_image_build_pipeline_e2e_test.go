@@ -24,23 +24,7 @@ import (
 // Requires: TEST_LIVE_IMAGE_BUILD_PIPELINE=1, HARBOR_URL, HARBOR_ADMIN_PASSWORD,
 // docker/syft/trivy/cosign on PATH, and a docker login to the Harbor host.
 func TestLiveImageBuildPipelineE2E(t *testing.T) {
-	if strings.TrimSpace(os.Getenv("TEST_LIVE_IMAGE_BUILD_PIPELINE")) != "1" {
-		t.Skip("set TEST_LIVE_IMAGE_BUILD_PIPELINE=1 to run the live image-build pipeline e2e")
-	}
-	harborURL := strings.TrimSpace(os.Getenv("HARBOR_URL"))
-	if harborURL == "" {
-		t.Skip("HARBOR_URL is required")
-	}
-	for _, tool := range []string{"docker", "syft", "trivy", "cosign"} {
-		if _, err := exec.LookPath(tool); err != nil {
-			t.Skipf("%s is required on PATH for the live pipeline e2e", tool)
-		}
-	}
-	harborHost := strings.TrimPrefix(strings.TrimPrefix(harborURL, "http://"), "https://")
-	project := strings.TrimSpace(os.Getenv("HARBOR_SEED_PROJECT"))
-	if project == "" {
-		project = "library"
-	}
+	harborURL, harborHost, project := requireLiveBuildPipelineEnv(t)
 	imageRef := fmt.Sprintf("%s/%s/nexuspaas-build-e2e:%d", harborHost, project, time.Now().Unix())
 
 	h := newHarness(t)
@@ -49,18 +33,7 @@ func TestLiveImageBuildPipelineE2E(t *testing.T) {
 		cfg.ImageBuildExecutor = "docker"
 		cfg.ImageProvenanceRequired = true
 	})
-
-	// project + manager membership for the harness admin user (image-registry
-	// reads its own image_projects/image_project_members read model)
-	adminUser := "admin-" + h.runID
-	h.createRecord(imageProjectsResource, "build-e2e-project", map[string]any{
-		"p_id": "build-e2e-project", "project_name": "build-e2e",
-		"allow_image_build": true, "build_cpu_limit": 8, "build_memory_gib_limit": 16,
-		"build_time_limit_seconds": 3600, "max_running_builds": 5,
-	})
-	h.createRecord(imageProjectMembersResource, "build-e2e-project:"+adminUser, map[string]any{
-		"project_id": "build-e2e-project", "user_id": adminUser, "role": "manager",
-	})
+	h.seedLiveBuildPipelineProject()
 
 	build := h.doURLJSON(imageRegistrySvc.url, http.MethodPost, "/api/v1/images/build/dockerfile", map[string]any{
 		"id":                     "live-pipeline-" + h.runID,
@@ -76,25 +49,83 @@ func TestLiveImageBuildPipelineE2E(t *testing.T) {
 	}
 	buildID, _ := build["id"].(string)
 
-	// The dispatcher maintenance task is lease-gated and interval-driven; run
-	// the registered tasks synchronously until the build reaches a terminal
-	// state (same mechanism the runtime uses, deterministic for the test).
+	final := h.waitForTerminalImageBuild(imageRegistrySvc, buildID)
+	digest := requireVerifiedBuildRecord(t, final)
+
+	// image really exists in Harbor (registry v2 manifest HEAD via docker pull)
+	repo := imageRef
+	if at := strings.LastIndex(repo, ":"); at > strings.LastIndex(repo, "/") {
+		repo = repo[:at]
+	}
+	pull := exec.Command("docker", "pull", repo+"@"+digest)
+	if out, err := pull.CombinedOutput(); err != nil {
+		t.Fatalf("pull built image from Harbor: %v\n%s", err, out)
+	}
+
+	h.assertProvenancePublishGate(imageRegistrySvc, harborHost, project, digest, final)
+}
+
+func requireLiveBuildPipelineEnv(t *testing.T) (harborURL, harborHost, project string) {
+	t.Helper()
+	if strings.TrimSpace(os.Getenv("TEST_LIVE_IMAGE_BUILD_PIPELINE")) != "1" {
+		t.Skip("set TEST_LIVE_IMAGE_BUILD_PIPELINE=1 to run the live image-build pipeline e2e")
+	}
+	harborURL = strings.TrimSpace(os.Getenv("HARBOR_URL"))
+	if harborURL == "" {
+		t.Skip("HARBOR_URL is required")
+	}
+	for _, tool := range []string{"docker", "syft", "trivy", "cosign"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s is required on PATH for the live pipeline e2e", tool)
+		}
+	}
+	harborHost = strings.TrimPrefix(strings.TrimPrefix(harborURL, "http://"), "https://")
+	project = strings.TrimSpace(os.Getenv("HARBOR_SEED_PROJECT"))
+	if project == "" {
+		project = "library"
+	}
+	return harborURL, harborHost, project
+}
+
+// seedLiveBuildPipelineProject creates the project + manager membership for
+// the harness admin user (image-registry reads its own
+// image_projects/image_project_members read model).
+func (h *e2eHarness) seedLiveBuildPipelineProject() {
+	h.t.Helper()
+	adminUser := "admin-" + h.runID
+	h.createRecord(imageProjectsResource, "build-e2e-project", map[string]any{
+		"p_id": "build-e2e-project", "project_name": "build-e2e",
+		"allow_image_build": true, "build_cpu_limit": 8, "build_memory_gib_limit": 16,
+		"build_time_limit_seconds": 3600, "max_running_builds": 5,
+	})
+	h.createRecord(imageProjectMembersResource, "build-e2e-project:"+adminUser, map[string]any{
+		"project_id": "build-e2e-project", "user_id": adminUser, "role": "manager",
+	})
+}
+
+// waitForTerminalImageBuild runs the registered maintenance tasks
+// synchronously until the build reaches a terminal state (the dispatcher task
+// is lease-gated and interval-driven; this is the same mechanism the runtime
+// uses, deterministic for the test).
+func (h *e2eHarness) waitForTerminalImageBuild(svc *runningService, buildID string) map[string]any {
+	h.t.Helper()
 	deadline := time.Now().Add(15 * time.Minute)
-	var final map[string]any
 	for {
-		imageRegistrySvc.app.RunMaintenanceOnce(context.Background(), time.Minute)
+		svc.app.RunMaintenanceOnce(context.Background(), time.Minute)
 		record := h.getRecord(imageBuildsResource, buildID)
 		status, _ := record.Data["status"].(string)
 		if status == "succeeded" || status == "failed" {
-			final = record.Data
-			break
+			return record.Data
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("build did not reach a terminal state; last=%v", record.Data)
+			h.t.Fatalf("build did not reach a terminal state; last=%v", record.Data)
 		}
 		time.Sleep(2 * time.Second)
 	}
+}
 
+func requireVerifiedBuildRecord(t *testing.T, final map[string]any) string {
+	t.Helper()
 	logs, _ := final["logs"].(string)
 	if final["status"] != "succeeded" {
 		t.Fatalf("build status = %v, want succeeded; logs:\n%s", final["status"], logs)
@@ -110,29 +141,23 @@ func TestLiveImageBuildPipelineE2E(t *testing.T) {
 	if !strings.HasPrefix(digest, "sha256:") {
 		t.Fatalf("image_digest = %q, want sha256-pinned", digest)
 	}
+	return digest
+}
 
-	// image really exists in Harbor (registry v2 manifest HEAD via docker pull)
-	repo := imageRef
-	if at := strings.LastIndex(repo, ":"); at > strings.LastIndex(repo, "/") {
-		repo = repo[:at]
-	}
-	pull := exec.Command("docker", "pull", repo+"@"+digest)
-	if out, err := pull.CombinedOutput(); err != nil {
-		t.Fatalf("pull built image from Harbor: %v\n%s", err, out)
-	}
-
-	// verified-provenance publish gate: a catalog row whose digest has no
-	// verified build record is rejected; the built digest passes.
+// assertProvenancePublishGate: a catalog row whose digest has no verified
+// build record is rejected; the built digest passes.
+func (h *e2eHarness) assertProvenancePublishGate(svc *runningService, harborHost, project, digest string, final map[string]any) {
+	h.t.Helper()
 	h.createRecord(imageCatalogResource, "cat-unverified-"+h.runID, map[string]any{
 		"registry": harborHost, "repository": project + "/nexuspaas-build-e2e",
 		"tag": "unverified", "digest": "sha256:deadbeef", "scan_status": "Success",
 		"sbom_digest": "sha256:sbom", "signature": "sigstore://forged",
 	})
-	rejected := h.doURLJSON(imageRegistrySvc.url, http.MethodPost, "/api/v1/image-catalog/publish", map[string]any{
+	rejected := h.doURLJSON(svc.url, http.MethodPost, "/api/v1/image-catalog/publish", map[string]any{
 		"tag_id": "cat-unverified-" + h.runID, "project_id": "build-e2e-project",
-	}, h.apiKey, http.StatusConflict).dataMap(t)
+	}, h.apiKey, http.StatusConflict).dataMap(h.t)
 	if msg, _ := rejected["message"].(string); !strings.Contains(msg, "provenance") {
-		t.Fatalf("unverified publish rejection = %#v, want provenance rejection", rejected)
+		h.t.Fatalf("unverified publish rejection = %#v, want provenance rejection", rejected)
 	}
 
 	h.createRecord(imageCatalogResource, "cat-verified-"+h.runID, map[string]any{
@@ -140,10 +165,10 @@ func TestLiveImageBuildPipelineE2E(t *testing.T) {
 		"tag": "verified", "digest": digest, "scan_status": "Success",
 		"sbom_digest": final["sbom_digest"], "signature": final["signature_ref"],
 	})
-	published := h.doURLJSON(imageRegistrySvc.url, http.MethodPost, "/api/v1/image-catalog/publish", map[string]any{
+	published := h.doURLJSON(svc.url, http.MethodPost, "/api/v1/image-catalog/publish", map[string]any{
 		"tag_id": "cat-verified-" + h.runID, "project_id": "build-e2e-project",
-	}, h.apiKey, http.StatusOK).dataMap(t)
+	}, h.apiKey, http.StatusOK).dataMap(h.t)
 	if published["rules"] == nil {
-		t.Fatalf("verified publish = %#v, want allow-list rules", published)
+		h.t.Fatalf("verified publish = %#v, want allow-list rules", published)
 	}
 }

@@ -1318,6 +1318,9 @@ func newImageRegistryTestApp(t *testing.T) *platform.App {
 	// ServiceAPIKey lets the co-hosted build-source-access hop authenticate via
 	// the non-strict service-key fallback.
 	app := platform.NewApp(platform.Config{ServiceName: "all", HTTPAddr: ":0", ServiceAPIKey: "image-test-service-key"})
+	// Inline context archives are staged at create; without an object store the
+	// build endpoints fail closed with 503.
+	app.ObjectStore = platform.NewMemoryObjectStore()
 	Register(app)
 	// from-storage builds consult storage-service's build-source-access
 	// contract; co-host it (spec registration wires the internal route into

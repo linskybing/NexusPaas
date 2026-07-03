@@ -65,7 +65,7 @@ func runImageBuild(ctx context.Context, app *platform.App, executor buildExecuto
 		"updated_at": time.Now().UTC(),
 		"logs":       shared.TextValue(build.Data, "logs") + "build dispatched to executor " + executor.Name() + "\n",
 	}, func(rec contracts.Record[map[string]any]) contracts.Event {
-		return dispatcherEvent("ImageBuildStarted", rec.Data)
+		return registryEvent(shared.MaintenanceRequest(ctx), "ImageBuildStarted", rec.Data)
 	}); err != nil || !ok {
 		return fmt.Errorf("mark build %s building: %w", buildID, err)
 	}
@@ -83,7 +83,7 @@ func runImageBuild(ctx context.Context, app *platform.App, executor buildExecuto
 
 	update := buildResultUpdate(build.Data, result, execErr)
 	if _, ok, err := app.UpdateRecordWithEvent(ctx, imageBuildsResource, buildID, update, func(rec contracts.Record[map[string]any]) contracts.Event {
-		return dispatcherEvent("ImageBuilt", rec.Data)
+		return registryEvent(shared.MaintenanceRequest(ctx), "ImageBuilt", rec.Data)
 	}); err != nil || !ok {
 		return fmt.Errorf("record build %s result: %w", buildID, err)
 	}
@@ -110,12 +110,9 @@ func buildExecutionInputFor(ctx context.Context, app *platform.App, data map[str
 		if app.ObjectStore == nil {
 			return input, fmt.Errorf("build references a staged context but no object store is configured")
 		}
-		if _, err := stagedBuildContextDigest(ctx, app, key); err != nil {
-			return input, err
-		}
-		archive, _, _, err := app.ObjectStore.Get(ctx, key)
+		archive, _, err := stagedBuildContextArchive(ctx, app, key)
 		if err != nil {
-			return input, fmt.Errorf("read staged context: %w", err)
+			return input, err
 		}
 		input.ContextArchive = archive
 	}
@@ -123,10 +120,7 @@ func buildExecutionInputFor(ctx context.Context, app *platform.App, data map[str
 }
 
 func imageBuildTimeout(data map[string]any) time.Duration {
-	if seconds, ok := data["max_build_time_seconds"].(float64); ok && seconds > 0 {
-		return time.Duration(seconds) * time.Second
-	}
-	if seconds, ok := data["max_build_time_seconds"].(int); ok && seconds > 0 {
+	if seconds := shared.IntValue(data, "max_build_time_seconds"); seconds > 0 {
 		return time.Duration(seconds) * time.Second
 	}
 	return defaultImageBuildTimeout
@@ -152,6 +146,9 @@ func buildResultUpdate(data map[string]any, result buildExecutionResult, execErr
 		update["logs"] = logs + "build failed: " + execErr.Error() + "\n"
 		if result.SBOMDigest == "" {
 			update["sbom_status"] = "failed"
+		} else {
+			update["sbom_status"] = "succeeded"
+			update["sbom_digest"] = result.SBOMDigest
 		}
 		update["scan_status"] = failIfPending(shared.TextValue(data, "scan_status"))
 		update["signature_status"] = failIfPending(shared.TextValue(data, "signature_status"))
@@ -182,18 +179,4 @@ func failIfPending(status string) string {
 		return "failed"
 	}
 	return status
-}
-
-// dispatcherEvent mirrors registryEvent for contexts without an *http.Request
-// (maintenance loop): full envelope metadata, sanitized payload.
-func dispatcherEvent(name string, data map[string]any) contracts.Event {
-	return contracts.Event{
-		EventID:       platform.NewUUID(),
-		Name:          name,
-		Source:        serviceName,
-		OccurredAt:    time.Now().UTC(),
-		TraceID:       platform.NewUUID(),
-		SchemaVersion: 1,
-		Data:          sanitizeImageEventData(data),
-	}
 }

@@ -95,27 +95,27 @@ func imageBuildContextKeyDigest(app *platform.App, r *http.Request, payload map[
 	if app.ObjectStore == nil {
 		return "", "", http.StatusServiceUnavailable, shared.ErrorData("object store is not configured")
 	}
-	digest, err := stagedBuildContextDigest(r.Context(), app, key)
+	_, digest, err := stagedBuildContextArchive(r.Context(), app, key)
 	if err != nil {
 		return "", "", http.StatusBadRequest, shared.ErrorData(err.Error())
 	}
 	return key, digest, 0, nil
 }
 
-func stagedBuildContextDigest(ctx context.Context, app *platform.App, key string) (string, error) {
+func stagedBuildContextArchive(ctx context.Context, app *platform.App, key string) ([]byte, string, error) {
 	archive, _, found, err := app.ObjectStore.Get(ctx, key)
 	if err != nil {
-		return "", fmt.Errorf("staged build context could not be read")
+		return nil, "", fmt.Errorf("staged build context could not be read")
 	}
 	if !found {
-		return "", fmt.Errorf("staged build context was not found")
+		return nil, "", fmt.Errorf("staged build context was not found")
 	}
 	info, err := validateBuildContextArchive(archive)
 	if err != nil {
-		return "", fmt.Errorf("staged build context is invalid: %s", err.Error())
+		return nil, "", fmt.Errorf("staged build context is invalid: %s", err.Error())
 	}
 	if buildContextObjectKeyPrefix+info.Digest != key {
-		return "", fmt.Errorf("staged build context digest does not match its key")
+		return nil, "", fmt.Errorf("staged build context digest does not match its key")
 	}
-	return info.Digest, nil
+	return archive, info.Digest, nil
 }

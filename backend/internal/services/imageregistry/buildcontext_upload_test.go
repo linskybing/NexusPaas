@@ -71,6 +71,7 @@ func TestUploadBuildContextStagesArchiveAndBuildReferencesIt(t *testing.T) {
 
 func TestUploadBuildContextRejectsInvalidArchiveAndMissingStore(t *testing.T) {
 	app := newImageRegistryTestApp(t)
+	app.ObjectStore = nil
 	code, data, _ := uploadBuildContext(app, multipartContextRequest(t, "P1", "U1", []byte("not-an-archive")), platform.RouteSpec{})
 	assertImageStatus(t, code, data, http.StatusServiceUnavailable)
 
