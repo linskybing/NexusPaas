@@ -687,21 +687,7 @@ func createBuild(app *platform.App, r *http.Request, route platform.RouteSpec, b
 	}
 	id := shared.FirstNonBlank(requestedID, app.Store.NextID(imageBuildsResource, "build-", 1, 6))
 	build := newImageBuildRecord(id, projectID, imageRef, buildType, userID, resources)
-	if contextArchiveDigest != "" {
-		build["source_digest"] = contextArchiveDigest
-	}
-	if contextKey != "" {
-		build["context_key"] = contextKey
-	}
-	// The dockerfile body is the build source for dockerfile builds; persist it
-	// so the dispatcher can execute from the record alone.
-	if dockerfile := shared.TextValue(payload, "dockerfile"); dockerfile != "" {
-		build["dockerfile"] = dockerfile
-	}
-	if keyHash != "" {
-		build[internalImageBuildIdempotencyKeyHash] = keyHash
-		build[internalImageBuildIdempotencyFingerprintHash] = fingerprintHash
-	}
+	decorateImageBuildRecord(build, contextKey, contextArchiveDigest, shared.TextValue(payload, "dockerfile"), keyHash, fingerprintHash)
 	record, err := app.CreateRecordWithEvent(r.Context(), imageBuildsResource, build, func(rec contracts.Record[map[string]any]) contracts.Event {
 		return registryEvent(r, "ImageBuildStarted", rec.Data)
 	})
@@ -762,6 +748,26 @@ func authorizeImageBuildSource(app *platform.App, r *http.Request, buildType, pr
 		return http.StatusForbidden, shared.ErrorData("storage source access denied"), false
 	}
 	return 0, nil, true
+}
+
+// decorateImageBuildRecord adds the optional source/idempotency fields a
+// build request may carry. The dockerfile body is the build source for
+// dockerfile builds; it is persisted so the dispatcher can execute from the
+// record alone.
+func decorateImageBuildRecord(build map[string]any, contextKey, contextDigest, dockerfile, keyHash, fingerprintHash string) {
+	if contextDigest != "" {
+		build["source_digest"] = contextDigest
+	}
+	if contextKey != "" {
+		build["context_key"] = contextKey
+	}
+	if dockerfile != "" {
+		build["dockerfile"] = dockerfile
+	}
+	if keyHash != "" {
+		build[internalImageBuildIdempotencyKeyHash] = keyHash
+		build[internalImageBuildIdempotencyFingerprintHash] = fingerprintHash
+	}
 }
 
 func newImageBuildRecord(id, projectID, imageRef, buildType, userID string, resources imageBuildResources) map[string]any {
