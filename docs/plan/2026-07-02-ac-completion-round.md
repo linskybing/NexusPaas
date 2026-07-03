@@ -54,3 +54,45 @@ the ledgers as the tracked production follow-up. storage-service has drift
 checks but no local projection consumer, so it is documented rather than wired
 into the reconcile job. Codex was unavailable this round; Claude Code executed
 all three agent roles (fallback recorded per AGENTS.md).
+
+## Reviewer pass (2026-07-03)
+
+`/code-review medium` over `main...ac-completion-round` (8 finder angles +
+verification; Claude Code as Reviewer Agent, Codex unavailable — fallback per
+AGENTS.md). 7 findings confirmed and fixed in commits `4b97bbb` + follow-up:
+
+1. **prometheus.yaml scrape job lacked a `namespace` relabel** — `up{namespace="nexuspaas"}`
+   in `NexusPaasServiceUnscraped` matched zero series on the operator-less
+   path; the scrape-blindness watchdog could never fire. Fixed (relabel added;
+   rule files unchanged, parity test still pins both paths).
+2. **Inline context archive silently skipped when no object store** — build
+   queued then failed late at the executor with an empty context; now fails
+   closed at create with 503.
+3. **Projection reconciler looped non-convergent rebuilds** — residual drift
+   triggered a full consumer reset + stream replay every tick, contradicting
+   its own doc comment; now rebuilds once per residual value and only reports
+   after (regression test added).
+4. **Staged build context downloaded twice per dispatch** — validate+fetch
+   collapsed into one object-store read.
+5. **`sbom_status` left stale (`pending`) on partial executor failure** — now
+   recorded as succeeded with its digest when the SBOM was produced.
+6. **`dispatcherEvent` duplicated `registryEvent`** — replaced with
+   `registryEvent(shared.MaintenanceRequest(ctx), …)`.
+7. **`imageBuildTimeout` re-implemented `shared.IntValue`** — replaced.
+
+Also cleared the local SonarQube quality gate for the branch: 5× go:S3776
+cognitive-complexity refactors (createBuild, docker executor Execute, three
+test files split into helpers), kubernetes:S6897/S6870 ephemeral-storage
+requests/limits added; 2× kubernetes:S6865 on the Prometheus/KSM pod specs
+resolved as **Accepted** with justification (both ServiceAccounts require the
+API token for discovery and are least-privilege RBAC-bound in the same
+manifest; the analyzer cannot link the binding — same rationale class as the
+accepted S6431, see the 2026-07-02 cleanup plan doc).
+
+Known-accepted debt (reported, intentionally not changed this round):
+`oldestQueuedBuild`/`buildProvenanceRejection` list whole resources (needs a
+filtered-list store API); the drift-count sum is repeated across the seven
+reconciler wirings (distinct per-service report types); `storage_path` became
+required on the from-storage v1 endpoint (approved plan behavior — the field
+was previously accepted-but-meaningless; fixtures/parity updated in the same
+change).
