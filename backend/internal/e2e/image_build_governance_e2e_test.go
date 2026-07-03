@@ -18,10 +18,15 @@ const (
 )
 
 func TestImageBuildGovernanceE2E(t *testing.T) {
-	h := newHarness(t, identityService, imageRegistryService)
+	// from-storage builds consult storage-service's build-source-access owner
+	// contract, so the storage owner must run as a peer of image-registry.
+	h := newHarnessWithPeers(t,
+		map[string][]string{imageRegistryService: {storageService}},
+		identityService, imageRegistryService, storageService)
 	ids := h.seedIdentityContracts()
 	badToken := h.seedAPIUser("badimage"+h.runID, "bad-image-"+h.runID, false)
 	h.seedImageRegistryProjectAccess(ids.userID, "manager")
+	h.seedStorageBuildSourceAccess()
 
 	suffix := e2eSuffix(h.runID)
 	catalogID := "tag-" + suffix
@@ -171,6 +176,26 @@ func (h *e2eHarness) seedImageRegistryProjectAccess(userID, role string) {
 		"project_id": h.projectID(),
 		"user_id":    userID,
 		"role":       role,
+	})
+}
+
+// seedStorageBuildSourceAccess binds a PVC to the harness project with a
+// read-capable group default policy so the from-storage build's
+// build-source-access check grants read (mirrors the imageregistry unit-test
+// seed).
+func (h *e2eHarness) seedStorageBuildSourceAccess() {
+	h.t.Helper()
+	groupID := "img-grp-" + h.runID
+	pvcID := "img-pvc-" + h.runID
+	h.createRecord("storage-service:storage_bindings", h.projectID()+":"+pvcID, map[string]any{
+		"project_id": h.projectID(),
+		"group_id":   groupID,
+		"pvc_id":     pvcID,
+	})
+	h.createRecord("storage-service:storage_access_policies", groupID+":"+pvcID, map[string]any{
+		"group_id":           groupID,
+		"pvc_id":             pvcID,
+		"default_permission": "read_write",
 	})
 }
 
