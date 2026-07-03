@@ -35,7 +35,11 @@ UNITS=(platform-gateway iam-unit tenant-unit collaboration-unit platform-io-unit
 log() { printf '[%s] %s\n' "$(date -u '+%H:%M:%SZ')" "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 kc() { kubectl --context "${KIND_CONTEXT}" -n "${NAMESPACE}" "$@"; }
-record() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >>"${RESULT_TSV}"; log "[$1] $2 → $3 ($4)"; }
+record() {
+  local scenario="$1" step="$2" result="$3" detail="$4"
+  printf '%s\t%s\t%s\t%s\n' "${scenario}" "${step}" "${result}" "${detail}" >>"${RESULT_TSV}"
+  log "[${scenario}] ${step} → ${result} (${detail})"
+}
 
 # curl a unit endpoint through a short-lived port-forward; prints the HTTP code
 # (000 when the forward/connection fails, which is itself a valid observation).
@@ -59,11 +63,11 @@ probe() {
 
 # poll until probe returns the wanted code (accepts a regex like "503|000")
 wait_code() {
-  local unit="$1" path="$2" want="$3" timeout="${4:-90}" code deadline
+  local unit="$1" path="$2" want_re="^($3)$" timeout="${4:-90}" code deadline
   deadline=$(( $(date +%s) + timeout ))
   while true; do
     code="$(probe "${unit}" "${path}")"
-    if [[ "${code}" =~ ^(${want})$ ]]; then echo "${code}"; return 0; fi
+    if [[ "${code}" =~ ${want_re} ]]; then echo "${code}"; return 0; fi
     if (( $(date +%s) > deadline )); then echo "${code}"; return 1; fi
     sleep 3
   done

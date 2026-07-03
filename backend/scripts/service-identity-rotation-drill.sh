@@ -30,9 +30,16 @@ PROBE_PATH="/internal/storage/projects/rotation-drill/build-source-access"
 log() { printf '[%s] %s\n' "$(date -u '+%H:%M:%SZ')" "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 kc() { kubectl --context "${KIND_CONTEXT}" -n "${NAMESPACE}" "$@"; }
-record() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >>"${RESULT_TSV}"; log "[$1] $2 ($3)"; }
+record() {
+  local step="$1" result="$2" detail="$3"
+  printf '%s\t%s\t%s\n' "${step}" "${result}" "${detail}" >>"${RESULT_TSV}"
+  log "[${step}] ${result} (${detail})"
+}
 
-secret_value() { kc get secret "$1" -o jsonpath="{.data.$2}" | base64 -d; }
+secret_value() {
+  local name="$1" field="$2"
+  kc get secret "${name}" -o jsonpath="{.data.${field}}" | base64 -d
+}
 
 # probe platform-io-unit's ServiceAuthRequired storage contract with the given
 # service key; prints HTTP code (401 rejected / 422 identity accepted / 000 infra)

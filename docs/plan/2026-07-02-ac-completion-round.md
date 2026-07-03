@@ -89,6 +89,14 @@ API token for discovery and are least-privilege RBAC-bound in the same
 manifest; the analyzer cannot link the binding — same rationale class as the
 accepted S6431, see the 2026-07-02 cleanup plan doc).
 
+SonarCloud PR #47 analysis (richer rule packs than the local server) added:
+17 shelldre code smells in the two drill scripts (S7679 positional params,
+S1481) — fixed in code; 2× kubernetes:S6865 (same as local) and 2× go:S4036
+(cosign exec relies on host PATH) — resolved as **Accepted** with justification
+comments: the docker executor by design runs operator-installed CLIs and only
+activates when the operator sets IMAGE_BUILD_EXECUTOR=docker on a host they
+control.
+
 Known-accepted debt (reported, intentionally not changed this round):
 `oldestQueuedBuild`/`buildProvenanceRejection` list whole resources (needs a
 filtered-list store API); the drift-count sum is repeated across the seven
